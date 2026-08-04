@@ -193,14 +193,36 @@ IPC library — just raw AF_UNIX sockets + cJSON:
   way the Quickshell/QML version does via `Hyprland.toplevels`.
 - **Dispatch syntax is compositor-config-dependent, and this matters.**
   `hyprland/dispatch.c`'s `hyprland_dispatch_focus_workspace()` tries
-  `dispatch workspace <id>` first; on a Lua-configured Hyprland (confirmed live on
-  this machine, Hyprland 0.56.1), that's rejected with a syntax error and the
-  working form is `dispatch 'hl.dsp.focus({ workspace = <id> })'` instead — this
-  matches what the reference Quickshell bar's own click handler sends. The code
-  tries classic first and falls back to the Lua form on an `error:`-prefixed
-  response, so it keeps working either way. This was exercised for real during
-  development (a live click landed on a pill, got rejected, correctly fell back) —
-  see the stderr message format if you need to recognize this happening again.
+  `dispatch hl.dsp.focus({ workspace = <id> })` **first** — **no surrounding
+  quotes**. `hyprctl dispatch '...'` on the CLI only works because the *shell*
+  strips those quotes before hyprctl sees them; this code writes straight to the
+  raw socket with no shell involved, so a first version that included literal
+  `'...'` quote characters in the command text got silently rejected by
+  Hyprland's Lua parser (`expected a dispatcher`) — confirmed by testing both the
+  quoted and unquoted forms directly against the socket with a throwaway Python
+  script, bypassing `hyprctl` entirely. This is confirmed to work on this
+  machine's Lua-configured Hyprland (0.56.1), and matches what the reference
+  Quickshell bar's own click handler sends **unconditionally, with no fallback at
+  all**.
+  - **`hl.dsp.exec_raw("workspace <id>")` looks like it should be the "right"
+    config-agnostic escape hatch** (it exists specifically to run a classic
+    dispatcher string under a Lua config, per the Hyprland wiki and a related
+    Waybar issue) — but on this exact build it returns `ok` without actually
+    switching the workspace, confirmed live against the socket. **Don't reach for
+    it as a fix without re-testing it directly against the socket first** — it
+    looked correct on paper and wasn't.
+  - Only if the Lua form is rejected does the code fall back once to the classic
+    `dispatch workspace <id>` syntax (for compatibility with non-Lua configs), and
+    logs to stderr if *that* also fails, instead of failing silently.
+  - **Which form actually worked is cached in a static `DispatchStyle` after the
+    first call** (a given Hyprland instance's dispatch style doesn't change at
+    runtime). On this machine's Lua config, the very first attempt already
+    succeeds, so **no stderr output should ever appear in normal use** — earlier
+    iterations tried the classic form first (which always fails here, needing a
+    fallback + one-time log) and, before the caching was added, re-probed and
+    re-logged the rejection on *every single click*. If you see rejection
+    messages in the log again — especially repeated ones — one of these
+    regressed.
 
 ## Conventions
 

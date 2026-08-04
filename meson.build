@@ -89,6 +89,11 @@ sources = files(
   'src/audio/device_popup.c',
   'src/modules/volume/volume.c',
   'src/modules/mic/mic.c',
+  'src/sysmon/sysmon_client.c',
+  'src/sysmon/sysmon_info_popup.c',
+  'src/modules/cpu/cpu.c',
+  'src/modules/gpu/gpu.c',
+  'src/modules/mem/mem.c',
 )
 
 executable('customBar',

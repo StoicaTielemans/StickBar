@@ -17,6 +17,7 @@
 #include "hyprland/ipc_events.h"
 #include "modules/clock/clock.h"
 #include "modules/workspaces/workspaces.h"
+#include "sysmon/sysmon_client.h"
 #include "wayland/context.h"
 #include "wayland/event_loop.h"
 #include "wayland/output.h"
@@ -45,6 +46,26 @@ static int create_clock_timer(void) {
     };
     if (timerfd_settime(fd, 0, &spec, NULL) < 0) {
         perror("customBar: timerfd_settime");
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+// 5-second interval, matching the reference SystemMonitor.qml's own polling
+// Timer exactly.
+static int create_sysmon_timer(void) {
+    int fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    if (fd < 0) {
+        perror("customBar: timerfd_create(sysmon)");
+        return -1;
+    }
+    struct itimerspec spec = {
+        .it_interval = { .tv_sec = 5, .tv_nsec = 0 },
+        .it_value = { .tv_sec = 5, .tv_nsec = 0 },
+    };
+    if (timerfd_settime(fd, 0, &spec, NULL) < 0) {
+        perror("customBar: timerfd_settime(sysmon)");
         close(fd);
         return -1;
     }
@@ -82,11 +103,17 @@ int main(void) {
         return 1;
     }
 
-    // Populate an initial Hyprland snapshot and clock string before the first
-    // frame renders, then mark every already-bound output dirty so that first
-    // frame actually happens instead of waiting on the first tick/event.
+    // Populate an initial Hyprland snapshot, clock string, and sysmon snapshot
+    // before the first frame renders, then mark every already-bound output
+    // dirty so that first frame actually happens instead of waiting on the
+    // first tick/event. sysmon_client_init() only establishes the /proc/stat
+    // baseline; the actual first poll (which will show 0% CPU, no prior
+    // sample to diff against yet -- see sysmon_client.h) happens right after,
+    // matching the reference SystemMonitor.qml's own `triggeredOnStart: true`.
     workspaces_refresh();
     clock_tick();
+    sysmon_client_init();
+    sysmon_client_poll();
     output_mark_all_dirty(&app);
 
     int epoll_fd = event_loop_create();
@@ -101,6 +128,11 @@ int main(void) {
 
     int timer_fd = create_clock_timer();
     if (timer_fd < 0 || !event_loop_add_fd(epoll_fd, timer_fd, EPOLLIN)) {
+        return 1;
+    }
+
+    int sysmon_timer_fd = create_sysmon_timer();
+    if (sysmon_timer_fd < 0 || !event_loop_add_fd(epoll_fd, sysmon_timer_fd, EPOLLIN)) {
         return 1;
     }
 
@@ -164,7 +196,7 @@ int main(void) {
         }
     }
 
-    struct epoll_event events[8];
+    struct epoll_event events[10];
 
     while (!g_should_exit) {
         // Must be called immediately before epoll_wait() on every iteration -- see
@@ -172,7 +204,7 @@ int main(void) {
         // here instead.
         wayland_dispatch_prepare(app.display);
 
-        int n = epoll_wait(epoll_fd, events, 8, -1);
+        int n = epoll_wait(epoll_fd, events, 10, -1);
         if (n < 0) {
             if (errno == EINTR) {
                 wayland_dispatch_cancel(app.display);
@@ -197,6 +229,16 @@ int main(void) {
                 // which is required or it stays permanently "readable".
                 (void)!read(timer_fd, &expirations, sizeof(expirations));
                 clock_tick();
+                output_mark_all_dirty(&app);
+            } else if (fd == sysmon_timer_fd) {
+                uint64_t expirations;
+                (void)!read(sysmon_timer_fd, &expirations, sizeof(expirations));
+                // Includes a synchronous nvidia-smi subprocess call -- see
+                // sysmon_client_poll()'s own doc comment and CLAUDE.md's
+                // "System monitor (CPU/GPU/memory)" section for why that's an
+                // acceptable blocking window here (bounded, ~15-45ms, once
+                // per 5 seconds, not per-frame or per-click).
+                sysmon_client_poll();
                 output_mark_all_dirty(&app);
             } else if (hypr_events && fd == hypr_fd) {
                 if (!hyprland_events_pump(hypr_events, &app)) {
@@ -247,6 +289,7 @@ int main(void) {
         close(dbus_timeout_fd);
     }
     close(timer_fd);
+    close(sysmon_timer_fd);
     close(epoll_fd);
 
     // Explicitly tear down every output's bar surface (releasing its layer-shell

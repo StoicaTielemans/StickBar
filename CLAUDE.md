@@ -13,9 +13,9 @@ project is echoing in C — consult that repo's own `CLAUDE.md` and source when 
 module, rather than guessing at parity).
 
 This is being built in **stages, not all at once**. The current state has: bar shell,
-workspace indicator, clock, system tray, and volume/mic. Network, media player, system
-monitor, and the power-menu overlay are all still unimplemented — see "Scope / roadmap"
-below before assuming a module exists.
+workspace indicator, clock, system tray, volume/mic, and CPU/GPU/memory monitoring.
+Network, media player, and the power-menu overlay are all still unimplemented — see
+"Scope / roadmap" below before assuming a module exists.
 
 ## Running / testing changes
 
@@ -53,6 +53,24 @@ protocol errors or Hyprland IPC failures.
   bar picks it up via its PipeWire subscription without needing to click
   anything (this is how the subscribe → cache → redraw path was verified
   during development).
+- `free -h` / `top` / `nvidia-smi` (same query used internally --
+  `nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total
+  --format=csv,noheader`) are the cross-reference for the CPU/GPU/memory
+  modules; `awk '/MemTotal/{t=$2} /MemAvailable/{a=$2} END{printf "%.0f\n",
+  100*(t-a)/t}' /proc/meminfo` reproduces the memory module's own percent
+  calculation exactly, useful for confirming an off-by-something isn't hiding
+  in the rounding.
+- **Multi-monitor debugging gotcha, hit directly during this module's own
+  development**: this machine's two outputs don't necessarily bind in the
+  same left-to-right order `hyprctl monitors -j` lists them in (`Output.index`
+  is assigned by *Wayland global binding order*, not compositor-reported
+  monitor id — see "Core data model" below) -- a synthetic click driven
+  through `app.outputs` (e.g. a temporary debug hook bypassing real pointer
+  input) can silently target the *second* physical monitor while a
+  screenshot taken at `grim -g "0,0 ..."` only shows the first. Always
+  correlate a synthetic click's `Output.index`/`Output.width` (log it) against
+  which monitor that actually corresponds to on screen before concluding a
+  click "didn't do anything."
 
 ## Architecture
 
@@ -136,10 +154,35 @@ customBar/
     │   └── device_popup.c        shared sink/source dropdown popup (used by both
     │                             modules/volume and modules/mic) -- structurally
     │                             the audio-domain twin of tray_context_menu.c
+    ├── sysmon/                   /proc + nvidia-smi plumbing for CPU/GPU/memory
+    │                             (see "System monitor (CPU/GPU/memory)" below) --
+    │                             structurally the sysmon-domain twin of dbus/ and
+    │                             audio/, but polled on a plain timerfd rather than
+    │                             driven by any async connection of its own
+    │   ├── sysmon_client.c       /proc/stat, /proc/meminfo, thermal_zone1, cpuinfo,
+    │   │                         loadavg, and a synchronous nvidia-smi popen() call,
+    │   │                         all re-read on every 5s poll; plain synchronous
+    │   │                         accessors, no locking (single-threaded polling,
+    │   │                         unlike pulse_client.c)
+    │   └── sysmon_info_popup.c   shared *read-only* CPU/GPU/memory info dropdown
+    │                             (used by all three of modules/cpu, modules/gpu,
+    │                             modules/mem) -- left-anchored, unlike
+    │                             tray_context_menu.c's and device_popup.c's own
+    │                             right-anchored popups, since these three modules
+    │                             live in the bar's left region
     └── modules/
         ├── workspaces/
         │   └── workspaces.c      occupied/focused set computation, kanji pills,
         │                         hit-rect recording + click handling
+        ├── cpu/
+        │   └── cpu.c             CPU %+°C module box render + hit-rect + right-
+        │                         click-opens-dropdown handling (no left-click)
+        ├── gpu/
+        │   └── gpu.c             GPU %+°C module box render (NVIDIA only) +
+        │                         hit-rect + right-click-opens-dropdown handling
+        ├── mem/
+        │   └── mem.c             memory % module box render + hit-rect +
+        │                         right-click-opens-dropdown handling
         ├── clock/
         │   └── clock.c           timerfd-driven formatted time string + rendering
         ├── volume/
@@ -180,21 +223,24 @@ customBar/
   `modules/*`. `wayland/pointer.c` is the one place this is bent: it calls
   directly into `modules/workspaces/workspaces.h`, `modules/tray/tray.h` /
   `modules/tray/tray_context_menu.h`, `modules/volume/volume.h`,
-  `modules/mic/mic.h`, and `audio/device_popup.h` for click/scroll routing —
-  a flat list of explicit call sites, not a generic dispatch table (see
-  "D-Bus / system tray" below for why that still isn't worth building; now at
-  N=4 clickable bar-surface modules plus 2 popup kinds, still cheap enough as
-  a flat list that the indirection wouldn't pay for itself).
+  `modules/mic/mic.h`, `modules/cpu/cpu.h`, `modules/gpu/gpu.h`,
+  `modules/mem/mem.h`, `audio/device_popup.h`, and
+  `sysmon/sysmon_info_popup.h` for click/scroll routing — a flat list of
+  explicit call sites, not a generic dispatch table (see "D-Bus / system
+  tray" below for why that still isn't worth building; now at N=7 clickable
+  bar-surface modules plus 3 popup kinds, still cheap enough as a flat list
+  that the indirection wouldn't pay for itself).
 - **`AppContext.pointer_over` vs `pointer_over_surface`**: `pointer_over_surface`
   is the raw `wl_surface*` currently under the pointer, always kept up to date.
   `pointer_over` is the `Output*` it resolves to *if* it's one of the bar's own
-  surfaces — `NULL` for a tray/device popup or click-catcher surface, since
-  those are never stored on any `Output` (only `bar_surface.c`-owned surfaces
-  are). `pointer.c`'s button handler checks the tray context menu's surfaces
-  first (via `tray_context_menu_is_menu_surface()` / `_is_catcher_surface()`),
-  then the device popup's own equivalent pair, *then* falls back to the
-  `Output`-keyed path — a popup/catcher surface never matches an `Output`, so
-  this ordering is required, not just tidier.
+  surfaces — `NULL` for any popup or click-catcher surface, since those are
+  never stored on any `Output` (only `bar_surface.c`-owned surfaces are).
+  `pointer.c`'s button handler checks each popup kind's surfaces first (the
+  tray context menu's, then the audio device popup's, then the sysmon info
+  popup's — each via its own `_is_menu_surface()` / `_is_catcher_surface()`
+  pair), *then* falls back to the `Output`-keyed path — a popup/catcher
+  surface never matches an `Output`, so this ordering is required, not just
+  tidier.
 
 ### Wayland plumbing gotchas (hit and fixed during initial implementation)
 
@@ -612,6 +658,97 @@ PulseAudio (on PipeWire 1.6.8)`) — via **libpulse**, not raw `libpipewire`.
   exactly one physical wheel notch, matching the "steps of 5%" behavior that
   was asked for.
 
+## System monitor (CPU/GPU/memory)
+
+The reference bar has one combined `SystemMonitorWidget`/`SystemMonitor.qml`
+showing CPU/GPU/memory stats together with a single hover tooltip. Per
+explicit user request, this project splits it into **three independent
+modules** (`modules/cpu`, `modules/gpu`, `modules/mem`) — separate boxes,
+separate accent colors (peach/green/yellow — chosen from the unused remainder
+of the Catppuccin palette; pink is already workspaces', mauve is the clock's,
+sky is volume's, blue is mic's), and each with its **own** right-click
+dropdown, rather than one shared tooltip for all three.
+
+- **Polled on a plain 5-second timerfd `main.c` owns directly** (same shape as
+  the clock's own 1-second timer, not the "give me your fd, I'll drive your
+  async connection" pattern `dbus/dbus_loop.c` and `audio/pulse_client.c`
+  use) — matches the reference `SystemMonitor.qml`'s own `Timer { interval:
+  5000 }` exactly. `sysmon/sysmon_client.c` has no persistent connection or
+  background thread of any kind; every poll just re-reads `/proc/stat`,
+  `/proc/meminfo`, `/sys/class/thermal/thermal_zone1/temp`, `/proc/cpuinfo`,
+  and `/proc/loadavg` from scratch (all cheap: small pseudo-files, no syscalls
+  beyond open/read/close) plus one `nvidia-smi` subprocess call (see below).
+  No locking anywhere in this file, unlike `pulse_client.c` — everything runs
+  on the main thread, so there's no concurrent writer to guard against.
+- **`nvidia-smi` is invoked synchronously via `popen()`/`pclose()`, blocking
+  the whole event loop for its duration** — a deliberate, measured tradeoff,
+  not an oversight. Timed directly on this machine: ~15-45ms per call. Once
+  every 5 seconds, that's roughly a 0.3-0.9% duty cycle of blocked time, and
+  it only delays *this* poll tick's redraw plus any input events that happen
+  to arrive in that exact window — not a per-frame or per-click cost. The
+  alternative (spawning it as a genuinely async subprocess with its stdout
+  pipe registered on `main.c`'s epoll, reaped via a `SIGCHLD` handler or a
+  `waitpid(WNOHANG)` poll) would need a new "transient fd added and removed
+  every poll cycle" pattern nothing else in this codebase has, for a benefit
+  (avoiding a sub-50ms block once per 5s) judged not worth that added
+  complexity here. If `nvidia-smi` is missing or fails (no NVIDIA GPU, driver
+  not loaded), `sysmon_gpu_available()` stays false, the GPU module shows
+  `--` instead of a percent, and its dropdown shows an explicit "No NVIDIA GPU
+  detected" message instead of stale/zero-looking numbers — the same
+  "explicit unavailable state, not a misleading zero" instinct behind
+  `pulse_client.c`'s accessors returning safe defaults when disconnected.
+- **CPU-jiffies delta computation matches the reference's own
+  `percentFromJiffies()` exactly**: `/proc/stat`'s `cpuN` lines are parsed
+  every poll, and each line's `(idle, total)` pair is diffed against the
+  *previous* poll's sample for that same core (aggregate `cpu` line tracked
+  separately from per-core `cpu0`, `cpu1`, ... lines) to get a percentage —
+  which is why the very first poll after `sysmon_client_init()` always
+  reports 0% (no prior sample yet to diff against), self-correcting on the
+  next poll 5 seconds later. Not a bug; matches the reference's own `prev ?
+  percent : 0` behavior.
+- **`bar/popup_surface.c`'s `popup_surface_create()` gained a `bottom_margin`/
+  `left_margin` pair it didn't have before this module** (previously only
+  `top_margin`/`right_margin`, with bottom/left implicitly always 0) — a real
+  bug was caught here during development, not a hypothetical: the CPU/GPU/
+  memory dropdowns were first written copying `tray_context_menu.c`'s/
+  `device_popup.c`'s TOP+RIGHT anchor-under-the-trigger math verbatim, which
+  is correct for those two (both live in the bar's *right* region, near the
+  screen's right edge, so growing the popup leftward from the trigger's right
+  edge stays on-screen) but wrong here — CPU/GPU/memory live in the bar's
+  *left* region near x=0, so a right-anchored popup grew leftward off the
+  left edge of the screen and was invisible. The user caught this directly
+  ("the popup get cut off the left side of the screen"). Fixed by generalizing
+  `popup_surface_create()`'s signature to accept all four margins (updating
+  its two existing callers to pass `0, 0` for the now-explicit bottom/left
+  params) and having `sysmon_info_popup.c` anchor TOP+LEFT with an explicit
+  `left_margin = box_x` instead — grows rightward from the trigger's left
+  edge, which is the correct direction for a left-region trigger. No
+  overflow-past-the-*right*-edge clamping was added (unlike the right-anchored
+  popups' existing left-edge clamp) since no real caller today is close enough
+  to the right edge to hit it — see "Known limitations" below.
+- **Right-click opens the dropdown; left-click does nothing** — unlike
+  volume/mic (where left-click has an obvious action, muting), there's no
+  equivalent single "primary action" for a system-monitor widget, so unlike
+  every other clickable module in this bar, `cpu_handle_click()`/
+  `gpu_handle_click()`/`mem_handle_click()` only ever react to `BTN_RIGHT`.
+  This also matches the reference's own `SystemMonitorWidget.qml`, which has
+  no `onClicked` handler at all (hover-only) — right-click here is this
+  project's now-established translation of "hover to see more" into a
+  click-based interaction model (same translation already made for volume/
+  mic's device dropdown), just without a competing left-click action to work
+  around.
+- **Debugging note from this module's own development**: a temporary SIGUSR1-
+  driven debug hook (used to manually verify the popup position fix above,
+  since this environment still has no working synthetic-input setup) sent its
+  synthetic click to `app.outputs` (the first-bound `Output`) without checking
+  *which* physical monitor that was — on this 2-monitor machine, that happened
+  to be the second monitor (`Output.index == 1`, `HDMI-A-2`), while a
+  `grim -g "0,0 ..."` screenshot only ever captures the first. The click was
+  silently landing on and missing a bar the screenshot never showed, which
+  looked identical to "the click did nothing." Resolved by logging
+  `Output.index` from inside the click handler and screenshotting the matching
+  monitor's actual x-offset instead. See "Running / testing changes" above.
+
 ## Conventions
 
 - **This project is commented far more heavily than this assistant's usual
@@ -713,6 +850,33 @@ PulseAudio (on PipeWire 1.6.8)`) — via **libpulse**, not raw `libpipewire`.
   is fixed at open time — a live device appearing/disappearing while the
   popup is open updates existing rows' content (icons, percent, default
   marker) live, but won't resize the popup to add/remove a row for it.
+- **CPU/GPU/memory: GPU stats are NVIDIA-only, via `nvidia-smi`** — no AMD
+  (`radeontop`/`rocm-smi`) or Intel (`intel_gpu_top`) equivalent. On a
+  machine with a non-NVIDIA GPU, `sysmon_gpu_available()` stays permanently
+  false and the GPU module always shows `--` — not a crash, matches the
+  reference `SystemMonitor.qml`'s own NVIDIA-only `Process` command.
+- **CPU/GPU/memory: `nvidia-smi` runs synchronously, blocking the whole event
+  loop for ~15-45ms once per 5-second poll** — a deliberate, measured
+  tradeoff (see "System monitor (CPU/GPU/memory)" above for the reasoning and
+  measurement), not something to "fix" reflexively by making it async without
+  weighing that tradeoff again first.
+- **CPU/GPU/memory: none of the three popups coordinate with the tray's
+  context menu or the audio device popup** — same undefended, rare v1 edge
+  case as volume/mic's own equivalent limitation above; opening a sysmon
+  popup while a tray/audio popup is already open (or vice versa) can leave
+  both open simultaneously.
+- **CPU/GPU/memory: no left-click action, and no reflow if a popup would
+  overflow the *right* edge of the screen** — the latter is the mirror image
+  of the tray's own documented "no reflow past the left edge" limitation;
+  no real caller today is close enough to the right edge for this to matter
+  in practice (see "System monitor (CPU/GPU/memory)" above), but it's
+  undefended if that ever changes.
+- **CPU/GPU/memory: per-core CPU usage is capped at 128 tracked cores**
+  (`MAX_CPU_CORES` in `sysmon_client.c`) — comfortably above this development
+  machine's 16 threads, but a genuinely bigger machine's excess cores would
+  silently be dropped from both the aggregate calculation's *display* (though
+  not from `/proc/stat`'s own aggregate `cpu` line, which is still parsed and
+  used for the overall percentage) and the dropdown's per-core grid.
 
 ## Scope / roadmap
 
@@ -720,13 +884,17 @@ Implemented: bar shell (per-output layer-surface, double-buffered shm rendering)
 workspace indicator (kanji pills, occupied/focused logic, click-to-focus), clock,
 system tray (SNI item tracking, icon rendering, DBusMenu context menu, click routing),
 volume/mic (default sink/source display, click-to-mute, scroll-to-adjust, device
-dropdown for picking the default sink/source — see "PulseAudio / volume & mic").
+dropdown for picking the default sink/source — see "PulseAudio / volume & mic"),
+CPU/GPU/memory monitoring (three independent left-region modules, each with its own
+accent color and right-click info dropdown, split from the reference's single
+combined widget per explicit user request — see "System monitor (CPU/GPU/memory)").
 
 Not yet implemented (planned for later passes, in no particular order): network,
-media player (MPRIS), CPU/GPU/memory monitor, power-menu overlay. When adding one,
-follow the existing module shape: a `modules/<name>/` directory, a render function
-taking `(cairo_t*, ..., x, box_top, box_height)` and returning the next x
-coordinate, and — if it needs live data — either a Hyprland IPC event hook (if
-relevant) or its own poll/event source integrated into `main.c`'s epoll loop the
-same way the clock's timerfd, Hyprland's event socket, the tray's D-Bus connection,
-and the volume/mic modules' PulseAudio connection are.
+media player (MPRIS), power-menu overlay. When adding one, follow the existing
+module shape: a `modules/<name>/` directory, a render function taking
+`(cairo_t*, ..., x, box_top, box_height)` and returning the next x coordinate, and
+— if it needs live data — either a Hyprland IPC event hook (if relevant) or its
+own poll/event source integrated into `main.c`'s epoll loop the same way the
+clock's timerfd, Hyprland's event socket, the tray's D-Bus connection, the volume/
+mic modules' PulseAudio connection, and the CPU/GPU/memory modules' own 5-second
+timerfd are.

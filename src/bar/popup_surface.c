@@ -97,8 +97,8 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
 };
 
 PopupSurface *popup_surface_create(AppContext *app, Output *output, int width, int height,
-                                    int top_margin, int right_margin, uint32_t anchor,
-                                    enum zwlr_layer_shell_v1_layer layer) {
+                                    int top_margin, int right_margin, int bottom_margin, int left_margin,
+                                    uint32_t anchor, enum zwlr_layer_shell_v1_layer layer) {
     PopupSurface *surf = calloc(1, sizeof(PopupSurface));
     if (!surf) {
         perror("customBar: calloc(PopupSurface)");
@@ -112,7 +112,7 @@ PopupSurface *popup_surface_create(AppContext *app, Output *output, int width, i
 
     zwlr_layer_surface_v1_set_size(surf->layer_surface, (uint32_t)width, (uint32_t)height);
     zwlr_layer_surface_v1_set_anchor(surf->layer_surface, anchor);
-    zwlr_layer_surface_v1_set_margin(surf->layer_surface, top_margin, right_margin, 0, 0);
+    zwlr_layer_surface_v1_set_margin(surf->layer_surface, top_margin, right_margin, bottom_margin, left_margin);
     // No set_exclusive_zone() call -- a popup shouldn't reserve screen space or
     // push other layer-shell surfaces around the way the bar itself does.
     zwlr_layer_surface_v1_set_keyboard_interactivity(surf->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);

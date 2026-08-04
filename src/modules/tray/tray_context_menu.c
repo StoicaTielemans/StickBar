@@ -142,7 +142,7 @@ static void create_catchers(AppContext *app) {
     g_menu.catcher_count = 0;
     for (Output *o = app->outputs; o && g_menu.catcher_count < MAX_TRACKED_OUTPUTS; o = o->next) {
         PopupSurface *catcher = popup_surface_create(
-            app, o, 0, 0, 0, 0,
+            app, o, 0, 0, 0, 0, 0, 0,
             ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
                 ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
             ZWLR_LAYER_SHELL_V1_LAYER_TOP);
@@ -204,7 +204,7 @@ void tray_context_menu_open(Output *output, SniItem *item, double icon_x, double
     }
 
     g_menu.popup = popup_surface_create(output->app, output, (int)g_menu.popup_width, (int)g_menu.popup_height,
-                                         top_margin, right_margin,
+                                         top_margin, right_margin, 0, 0,
                                          ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
                                          ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY);
     if (!g_menu.popup) {

@@ -11,7 +11,8 @@
 // box_top..box_top+box_height -- same shape as modules/clock/clock.c's
 // clock_render(). Records the box's screen-space rect for later
 // volume_handle_click()/volume_handle_scroll(). Returns the box's own left
-// edge, for the next (further left) right-region module to anchor against.
+// edge minus BAR.item_spacing, for the next (further left) right-region
+// module to anchor against with a gap.
 double volume_render(cairo_t *cr, Output *output, double right_edge_x, double box_top, double box_height);
 
 // Hit-tests (x, y) against `output`'s most recently rendered box. Left-click

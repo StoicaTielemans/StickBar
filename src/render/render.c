@@ -2,6 +2,9 @@
 
 #include "config/config.h"
 #include "modules/clock/clock.h"
+#include "modules/cpu/cpu.h"
+#include "modules/gpu/gpu.h"
+#include "modules/mem/mem.h"
 #include "modules/mic/mic.h"
 #include "modules/tray/tray.h"
 #include "modules/volume/volume.h"
@@ -14,10 +17,16 @@ void render_output(cairo_t *cr, Output *output, int width, int height) {
     cairo_set_source_rgba(cr, COLORS.mantle.r, COLORS.mantle.g, COLORS.mantle.b, COLORS.mantle.a);
     cairo_paint(cr);
 
-    // Left region: workspace pills, flush against the left edge (matches the
-    // reference bar's leftLayout, which anchors to parent.left with no margin --
-    // spacing only applies *between* items, not before the first one).
-    workspaces_render(cr, output, 0.0, 0.0, (double)height);
+    // Left region: workspace pills flush against the left edge, then CPU/GPU/
+    // memory -- matches the reference bar's actual leftLayout order
+    // (ArchLogoWidget, HyprlandWindows, SystemMonitorWidget; ArchLogoWidget
+    // isn't built here, and SystemMonitorWidget's combined CPU/GPU/MEM stats
+    // are split into three separate modules per explicit user request, kept
+    // in that same relative left-to-right order).
+    double workspaces_right_x = workspaces_render(cr, output, 0.0, 0.0, (double)height);
+    double cpu_right_x = cpu_render(cr, output, workspaces_right_x, 0.0, (double)height);
+    double gpu_right_x = gpu_render(cr, output, cpu_right_x, 0.0, (double)height);
+    mem_render(cr, output, gpu_right_x, 0.0, (double)height);
 
     // Right region: the reference Bar.qml's actual rightLayout order is Mic,
     // Volume, Network, Clock, Tray -- Tray is rightmost, drawn first here since

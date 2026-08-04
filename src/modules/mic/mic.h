@@ -9,8 +9,9 @@
 // Draws the default source's (microphone) module box right-anchored so its
 // right edge sits at `right_edge_x`, vertically spanning
 // box_top..box_top+box_height. Records the box's screen-space rect for later
-// mic_handle_click()/mic_handle_scroll(). Returns the box's own left edge, for
-// the next (further left) right-region module to anchor against.
+// mic_handle_click()/mic_handle_scroll(). Returns the box's own left edge
+// minus BAR.item_spacing, for the next (further left) right-region module to
+// anchor against with a gap.
 double mic_render(cairo_t *cr, Output *output, double right_edge_x, double box_top, double box_height);
 
 // Hit-tests (x, y) against `output`'s most recently rendered box. Left-click

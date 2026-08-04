@@ -76,7 +76,10 @@ double volume_render(cairo_t *cr, Output *output, double right_edge_x, double bo
         rect->h = box_height;
     }
 
-    return box_x;
+    // Matches tray_render()'s/clock_render()'s convention of baking
+    // BAR.item_spacing into the returned x, so the next (further left)
+    // right-region module renders with a gap rather than flush against this box.
+    return box_x - BAR.item_spacing;
 }
 
 void volume_handle_click(Output *output, double x, double y, uint32_t button) {

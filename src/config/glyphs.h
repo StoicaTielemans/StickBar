@@ -36,6 +36,14 @@
 #define GLYPH_ICON_DEVICE_SELECTABLE  0xF0130u
 #define GLYPH_ICON_HEADPHONES         0xF02CBu
 
+// System monitor icons -- the reference SystemMonitorWidget.qml uses a single
+// combined "system monitor" glyph for all three metrics; this project splits
+// CPU/GPU/memory into three separate modules (per explicit user request), so
+// each gets its own distinct icon instead of sharing one.
+#define GLYPH_ICON_CPU 0xF0EE0u // md-cpu_64_bit
+#define GLYPH_ICON_GPU 0xF08AEu // md-expansion_card
+#define GLYPH_ICON_MEM 0xF035Bu // md-memory
+
 // Encodes a single Unicode codepoint as UTF-8 into `out`, nul-terminated.
 // `out` must have room for at least 5 bytes (up to 4 bytes of encoding + '\0').
 // Returns the number of encoded bytes (excluding the terminator).

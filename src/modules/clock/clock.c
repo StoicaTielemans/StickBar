@@ -53,5 +53,8 @@ double clock_render(cairo_t *cr, double right_edge_x, double box_top, double box
                                    g_time_str, FONT.label, true, COLORS.mauve);
 
     (void)text_h;
-    return box_x;
+    // Matches tray_render()'s own convention of baking BAR.item_spacing into
+    // its returned x, so the next (further left) right-region module doesn't
+    // render flush against this box with no gap.
+    return box_x - BAR.item_spacing;
 }

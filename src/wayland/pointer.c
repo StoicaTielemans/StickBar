@@ -3,11 +3,15 @@
 #include <linux/input-event-codes.h> // BTN_LEFT, BTN_RIGHT
 
 #include "audio/device_popup.h"
+#include "modules/cpu/cpu.h"
+#include "modules/gpu/gpu.h"
+#include "modules/mem/mem.h"
 #include "modules/mic/mic.h"
 #include "modules/tray/tray.h"
 #include "modules/tray/tray_context_menu.h"
 #include "modules/volume/volume.h"
 #include "modules/workspaces/workspaces.h"
+#include "sysmon/sysmon_info_popup.h"
 #include "wayland/context.h"
 
 // Finds the Output whose bar surface owns `surface`, or NULL if none does (e.g. the
@@ -92,18 +96,30 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
         device_popup_close();
         return;
     }
+    if (sysmon_info_popup_is_menu_surface(app->pointer_over_surface)) {
+        // Read-only content -- a click lands here but there's nothing to
+        // dispatch to, unlike the two interactive popups above; absorbed so
+        // it doesn't fall through to the bar-surface path below (which would
+        // be wrong anyway, since this surface never matches any Output).
+        return;
+    }
+    if (sysmon_info_popup_is_catcher_surface(app->pointer_over_surface)) {
+        sysmon_info_popup_close();
+        return;
+    }
 
-    // Bar-surface clicks (tray icons, workspace pills, volume/mic boxes): four
-    // explicit call sites rather than a generic dispatch table, same reasoning
-    // as before -- each handler already does its own hit-testing internally, so
-    // this is a flat list of "ask everyone, whoever's rect matches wins," not an
-    // indirection layer worth building at this N. workspaces_handle_click()
-    // only ever reacts to left-click (its own internal convention, unrelated to
-    // volume/mic); tray_handle_click(), volume_handle_click(), and
-    // mic_handle_click() each branch on `button` internally instead (the tray's
-    // has-menu-overrides-button rule; volume/mic's left-mutes/right-opens-
-    // dropdown rule -- see modules/volume/volume.h), so all three are called
-    // unconditionally here regardless of which button fired.
+    // Bar-surface clicks (tray icons, workspace pills, volume/mic/cpu/gpu/mem
+    // boxes): explicit call sites rather than a generic dispatch table, same
+    // reasoning as before -- each handler already does its own hit-testing
+    // internally, so this is a flat list of "ask everyone, whoever's rect
+    // matches wins," not an indirection layer worth building at this N.
+    // workspaces_handle_click() only ever reacts to left-click (its own
+    // internal convention, unrelated to the others); every other handler
+    // branches on `button` internally instead (the tray's has-menu-overrides-
+    // button rule; volume/mic's left-mutes/right-opens-dropdown rule;
+    // cpu/gpu/mem's right-opens-dropdown-only rule, no left-click action at
+    // all -- see modules/cpu/cpu.h), so all of them are called unconditionally
+    // here regardless of which button fired.
     if (app->pointer_over) {
         if (button == BTN_LEFT) {
             workspaces_handle_click(app->pointer_over, app->pointer_x, app->pointer_y);
@@ -111,6 +127,9 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
         tray_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         volume_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         mic_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
+        cpu_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
+        gpu_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
+        mem_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
     }
 }
 

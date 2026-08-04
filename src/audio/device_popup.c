@@ -275,7 +275,7 @@ static void create_catchers(AppContext *app) {
     g_popup.catcher_count = 0;
     for (Output *o = app->outputs; o && g_popup.catcher_count < MAX_TRACKED_OUTPUTS; o = o->next) {
         PopupSurface *catcher = popup_surface_create(
-            app, o, 0, 0, 0, 0,
+            app, o, 0, 0, 0, 0, 0, 0,
             ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
                 ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
             ZWLR_LAYER_SHELL_V1_LAYER_TOP);
@@ -324,7 +324,7 @@ void device_popup_open(Output *output, bool is_sink, Color accent,
     }
 
     g_popup.popup = popup_surface_create(output->app, output, (int)g_popup.popup_width, (int)g_popup.popup_height,
-                                          top_margin, right_margin,
+                                          top_margin, right_margin, 0, 0,
                                           ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
                                           ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY);
     if (!g_popup.popup) {

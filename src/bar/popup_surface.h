@@ -9,18 +9,23 @@
 typedef struct PopupSurface PopupSurface; // opaque
 
 // Creates a transient zwlr_layer_surface_v1 with an explicit size, anchor, and
-// top/right margin -- unlike bar_surface.c's always-anchored-top/left/right,
+// all four margins -- unlike bar_surface.c's always-anchored-top/left/right,
 // compositor-decides-width bar surface, this is meant for a short-lived surface
 // positioned at an arbitrary point (a popup menu near some other bar content)
 // or covering the whole output (a full-screen, invisible click-catcher) -- see
 // modules/tray/tray_context_menu.c for both use cases. No exclusive zone is
 // set. `layer` lets the caller request e.g. LAYER_OVERLAY (to sit above the bar
 // and any click-catcher surface) instead of LAYER_TOP. Returns NULL on
-// failure. Written generically (no tray-specific knowledge) so a later
-// tooltip/popup module can reuse it directly.
+// failure. Written generically (no tray-specific knowledge) so other
+// tooltip/popup modules can reuse it directly -- all four margins are exposed
+// (not just top/right) because a popup anchored under a *left*-region trigger
+// needs TOP+LEFT with an explicit left_margin instead of TOP+RIGHT with a
+// right_margin (see sysmon/sysmon_info_popup.c, which right-anchoring left
+// the CPU/GPU/memory dropdowns clipped off the left edge of the screen for --
+// a real bug caught by the user, not a hypothetical).
 PopupSurface *popup_surface_create(AppContext *app, Output *output, int width, int height,
-                                    int top_margin, int right_margin, uint32_t anchor,
-                                    enum zwlr_layer_shell_v1_layer layer);
+                                    int top_margin, int right_margin, int bottom_margin, int left_margin,
+                                    uint32_t anchor, enum zwlr_layer_shell_v1_layer layer);
 
 // Renders once immediately via `draw(cr, user_data)` and commits -- no
 // frame-callback throttling like bar_surface.c's do_render(), since a popup only

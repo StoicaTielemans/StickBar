@@ -186,7 +186,14 @@ void tray_context_menu_open(Output *output, SniItem *item, double icon_x, double
     // it grows down-and-left from there) translate to: anchor TOP|RIGHT with
     // top_margin = the icon's bottom edge, right_margin = the distance from the
     // icon's right edge to the output's own right edge.
-    int top_margin = (int)(icon_y + icon_h);
+    // Subtracting BAR.height compensates for Hyprland appearing to measure a
+    // layer surface's own top_margin from the edge of its *already-reserved*
+    // exclusive-zone region rather than the raw output edge the spec text
+    // describes, when the margin is set by the same client that owns that
+    // reservation (the bar's own layer surface). Reasoned from spec text plus
+    // the observed symptom (a suspiciously round one-bar-height offset without
+    // this subtraction) -- verify by screenshot before trusting this blindly.
+    int top_margin = (int)(icon_y + icon_h) - BAR.height;
     int right_margin = output->width - (int)(icon_x + icon_w);
     if (right_margin < 0) {
         // Known limitation (also true of the reference): no reflow if the menu

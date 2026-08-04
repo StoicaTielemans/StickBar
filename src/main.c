@@ -11,6 +11,7 @@
 #include "dbus/dbus_loop.h"
 #include "dbus/sni_registry.h"
 #include "dbus/sni_watcher.h"
+#include "dbus/sni_watcher_service.h"
 #include "hyprland/ipc_events.h"
 #include "modules/clock/clock.h"
 #include "modules/workspaces/workspaces.h"
@@ -132,7 +133,13 @@ int main(void) {
             dbus_fd = dbus_timeout_fd = -1;
         } else {
             sni_registry_init(&app);
-            sni_watcher_register_host(bus);
+            // Try to become the StatusNotifierWatcher ourselves first (so the
+            // tray keeps working even with no other Watcher-providing app
+            // running at all); only fall back to connecting as a Host client
+            // if something else already owns the well-known bus name.
+            if (!sni_watcher_service_try_start(bus)) {
+                sni_watcher_register_host(bus);
+            }
             // Flushes the registration/subscription requests just made above and
             // re-derives dbus_fd's real interest mask/timeout, same as every
             // other dbus_loop_pump() call later in the main loop.

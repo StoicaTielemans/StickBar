@@ -3,6 +3,7 @@
 
 #include <cairo.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <systemd/sd-bus.h>
 
 #include "wayland/context.h"
@@ -23,6 +24,17 @@ void sni_registry_add(sd_bus *bus, const char *bus_name, const char *path);
 
 // Removes and frees the tracked item matching (bus_name, path), if any.
 void sni_registry_remove(const char *bus_name, const char *path);
+
+// Removes and frees every tracked item registered under `bus_name`, regardless
+// of path -- used when that bus name's owner disconnects (a single client can
+// register more than one item, though rare). Returns the number removed.
+int sni_registry_remove_by_bus_name(const char *bus_name);
+
+// Formats item as "<bus_name><path>", the same shape used on the wire by
+// RegisteredStatusNotifierItems / StatusNotifierItem{,Un}Registered -- kept
+// consistent with sni_watcher.c's split_bus_name_path(), which parses this
+// same shape back apart on the client side.
+void sni_registry_format_entry(SniItem *item, char *out, size_t out_size);
 
 int sni_registry_count(void);
 SniItem *sni_registry_get(int index); // 0 <= index < sni_registry_count()

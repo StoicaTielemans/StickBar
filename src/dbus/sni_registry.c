@@ -346,3 +346,29 @@ void sni_registry_remove(const char *bus_name, const char *path) {
         output_mark_all_dirty(g_app);
     }
 }
+
+int sni_registry_remove_by_bus_name(const char *bus_name) {
+    int removed = 0;
+    for (int i = 0; i < MAX_TRAY_ITEMS; i++) {
+        if (!g_items[i].in_use || strcmp(g_items[i].bus_name, bus_name) != 0) {
+            continue;
+        }
+        if (g_items[i].signal_slot) {
+            sd_bus_slot_unref(g_items[i].signal_slot);
+        }
+        if (g_items[i].icon_surface) {
+            cairo_surface_destroy(g_items[i].icon_surface);
+        }
+        memset(&g_items[i], 0, sizeof(g_items[i])); // in_use = false
+        removed++;
+    }
+
+    if (removed > 0 && g_app) {
+        output_mark_all_dirty(g_app);
+    }
+    return removed;
+}
+
+void sni_registry_format_entry(SniItem *item, char *out, size_t out_size) {
+    snprintf(out, out_size, "%s%s", item->bus_name, item->path);
+}

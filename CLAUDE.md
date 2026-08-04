@@ -102,7 +102,11 @@ customBar/
     ├── dbus/                     D-Bus plumbing for the system tray (see "D-Bus /
     │                             system tray" below for the full protocol writeup)
     │   ├── dbus_loop.c           sd_bus connection + generic epoll integration
-    │   ├── sni_watcher.c         StatusNotifierWatcher host registration
+    │   ├── sni_watcher_service.c attempts to *become* the StatusNotifierWatcher
+    │   │                         (claims the well-known bus name, hosts the
+    │   │                         /StatusNotifierWatcher object); tried first
+    │   ├── sni_watcher.c         StatusNotifierWatcher Host (client) registration;
+    │   │                         fallback used only if _service.c's claim fails
     │   ├── sni_registry.c        tracked-item table (fixed-array, like
     │   │                         workspaces.c's convention), property fetch,
     │   │                         per-item signal subscriptions
@@ -283,17 +287,56 @@ clear that way.
   from sd-bus's absolute `CLOCK_MONOTONIC` microsecond deadline to a relative
   `itimerspec` — this is what makes sd-bus's own call-timeout bookkeeping fire at
   all when it isn't running its own default event loop.
-- **A StatusNotifierWatcher already exists on this machine, owned by the running
-  Quickshell instance** (confirmed: `busctl --user list | grep StatusNotifier`
-  shows `org.kde.StatusNotifierWatcher` owned by the `quickshell` process).
-  customBar only implements the **Host** role (a consumer) — `dbus/sni_watcher.c`
-  registers a host name and queries/subscribes to whichever Watcher it finds
-  (tries `org.kde.StatusNotifierWatcher` first, confirmed live; falls back to
-  `org.freedesktop.StatusNotifierWatcher`, **unverified** — no such instance
-  exists here to test against, so if host registration ever silently fails on a
-  machine using that fallback, start there). **Not implementing the Watcher role
-  itself is a real limitation**: if nothing else on the system provides one, the
-  tray just silently stays empty forever, not a crash.
+- **customBar can act as either the StatusNotifierWatcher itself or a Host
+  client of someone else's, decided automatically at startup, with no other
+  code needing to know or care which mode is active.** `main.c` always tries
+  `dbus/sni_watcher_service.c`'s `sni_watcher_service_try_start()` first — it
+  attempts `sd_bus_request_name(bus, "org.kde.StatusNotifierWatcher", 0)`, and
+  if that succeeds, registers the `/StatusNotifierWatcher` object itself
+  (`RegisterStatusNotifierItem`/`RegisterStatusNotifierHost`,
+  `RegisteredStatusNotifierItems`/`IsStatusNotifierHostRegistered`/
+  `ProtocolVersion`, and the `StatusNotifierItem{,Un}Registered`/
+  `StatusNotifierHostRegistered` signals) so items register directly with this
+  process. Only if that name is already owned by something else (confirmed
+  live by running with Quickshell stopped entirely: customBar claimed
+  `org.kde.StatusNotifierWatcher` itself, and both EasyEffects and Steam showed
+  up in `RegisteredStatusNotifierItems` with no other Watcher-providing process
+  running) does `main.c` fall back to the original, unchanged Host-only path in
+  `dbus/sni_watcher.c`'s `sni_watcher_register_host()` — connecting as a client
+  to whichever Watcher does exist instead. `dbus/sni_registry.c`,
+  `modules/tray/tray.c`, etc. are identical in both modes; they only ever see
+  `sni_registry_add()`/`_remove()` calls, regardless of which path triggered
+  them. `sni_watcher_service_try_start()` also best-effort claims
+  `org.freedesktop.StatusNotifierWatcher` as a second name (failure ignored)
+  for any host hardcoded to look for that name instead, reusing the same
+  vtable/object registration.
+  - **Item registration accepts both real-world calling conventions**, the same
+    two `sni_watcher.c`'s client-side `split_bus_name_path()` already parses:
+    if the `RegisterStatusNotifierItem(service)` argument starts with `/`, it's
+    an object path and the bus name is the caller's own unique name (via
+    `sd_bus_message_get_sender()`) — what Steam does; otherwise `service` is
+    itself the bus name and the path defaults to `/StatusNotifierItem` — the
+    KDE convention EasyEffects uses.
+  - **Auto-unregister on item process exit** subscribes to
+    `org.freedesktop.DBus`'s `NameOwnerChanged(sss)` signal (this fires for
+    *every* bus-name ownership change system-wide, not just ones customBar
+    tracks — D-Bus match rules can't filter down to "only names I've
+    registered items under," so every firing is checked against the registry).
+    An empty `new_owner` means that name's previous owner disconnected;
+    `sni_registry_remove_by_bus_name()` then removes every item registered
+    under that bus name (a single client registering more than one item is
+    rare but possible, so this isn't just `sni_registry_remove()` on one
+    (bus_name, path) pair). Without this, closing an app would leave its icon
+    stuck in the tray forever with no other signal ever telling customBar it's
+    gone — this path has no precedent elsewhere in the codebase to lean on and
+    was the one part of this feature confirmed only via a live
+    start-app/quit-app/watch-icon-disappear test, not by reasoning about the
+    spec text.
+  - **Not implementing the Watcher role was the prior limitation this removes.**
+    A machine with genuinely nothing providing *any* Watcher (neither
+    customBar's own service nor a fallback like Quickshell/KDE/snixembed)
+    would previously have left the tray silently empty forever; now customBar
+    itself is that provider by default.
 - **Bus-name/object-path splitting**: `RegisteredStatusNotifierItems` and the
   `StatusNotifierItem{,Un}Registered` signals give strings like
   `":1.30/StatusNotifierItem"` or `":1.52/org/ayatana/NotificationItem/steam"` —
@@ -313,12 +356,24 @@ clear that way.
     low-contrast RGB, meant to be recolored at display time to the desktop
     theme's foreground color. The reference Quickshell bar renders this same
     item bright/legible because Qt/KDE's full icon-theme integration recolors it
-    via `IconName`, not the raw pixmap. This project's "IconPixmap only, no
-    theme lookup" scope means such icons render in their baked-in (dim) color —
-    documented in "Known limitations" below, confirmed by a byte-level
-    side-by-side comparison against Quickshell's rendering of the identical
-    D-Bus data, not something to "fix" by tweaking the byte-order/premultiply
-    logic (that part is already correct).
+    via `IconName`, not the raw pixmap. This project doesn't do real theme
+    lookups, so instead `sni_icon_convert()` now applies a cheap heuristic
+    directly on the pixmap bytes (`detect_symbolic_mask()` in
+    `dbus/sni_icon.c`, run once per icon before the premultiply pass): sample
+    the straight RGB of every pixel above alpha 40/255 (low-alpha edge pixels
+    are noisy and shouldn't count), and if the max-min range across R/G/B among
+    those samples is within 12/255 *and* the shared color's Rec. 601 luminance
+    is under 40%, treat it as a mask and override every pixel's RGB to
+    `COLORS.text` before premultiplying, leaving alpha (the glyph shape)
+    untouched. Scoped to this IconPixmap path only, deliberately not applied to
+    `dbus/icon_theme.c`'s PNG-file fallback path — a flat-colored mask is a
+    specifically IconPixmap-shaped problem, and applying the same heuristic to
+    a normal multi-color raster app logo loaded from an icon theme file risks
+    wrongly recoloring a legitimately monochrome icon. Confirmed working live:
+    with Quickshell down (see below) and customBar as its own Watcher,
+    EasyEffects' tray icon renders in this bar's light `COLORS.text` instead of
+    its dim baked-in color, while Steam's icon (no IconPixmap at all, resolved
+    via the PNG fallback instead) is unaffected.
   - Premultiplication: cairo wants premultiplied alpha; SNI pixmaps are
     conventionally *not* premultiplied on the wire, so `sni_icon_convert()`
     premultiplies unconditionally — also confirmed correct via the same
@@ -360,6 +415,19 @@ clear that way.
   the caching, that first call would silently no-op and *nothing* would ever
   repaint it afterward, since nothing else was watching for the surface to
   become ready.
+- **The context menu's `top_margin` subtracts `BAR.height` from the icon's
+  bottom edge, not just `icon_y + icon_h`** (`tray_context_menu_open()` in
+  `modules/tray/tray_context_menu.c`). The layer-shell spec text describes
+  `set_margin`'s distance as measured from the raw output edge, which by that
+  reading `icon_y + icon_h` alone should already satisfy — but the menu
+  rendered one full bar-height too low without the subtraction. The working
+  theory (reasoned from the spec text plus the suspiciously round one-bar-height
+  size of the gap, not independently confirmed against Hyprland's own source)
+  is that Hyprland measures a layer surface's margin from the edge of its
+  *already-reserved exclusive-zone region* rather than the output edge, when
+  the margin is set by the same client that owns that reservation — i.e. the
+  bar's own 20px top-anchored exclusive zone was being added a second time on
+  top of the explicit margin. Fixed by subtracting `BAR.height` back out.
 - **The context menu's dismiss-on-outside-click uses one full-screen, fully
   transparent, `LAYER_TOP` "click-catcher" surface *per currently-known
   output*** — not just the output the menu is on. The reference's own dismiss
@@ -419,9 +487,6 @@ clear that way.
   system tray" above). `xdg-shell.xml` is still linked only for its
   `xdg_popup_interface` symbol (see the Wayland plumbing gotcha above), not
   because anything actually creates an `xdg_popup`.
-- **Tray: no StatusNotifierWatcher fallback** — Host-only; relies on something
-  else (Quickshell, on this machine) already owning a Watcher, else the tray
-  silently shows zero icons forever.
 - **Tray: PNG-only icon fallback, no SVG, no real freedesktop icon-theme spec
   compliance.** Items with no usable `IconPixmap` fall back to
   `dbus/icon_theme.c`'s `icon_theme_lookup()`: the item's own `IconThemePath`
@@ -433,11 +498,13 @@ clear that way.
   librsvg/gdk-pixbuf, a new dependency this project doesn't have). Items with
   no `IconPixmap` *and* no PNG found by either path still render the muted
   placeholder square.
-- **Tray: symbolic/mask-style icons render in a low-contrast baked-in color**
-  (e.g. EasyEffects, on this machine) — see "D-Bus / system tray" above for the
-  byte-level verification of why this happens (not a parsing bug: the reference
-  Quickshell bar recolors the same icon via a real icon-theme lookup this
-  project deliberately doesn't do).
+- **Tray: no fallback if customBar's own Watcher registration itself fails**
+  (e.g. `sd_bus_add_object_vtable()` erroring after the bus name was already
+  claimed — logged to stderr, name released, falls back to Host mode) *and*
+  no other Watcher happens to be running either — the tray then stays empty
+  for the run, same underlying "nothing to connect to" failure mode as before,
+  just less likely to actually occur now that customBar provides its own
+  Watcher by default.
 - **Tray: no submenu/nested-menu support** — `GetLayout`'s recursion depth is
   capped at 1, matching the reference's own flat rendering.
 - **Tray: no tooltip support** — the SNI `ToolTip` property is never fetched.

@@ -70,6 +70,7 @@ sources = files(
   'src/modules/clock/clock.c',
   'src/dbus/dbus_loop.c',
   'src/dbus/sni_watcher.c',
+  'src/dbus/sni_watcher_service.c',
   'src/dbus/sni_registry.c',
   'src/dbus/sni_icon.c',
   'src/dbus/icon_theme.c',

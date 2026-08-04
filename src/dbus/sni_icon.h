@@ -11,7 +11,9 @@
 // failure. Pure function -- no D-Bus types -- see sni_icon.c for the byte-order
 // and premultiplication handling this performs, including the single riskiest
 // unverified assumption in the whole tray feature (whether source pixels are
-// premultiplied).
+// premultiplied), and for the flat-colored-mask ("symbolic" icon) detection
+// heuristic that recolors such icons to this bar's own text color instead of
+// rendering their dim baked-in color as-is.
 cairo_surface_t *sni_icon_convert(const uint8_t *pixels, int width, int height, int dest_size);
 
 #endif

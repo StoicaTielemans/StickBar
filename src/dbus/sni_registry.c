@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "config/config.h"
+#include "dbus/icon_theme.h"
 #include "dbus/sni_icon.h"
 #include "wayland/output.h"
 
@@ -27,6 +28,8 @@ struct SniItem {
     char path[256];
     char id[128];
     char menu_path[256]; // empty or "/" means "no menu" (see sni_item_has_menu)
+    char icon_name[128];       // used only as a fallback when IconPixmap is absent
+    char icon_theme_path[512]; // per-item IconThemePath override, if the item set one
     cairo_surface_t *icon_surface;
     sd_bus_slot *signal_slot;
 };
@@ -259,6 +262,18 @@ static void fetch_item_properties(SniItem *item) {
                     if (surf) {
                         item->icon_surface = surf;
                     }
+                } else if (key && strcmp(key, "IconName") == 0 && strcmp(contents, "s") == 0) {
+                    const char *icon_name = NULL;
+                    sd_bus_message_read_basic(reply, SD_BUS_TYPE_STRING, &icon_name);
+                    if (icon_name) {
+                        snprintf(item->icon_name, sizeof(item->icon_name), "%s", icon_name);
+                    }
+                } else if (key && strcmp(key, "IconThemePath") == 0 && strcmp(contents, "s") == 0) {
+                    const char *theme_path = NULL;
+                    sd_bus_message_read_basic(reply, SD_BUS_TYPE_STRING, &theme_path);
+                    if (theme_path) {
+                        snprintf(item->icon_theme_path, sizeof(item->icon_theme_path), "%s", theme_path);
+                    }
                 } else {
                     sd_bus_message_skip(reply, contents);
                 }
@@ -270,6 +285,16 @@ static void fetch_item_properties(SniItem *item) {
     }
 
     sd_bus_message_unref(reply);
+
+    // No IconPixmap (or it converted to nothing usable) -- fall back to
+    // resolving IconName via icon_theme.c (IconThemePath override first, then
+    // a pragmatic hicolor/pixmaps filesystem search). Only reached when
+    // IconPixmap is genuinely absent, not for items like EasyEffects that
+    // *do* have one (see CLAUDE.md's "D-Bus / system tray" section on why that
+    // one still renders dim rather than being routed through this fallback).
+    if (!item->icon_surface && item->icon_name[0]) {
+        item->icon_surface = icon_theme_lookup(item->icon_name, item->icon_theme_path, BAR.height);
+    }
 }
 
 void sni_registry_add(sd_bus *bus, const char *bus_name, const char *path) {

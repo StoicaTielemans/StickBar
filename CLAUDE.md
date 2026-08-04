@@ -108,6 +108,10 @@ customBar/
     │   │                         per-item signal subscriptions
     │   ├── sni_icon.c            pure IconPixmap -> cairo_surface_t* conversion
     │   │                         (no D-Bus types in this file, deliberately)
+    │   ├── icon_theme.c          fallback PNG icon lookup for items with no
+    │   │                         usable IconPixmap (IconThemePath override,
+    │   │                         then a pragmatic hicolor/pixmaps search) --
+    │   │                         also no D-Bus types, pure filesystem + cairo
     │   └── dbusmenu.c            com.canonical.dbusmenu client: GetLayout parsing,
     │                             Event("clicked",...) triggering
     └── modules/
@@ -418,9 +422,17 @@ clear that way.
 - **Tray: no StatusNotifierWatcher fallback** — Host-only; relies on something
   else (Quickshell, on this machine) already owning a Watcher, else the tray
   silently shows zero icons forever.
-- **Tray: IconPixmap-only icon rendering** — no icon-theme (`IconName`) lookup
-  or image-decode library. Items with no `IconPixmap` at all (e.g. Steam, on
-  this machine) render a muted placeholder square.
+- **Tray: PNG-only icon fallback, no SVG, no real freedesktop icon-theme spec
+  compliance.** Items with no usable `IconPixmap` fall back to
+  `dbus/icon_theme.c`'s `icon_theme_lookup()`: the item's own `IconThemePath`
+  override first (a documented SNI property some apps, Steam among them, use to
+  point at a private icon file — this is what fixed Steam's tray icon, which
+  previously rendered a placeholder), then a pragmatic, hand-rolled search
+  across hicolor's common size directories and `/usr/share/pixmaps` — **not**
+  `index.theme` parsing, theme inheritance, or SVG (that would need
+  librsvg/gdk-pixbuf, a new dependency this project doesn't have). Items with
+  no `IconPixmap` *and* no PNG found by either path still render the muted
+  placeholder square.
 - **Tray: symbolic/mask-style icons render in a low-contrast baked-in color**
   (e.g. EasyEffects, on this machine) — see "D-Bus / system tray" above for the
   byte-level verification of why this happens (not a parsing bug: the reference

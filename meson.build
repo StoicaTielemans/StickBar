@@ -72,6 +72,7 @@ sources = files(
   'src/dbus/sni_watcher.c',
   'src/dbus/sni_registry.c',
   'src/dbus/sni_icon.c',
+  'src/dbus/icon_theme.c',
   'src/dbus/dbusmenu.c',
   'src/bar/popup_surface.c',
   'src/modules/tray/tray.c',

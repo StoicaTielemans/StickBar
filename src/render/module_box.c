@@ -79,3 +79,24 @@ void module_box_draw_text_centered(cairo_t *cr, double x, double y, double w, do
     pango_font_description_free(desc);
     g_object_unref(layout);
 }
+
+void module_box_draw_text_left(cairo_t *cr, double x, double y, double h,
+                                const char *text, int font_size_px, bool bold, Color color) {
+    PangoLayout *layout = pango_cairo_create_layout(cr);
+    PangoFontDescription *desc = build_font(font_size_px, bold);
+    pango_layout_set_font_description(layout, desc);
+    pango_layout_set_text(layout, text, -1);
+
+    int text_w, text_h;
+    pango_layout_get_pixel_size(layout, &text_w, &text_h);
+    (void)text_w; // only the height is needed for vertical centering here
+
+    cairo_save(cr);
+    cairo_set_source_rgba(cr, color.r, color.g, color.b, color.a);
+    cairo_move_to(cr, x, y + (h - text_h) / 2.0);
+    pango_cairo_show_layout(cr, layout);
+    cairo_restore(cr);
+
+    pango_font_description_free(desc);
+    g_object_unref(layout);
+}

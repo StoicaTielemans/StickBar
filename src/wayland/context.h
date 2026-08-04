@@ -60,9 +60,14 @@ struct AppContext {
     int next_output_index;    // count of outputs bound so far; assigned to Output.index
 
     // Pointer hover state, updated by wayland/pointer.c's enter/motion/leave
-    // handlers and consulted on button-press to know which output's bar surface to
-    // hit-test against.
+    // handlers. `pointer_over_surface` is the raw wl_surface currently under the
+    // pointer, regardless of what kind of surface it is; `pointer_over` is the
+    // Output it resolves to *if* it's one of the bar's own surfaces (NULL for a
+    // popup/click-catcher surface, which are never stored on any Output --
+    // see wayland/pointer.c's button handler for how the two are used together
+    // to route clicks to the right place).
     Output *pointer_over;
+    struct wl_surface *pointer_over_surface;
     double pointer_x, pointer_y;
 };
 

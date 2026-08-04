@@ -15,6 +15,10 @@ wayland_client = dependency('wayland-client')
 cairo          = dependency('cairo')
 pangocairo     = dependency('pangocairo')
 cjson          = dependency('libcjson')   # pkg-config module name is "libcjson", not "cjson"
+libsystemd     = dependency('libsystemd') # pkg-config module name is "libsystemd", not
+                                           # "sd-bus" -- provides sd-bus, the D-Bus client
+                                           # library the tray module uses to talk to
+                                           # StatusNotifierItem/DBusMenu
 
 wayland_scanner = find_program('wayland-scanner')
 
@@ -64,10 +68,18 @@ sources = files(
   'src/hyprland/dispatch.c',
   'src/modules/workspaces/workspaces.c',
   'src/modules/clock/clock.c',
+  'src/dbus/dbus_loop.c',
+  'src/dbus/sni_watcher.c',
+  'src/dbus/sni_registry.c',
+  'src/dbus/sni_icon.c',
+  'src/dbus/dbusmenu.c',
+  'src/bar/popup_surface.c',
+  'src/modules/tray/tray.c',
+  'src/modules/tray/tray_context_menu.c',
 )
 
 executable('customBar',
   sources + generated_sources + generated_headers,
-  dependencies: [wayland_client, cairo, pangocairo, cjson],
+  dependencies: [wayland_client, cairo, pangocairo, cjson, libsystemd],
   include_directories: include_directories('src'),
 )

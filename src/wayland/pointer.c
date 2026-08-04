@@ -1,7 +1,9 @@
 #include "wayland/pointer.h"
 
-#include <linux/input-event-codes.h> // BTN_LEFT
+#include <linux/input-event-codes.h> // BTN_LEFT, BTN_RIGHT
 
+#include "modules/tray/tray.h"
+#include "modules/tray/tray_context_menu.h"
 #include "modules/workspaces/workspaces.h"
 #include "wayland/context.h"
 
@@ -21,6 +23,10 @@ static void pointer_enter(void *data, struct wl_pointer *pointer, uint32_t seria
                            struct wl_surface *surface, wl_fixed_t sx, wl_fixed_t sy) {
     (void)pointer; (void)serial;
     AppContext *app = data;
+    app->pointer_over_surface = surface;
+    // NULL for a popup/click-catcher surface -- those are never stored on any
+    // Output (see context.h) -- which is fine, since only the bar-surface click
+    // path below actually needs it.
     app->pointer_over = output_for_surface(app, surface);
     app->pointer_x = wl_fixed_to_double(sx);
     app->pointer_y = wl_fixed_to_double(sy);
@@ -32,7 +38,8 @@ static void pointer_leave(void *data, struct wl_pointer *pointer, uint32_t seria
                            struct wl_surface *surface) {
     (void)pointer; (void)serial;
     AppContext *app = data;
-    if (app->pointer_over && app->pointer_over->wl_surface == surface) {
+    if (app->pointer_over_surface == surface) {
+        app->pointer_over_surface = NULL;
         app->pointer_over = NULL;
     }
 }
@@ -43,17 +50,42 @@ static void pointer_motion(void *data, struct wl_pointer *pointer, uint32_t time
     AppContext *app = data;
     app->pointer_x = wl_fixed_to_double(sx);
     app->pointer_y = wl_fixed_to_double(sy);
+
+    if (tray_context_menu_is_menu_surface(app->pointer_over_surface)) {
+        tray_context_menu_handle_motion(app->pointer_x, app->pointer_y);
+    }
 }
 
 static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t serial,
                             uint32_t time, uint32_t button, uint32_t state) {
     (void)pointer; (void)serial; (void)time;
     AppContext *app = data;
-    if (button != BTN_LEFT || state != WL_POINTER_BUTTON_STATE_PRESSED) {
+    if (state != WL_POINTER_BUTTON_STATE_PRESSED || (button != BTN_LEFT && button != BTN_RIGHT)) {
         return;
     }
+
+    // Popup-surface clicks (menu entries + click-catcher) aren't Output-keyed at
+    // all -- checked first, before falling through to the bar-surface path
+    // below, since a popup/catcher surface never matches any Output.
+    if (tray_context_menu_is_menu_surface(app->pointer_over_surface)) {
+        tray_context_menu_handle_click(app->pointer_x, app->pointer_y);
+        return;
+    }
+    if (tray_context_menu_is_catcher_surface(app->pointer_over_surface)) {
+        tray_context_menu_close();
+        return;
+    }
+
+    // Bar-surface clicks (tray icons + workspace pills): two explicit call
+    // sites rather than a generic dispatch table -- with the tray as the
+    // second clickable module, N=2 doesn't yet justify that indirection.
+    // Revisit if/when a third bar-surface-clickable module lands (volume/
+    // network are on the roadmap).
     if (app->pointer_over) {
-        workspaces_handle_click(app->pointer_over, app->pointer_x, app->pointer_y);
+        if (button == BTN_LEFT) {
+            workspaces_handle_click(app->pointer_over, app->pointer_x, app->pointer_y);
+        }
+        tray_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
     }
 }
 

@@ -26,4 +26,10 @@ void module_box_measure_text(const char *text, int font_size_px, bool bold,
 void module_box_draw_text_centered(cairo_t *cr, double x, double y, double w, double h,
                                     const char *text, int font_size_px, bool bold, Color color);
 
+// Draws `text` left-aligned starting at `x`, vertically centered within a row
+// spanning y..y+h. First needed by the tray context menu (DBusMenu entries are
+// left-aligned, not centered, unlike every module box used so far).
+void module_box_draw_text_left(cairo_t *cr, double x, double y, double h,
+                                const char *text, int font_size_px, bool bold, Color color);
+
 #endif

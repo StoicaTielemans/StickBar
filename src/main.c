@@ -8,6 +8,9 @@
 #include <unistd.h>
 
 #include "bar/bar_surface.h"
+#include "dbus/dbus_loop.h"
+#include "dbus/sni_registry.h"
+#include "dbus/sni_watcher.h"
 #include "hyprland/ipc_events.h"
 #include "modules/clock/clock.h"
 #include "modules/workspaces/workspaces.h"
@@ -114,6 +117,29 @@ int main(void) {
                          "pills won't update until it's restarted\n");
     }
 
+    // System tray: an optional module, same "degrade gracefully" convention as
+    // the Hyprland event socket above -- a missing/broken D-Bus session bus or
+    // StatusNotifierWatcher just means the tray stays empty, not a fatal error.
+    sd_bus *bus = dbus_loop_connect();
+    int dbus_fd = -1, dbus_timeout_fd = -1;
+    if (bus) {
+        dbus_fd = dbus_loop_fd(bus);
+        dbus_timeout_fd = dbus_loop_create_timeout_fd();
+        if (dbus_timeout_fd < 0 || !event_loop_add_fd(epoll_fd, dbus_fd, EPOLLIN) ||
+            !event_loop_add_fd(epoll_fd, dbus_timeout_fd, EPOLLIN)) {
+            dbus_loop_disconnect(bus);
+            bus = NULL;
+            dbus_fd = dbus_timeout_fd = -1;
+        } else {
+            sni_registry_init(&app);
+            sni_watcher_register_host(bus);
+            // Flushes the registration/subscription requests just made above and
+            // re-derives dbus_fd's real interest mask/timeout, same as every
+            // other dbus_loop_pump() call later in the main loop.
+            dbus_loop_pump(bus, epoll_fd, dbus_fd, dbus_timeout_fd);
+        }
+    }
+
     struct epoll_event events[8];
 
     while (!g_should_exit) {
@@ -152,6 +178,12 @@ int main(void) {
                 if (!hyprland_events_pump(hypr_events, &app)) {
                     hypr_broke = true;
                 }
+            } else if (bus && (fd == dbus_fd || fd == dbus_timeout_fd)) {
+                if (fd == dbus_timeout_fd) {
+                    uint64_t expirations;
+                    (void)!read(dbus_timeout_fd, &expirations, sizeof(expirations));
+                }
+                dbus_loop_pump(bus, epoll_fd, dbus_fd, dbus_timeout_fd);
             }
         }
 
@@ -173,6 +205,12 @@ int main(void) {
 
     if (hypr_events) {
         hyprland_events_destroy(hypr_events);
+    }
+    if (bus) {
+        dbus_loop_disconnect(bus);
+    }
+    if (dbus_timeout_fd >= 0) {
+        close(dbus_timeout_fd);
     }
     close(timer_fd);
     close(epoll_fd);

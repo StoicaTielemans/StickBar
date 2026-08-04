@@ -2,6 +2,7 @@
 
 #include "config/config.h"
 #include "modules/clock/clock.h"
+#include "modules/tray/tray.h"
 #include "modules/workspaces/workspaces.h"
 
 void render_output(cairo_t *cr, Output *output, int width, int height) {
@@ -16,8 +17,12 @@ void render_output(cairo_t *cr, Output *output, int width, int height) {
     // spacing only applies *between* items, not before the first one).
     workspaces_render(cr, output, 0.0, 0.0, (double)height);
 
-    // Right region: the clock, flush against the right edge. Center region is
-    // intentionally left empty -- scaffolding for a future module (media player in
-    // the reference bar).
-    clock_render(cr, (double)width, 0.0, (double)height);
+    // Right region: the reference Bar.qml's actual rightLayout order is Mic,
+    // Volume, Network, Clock, Tray -- Tray is rightmost. With none of those
+    // three modules built yet, Tray is the new true-rightmost element and Clock
+    // sits immediately to its left, preserving that relative order. Center
+    // region is intentionally left empty -- scaffolding for a future module
+    // (media player in the reference bar).
+    double tray_left_x = tray_render(cr, output, (double)width, 0.0, (double)height);
+    clock_render(cr, tray_left_x, 0.0, (double)height);
 }

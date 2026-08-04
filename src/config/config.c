@@ -44,4 +44,5 @@ const FontConfig FONT = {
     .family = "JetBrainsMono Nerd Font",
     .label = 12,
     .sm = 9,
+    .heading = 14,
 };

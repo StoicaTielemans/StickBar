@@ -7,6 +7,8 @@
 #include <sys/timerfd.h>
 #include <unistd.h>
 
+#include "audio/device_popup.h"
+#include "audio/pulse_client.h"
 #include "bar/bar_surface.h"
 #include "dbus/dbus_loop.h"
 #include "dbus/sni_registry.h"
@@ -147,6 +149,21 @@ int main(void) {
         }
     }
 
+    // Volume/mic: an optional module, same "degrade gracefully" convention as
+    // the tray's D-Bus connection above -- a missing/broken PulseAudio-compatible
+    // server just means the volume/mic boxes render "--" and stay
+    // non-interactive for this run, not a fatal error.
+    bool pulse_ok = pulse_client_init();
+    int pulse_fd = -1;
+    if (pulse_ok) {
+        pulse_fd = pulse_client_notify_fd();
+        if (!event_loop_add_fd(epoll_fd, pulse_fd, EPOLLIN)) {
+            pulse_client_shutdown();
+            pulse_ok = false;
+            pulse_fd = -1;
+        }
+    }
+
     struct epoll_event events[8];
 
     while (!g_should_exit) {
@@ -191,6 +208,13 @@ int main(void) {
                     (void)!read(dbus_timeout_fd, &expirations, sizeof(expirations));
                 }
                 dbus_loop_pump(bus, epoll_fd, dbus_fd, dbus_timeout_fd);
+            } else if (pulse_ok && fd == pulse_fd) {
+                // The cache itself is already updated by the time this fires
+                // (pulse_client's background thread writes to it before
+                // signaling) -- pump() just drains the eventfd counter.
+                pulse_client_pump();
+                device_popup_refresh_if_open();
+                output_mark_all_dirty(&app);
             }
         }
 
@@ -215,6 +239,9 @@ int main(void) {
     }
     if (bus) {
         dbus_loop_disconnect(bus);
+    }
+    if (pulse_ok) {
+        pulse_client_shutdown();
     }
     if (dbus_timeout_fd >= 0) {
         close(dbus_timeout_fd);

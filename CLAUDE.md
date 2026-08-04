@@ -13,7 +13,7 @@ project is echoing in C — consult that repo's own `CLAUDE.md` and source when 
 module, rather than guessing at parity).
 
 This is being built in **stages, not all at once**. The current state has: bar shell,
-workspace indicator, clock, and system tray. Volume, mic, network, media player, system
+workspace indicator, clock, system tray, and volume/mic. Network, media player, system
 monitor, and the power-menu overlay are all still unimplemented — see "Scope / roadmap"
 below before assuming a module exists.
 
@@ -45,6 +45,14 @@ protocol errors or Hyprland IPC failures.
 - `hyprctl monitors -j` / `hyprctl -j workspaces` / `hyprctl -j activeworkspace` are
   useful for cross-referencing what the bar *should* be showing against what it
   actually renders.
+- `pactl get-sink-volume @DEFAULT_SINK@` / `get-source-volume @DEFAULT_SOURCE@` /
+  `get-{sink,source}-mute` / `list sinks short` / `list sources short` are the
+  equivalent cross-reference for the volume/mic modules — and
+  `pactl set-sink-mute @DEFAULT_SINK@ 1` / `set-sink-volume @DEFAULT_SINK@ 30%`
+  etc. are a convenient way to trigger a live external change and confirm the
+  bar picks it up via its PipeWire subscription without needing to click
+  anything (this is how the subscribe → cache → redraw path was verified
+  during development).
 
 ## Architecture
 
@@ -118,12 +126,28 @@ customBar/
     │   │                         also no D-Bus types, pure filesystem + cairo
     │   └── dbusmenu.c            com.canonical.dbusmenu client: GetLayout parsing,
     │                             Event("clicked",...) triggering
+    ├── audio/                    PulseAudio-protocol plumbing for volume/mic (see
+    │                             "PulseAudio / volume & mic" below for the full
+    │                             writeup) -- structurally the audio-domain twin of
+    │                             dbus/ for the tray
+    │   ├── pulse_client.c        pa_threaded_mainloop connection, live sink/source
+    │   │                         cache (fixed-array, like sni_registry.c), volume/
+    │   │                         mute/default-device get+set, eventfd notification
+    │   └── device_popup.c        shared sink/source dropdown popup (used by both
+    │                             modules/volume and modules/mic) -- structurally
+    │                             the audio-domain twin of tray_context_menu.c
     └── modules/
         ├── workspaces/
         │   └── workspaces.c      occupied/focused set computation, kanji pills,
         │                         hit-rect recording + click handling
         ├── clock/
         │   └── clock.c           timerfd-driven formatted time string + rendering
+        ├── volume/
+        │   └── volume.c          default-sink module box render + hit-rect +
+        │                         click(mute)/scroll(±5%) handling
+        ├── mic/
+        │   └── mic.c             default-source module box render + hit-rect +
+        │                         click(mute)/scroll(±5%) handling
         └── tray/
             ├── tray.c            icon row render + hit-rect recording + click
             │                     routing (Activate vs open-menu)
@@ -154,20 +178,23 @@ customBar/
   `bar/*`, `render/*`, or `modules/*` (with one exception — see below);
   `bar/bar_surface.c` depends on `render/render.h`; `render/render.c` depends on
   `modules/*`. `wayland/pointer.c` is the one place this is bent: it calls
-  directly into `modules/workspaces/workspaces.h` *and* `modules/tray/tray.h` /
-  `modules/tray/tray_context_menu.h` for click routing — two explicit call sites,
-  not a generic dispatch table (see "D-Bus / system tray" below for why that
-  still isn't worth building at N=2 clickable bar-surface modules). Revisit if a
-  third one lands.
+  directly into `modules/workspaces/workspaces.h`, `modules/tray/tray.h` /
+  `modules/tray/tray_context_menu.h`, `modules/volume/volume.h`,
+  `modules/mic/mic.h`, and `audio/device_popup.h` for click/scroll routing —
+  a flat list of explicit call sites, not a generic dispatch table (see
+  "D-Bus / system tray" below for why that still isn't worth building; now at
+  N=4 clickable bar-surface modules plus 2 popup kinds, still cheap enough as
+  a flat list that the indirection wouldn't pay for itself).
 - **`AppContext.pointer_over` vs `pointer_over_surface`**: `pointer_over_surface`
   is the raw `wl_surface*` currently under the pointer, always kept up to date.
   `pointer_over` is the `Output*` it resolves to *if* it's one of the bar's own
-  surfaces — `NULL` for a tray popup/click-catcher surface, since those are never
-  stored on any `Output` (only `bar_surface.c`-owned surfaces are). `pointer.c`'s
-  button handler checks the tray context menu's surfaces first (via
-  `tray_context_menu_is_menu_surface()` / `_is_catcher_surface()`), *then* falls
-  back to the `Output`-keyed path — a popup/catcher surface never matches an
-  `Output`, so this ordering is required, not just tidier.
+  surfaces — `NULL` for a tray/device popup or click-catcher surface, since
+  those are never stored on any `Output` (only `bar_surface.c`-owned surfaces
+  are). `pointer.c`'s button handler checks the tray context menu's surfaces
+  first (via `tray_context_menu_is_menu_surface()` / `_is_catcher_surface()`),
+  then the device popup's own equivalent pair, *then* falls back to the
+  `Output`-keyed path — a popup/catcher surface never matches an `Output`, so
+  this ordering is required, not just tidier.
 
 ### Wayland plumbing gotchas (hit and fixed during initial implementation)
 
@@ -439,6 +466,152 @@ clear that way.
   reliably receives its own clicks first, without depending on same-layer
   creation-order stacking assumptions.
 
+## PulseAudio / volume & mic
+
+The volume (default sink) and mic (default source) modules talk to
+`pipewire-pulse` — PipeWire's PulseAudio-protocol-compatible server, which is
+what's actually running on this machine (`pactl info` reports `Server Name:
+PulseAudio (on PipeWire 1.6.8)`) — via **libpulse**, not raw `libpipewire`.
+
+- **Why libpulse instead of the native PipeWire client API**: `libpipewire`'s
+  own client API is asynchronous node/param-negotiation machinery designed for
+  real audio graph participants (media players, effects); getting a "list of
+  sinks with a description and volume" out of it is substantially more
+  ceremony than the same query via libpulse's introspection API
+  (`pa_context_get_sink_info_list()` and friends), and `pipewire-pulse` makes
+  that simpler API available for free on any system already running PipeWire
+  (which is effectively every current desktop, this one included). This is
+  also the same approach other minimal C status bars (e.g. waybar's
+  `pulseaudio` module) take for the identical reason — not a novel choice.
+- **`audio/pulse_client.c` runs libpulse's own `pa_threaded_mainloop`**, a
+  background thread libpulse provides specifically for embedding into an app
+  that doesn't want to hand control of its main thread to `pa_mainloop`'s
+  blocking `iterate()` loop — a deliberate deviation from every other
+  integration in this project (Wayland, Hyprland, D-Bus, the clock timer),
+  which all instead implement a "give me your fds, I'll drive you from my own
+  external epoll loop" adapter with no extra thread. That pattern *is*
+  possible for libpulse too (`pa_mainloop_api` is an abstract vtable a caller
+  can implement itself, exactly like this project already does implicitly for
+  Wayland's `prepare_read`/`read_events` dance and explicitly for sd-bus's
+  fd+timerfd integration in `dbus/dbus_loop.c`) — but hand-rolling one
+  correctly means implementing arbitrary-count I/O watches, arbitrary-count
+  timers, and "deferred" (run-every-iteration-until-disabled) callbacks from
+  scratch, with subtle failure modes if any of the three is wrong. Given
+  `pa_threaded_mainloop` is libpulse's own tested, correct implementation of
+  exactly that adapter, reusing it was judged the better trade for this
+  module specifically, at the cost of being the one part of this codebase
+  that isn't single-threaded. All cross-thread interaction is confined to
+  `audio/pulse_client.c` — every other file, including `audio/device_popup.c`
+  and the volume/mic modules, only ever calls its plain synchronous-looking
+  accessor functions, with no thread-safety concerns of their own.
+- **Locking**: `pa_threaded_mainloop_lock()`/`_unlock()` (the mainloop's own
+  mutex) is reused as a general-purpose lock for the whole local sink/source
+  cache too, not just for calls into libpulse — every accessor in
+  `pulse_client.c` (even a plain read like `pulse_node_muted()`) takes this
+  lock. This is safe and sufficient because PA callbacks (which mutate the
+  cache) are documented to always run on the mainloop thread *with this same
+  lock already held*, so there's exactly one lock protecting exactly one
+  piece of shared state, not two subsystems needing separate synchronization.
+- **Startup blocks until the connection is definitively ready or definitively
+  failed** (`pulse_client_init()`'s `pa_threaded_mainloop_wait()` loop) —
+  libpulse's own documented pattern for synchronizing an owning thread against
+  a `pa_threaded_mainloop`, and the same tradeoff `wayland_connect()` already
+  makes with its two blocking `wl_display_roundtrip()` calls: better to know
+  immediately (and log) that volume/mic controls are unavailable than to
+  discover it several seconds later when no redraw ever arrives.
+- **Change notification is a single eventfd** (`pulse_client_notify_fd()`),
+  written from inside a PA callback (safe without the mainloop lock — it
+  doesn't touch any of libpulse's own data structures) any time the cache
+  changes, and drained by `pulse_client_pump()` on the *main* epoll loop —
+  same "external notification fd + drain-then-act" shape as
+  `dbus/dbus_loop.c`'s timeout-timerfd, just simpler (one fd, not a
+  timerfd needing rearming).
+- **The cache mirrors sinks/sources by stable `name`, not by PA `index`**,
+  for matching against `pa_server_info.default_sink_name`/
+  `default_source_name` — PA's numeric `index` isn't guaranteed stable across
+  a device's full lifetime the way its string `name` is (this is also exactly
+  why `sni_watcher.c`'s SNI item tracking keys off `(bus_name, path)` strings
+  rather than any numeric id). `PA_SUBSCRIPTION_EVENT_SERVER` (fired when the
+  *default* device changes, not when a device's own properties change) is
+  what triggers a `pa_context_get_server_info()` re-fetch of those two names.
+- **Volume percent conversion**: `pa_cvolume_avg(&volume) * 100 / PA_VOLUME_NORM`
+  (`PA_VOLUME_NORM` = 65536 = 100%), and the reverse for setting — a uniform
+  per-channel volume is written back via `pa_cvolume_set(&cv, channels, vol)`
+  using the channel count cached from that device's own last-seen
+  `pa_cvolume`, not hardcoded to 2 (stereo), though 2 is used as a fallback if
+  a device's channel count was never seen yet. `PULSE_MAX_VOLUME_PERCENT` is
+  200 (not 100) and `PULSE_VOLUME_STEP_PERCENT` is 5, both matching the
+  reference `AudioMonitor.qml`'s own `maxVolume: 2.0` / `step: 0.05` exactly.
+- **`audio/device_popup.c` is one shared singleton for both the sink and
+  source dropdowns** (`is_sink` selects which), structurally mirroring
+  `modules/tray/tray_context_menu.c`'s popup/click-catcher/outside-click-
+  dismiss pattern almost exactly (same per-output full-screen transparent
+  `LAYER_TOP` catchers, same `LAYER_OVERLAY` menu-above-catchers ordering, same
+  "at most one open at a time" rule) — but with one real difference: unlike
+  the tray's DBusMenu entries (a one-shot async D-Bus fetch, so
+  `tray_context_menu.c` snapshots them into its own array at open time),
+  `pulse_client.c`'s sink/source lists are already a live, always-current
+  local cache with no fetch latency, so `device_popup.c`'s `compute_layout()`
+  just re-reads that cache directly and can be safely re-run on *every* live
+  update while the popup is open (`device_popup_refresh_if_open()`, called
+  from `main.c` after every `pulse_client_pump()`) — not only once at open
+  like the tray menu's entry list.
+  - **Each popup kind's per-row status icon deliberately differs**, matching
+    the reference's own two *different* `muteIcon(node)` functions rather than
+    reusing one: `AudioDevicesPopup.qml`'s is the same 4-level
+    muted/low/mid/high icon as `VolumeWidget.qml`'s own; `MicDevicesPopup.qml`'s
+    is the simple 2-state mic icon. `device_popup.c`'s
+    `row_status_icon_glyph(is_sink, node)` branches on `is_sink` for exactly
+    this reason — not an oversight if the two ever look asymmetric in a diff.
+  - **Description truncation is byte-based, not UTF-8-codepoint-aware**
+    (`truncate_to_width()`) — deliberately, not an oversight: every real
+    device description seen from this project's own actual hardware during
+    development (e.g. `"Burr-Brown from TI USB Audio CODEC Analog Stereo"`,
+    `"Yeti X Analog Stereo"`) is plain ASCII, matching how PulseAudio/PipeWire
+    device descriptions are conventionally generated from ALSA card/device
+    names in practice.
+  - **Positioned right-anchored under its trigger's right edge** (same
+    anchor+margin math, including the `BAR.height` correction, as
+    `tray_context_menu.c` — see that section above) — a deliberate,
+    documented deviation from the reference's own left-aligned-under-widget
+    `PopupWindow` positioning, chosen because both the volume/mic modules and
+    the tray already live in the bar's right region, so reusing this
+    already-correct math was preferred over introducing a second, untested
+    anchor scheme for one pair of widgets.
+- **Left-click mutes, right-click opens the dropdown, scroll adjusts volume**
+  — a deliberate, documented deviation from the reference `VolumeWidget.qml`/
+  `MicWidget.qml`, which use hover (with a debounce timer) to show the
+  dropdown and reserve click exclusively for mute. This project has no
+  per-widget hover/timer infrastructure yet (`wayland/pointer.c` only tracks
+  which single surface the pointer is currently over, not hover-duration or
+  per-module enter/leave callbacks), and building one purely for this pair of
+  widgets was judged not worth it when right-click was already free (nothing
+  else in this bar uses it) and is itself a conventional way to expose a
+  secondary action alongside a primary click, mirroring how the tray already
+  distinguishes `Activate()` from opening its own context menu.
+- **Scroll direction convention** (`wayland/pointer.c`'s
+  `pointer_axis_discrete()`): scrolling up decreases the wheel's `discrete`
+  value below zero and increases volume; scrolling down does the reverse —
+  reasoned from `wayland.xml`'s doc comment (axis `value`/`discrete` share "a
+  coordinate space identical to those of motion events," i.e. positive = the
+  same direction as scrolling a page down) plus the conventional Linux
+  volume-scroll mapping, **not independently verified against this machine's
+  actual mouse** — no working synthetic-input setup was available in the
+  environment this was developed in (no `ydotoold` running, no group
+  permission on `/dev/uinput`) to test scroll direction the way clicks and the
+  tray's margin fix were tested. Trivial one-line flip (swap the ternary in
+  `pointer_axis_discrete()`) if it turns out backwards in practice.
+- **`wl_pointer`'s `axis_discrete` event (not the newer, higher-resolution
+  `axis_value120`) drives scroll-to-adjust** — `axis_value120` was added in
+  wl_pointer version 8, but `wayland/registry.c`'s `SEAT_VERSION` is 7 (the
+  pointer object is only ever created at the bound seat's version), so
+  `axis_value120` is simply never sent to this process regardless of the
+  compositor's own capabilities. `axis_discrete` (added in v5) is what's
+  actually available, and its magnitude is deliberately ignored (treated as
+  ±1 regardless of the reported value) — one call is meant to represent
+  exactly one physical wheel notch, matching the "steps of 5%" behavior that
+  was asked for.
+
 ## Conventions
 
 - **This project is commented far more heavily than this assistant's usual
@@ -508,26 +681,52 @@ clear that way.
 - **Tray: no submenu/nested-menu support** — `GetLayout`'s recursion depth is
   capped at 1, matching the reference's own flat rendering.
 - **Tray: no tooltip support** — the SNI `ToolTip` property is never fetched.
-- **Tray: no scroll-wheel `Scroll()` support** — `wl_pointer` axis events are
-  already no-op stubs project-wide, not new to the tray.
+- **Tray: no scroll-wheel `Scroll()` support** — `wl_pointer`'s `axis_discrete`
+  event is wired up project-wide now (see "PulseAudio / volume & mic" above),
+  but only the volume/mic modules act on it; the tray's own `Scroll()` SNI
+  method is simply never called.
 - **Tray: no context-menu reflow** if it would overflow past the output's left
   edge (clamped, not repositioned) — also true of the reference.
 - **Tray: no keyboard dismiss (Escape)** for the context menu — click-outside
   only, consistent with no keyboard handling existing anywhere in the project.
 - **Tray: at most one context menu open at a time** — a deliberate v1
   simplification (`tray_context_menu.c`'s state is a single static singleton).
+- **Volume/mic: the tray's context menu and the audio device popup are
+  independent singletons that don't close each other** — opening one while
+  the other is already open (e.g. right-click a tray icon, then without
+  dismissing it, right-click the volume box) leaves both open simultaneously,
+  an undefended, rare v1 edge case (see "PulseAudio / volume & mic" above for
+  why they weren't made to coordinate).
+- **Volume/mic: scroll direction wasn't independently verified** against a
+  real mouse (no working synthetic-input setup in the development
+  environment) — reasoned from the Wayland protocol spec text and
+  conventional Linux scroll-to-adjust mapping only; see "PulseAudio / volume &
+  mic" above for exactly what to flip if it's backwards in practice.
+- **Volume/mic: no visual "no PulseAudio-compatible server" state** — if
+  `pulse_client_init()` fails, the volume/mic boxes still render (0%, not
+  muted, since every accessor returns a safe default when `g_mainloop` is
+  NULL) rather than being hidden or showing an explicit error, unlike the
+  tray's `count == 0` → zero-width behavior. Low-risk in practice (this
+  failure mode requires a broken/absent PipeWire or PulseAudio installation
+  entirely) but worth knowing if it's ever actually hit.
+- **Volume/mic: device popup row count is capped at 32** and the popup's size
+  is fixed at open time — a live device appearing/disappearing while the
+  popup is open updates existing rows' content (icons, percent, default
+  marker) live, but won't resize the popup to add/remove a row for it.
 
 ## Scope / roadmap
 
 Implemented: bar shell (per-output layer-surface, double-buffered shm rendering),
 workspace indicator (kanji pills, occupied/focused logic, click-to-focus), clock,
-system tray (SNI item tracking, icon rendering, DBusMenu context menu, click routing).
+system tray (SNI item tracking, icon rendering, DBusMenu context menu, click routing),
+volume/mic (default sink/source display, click-to-mute, scroll-to-adjust, device
+dropdown for picking the default sink/source — see "PulseAudio / volume & mic").
 
-Not yet implemented (planned for later passes, in no particular order): volume, mic,
-network, media player (MPRIS), CPU/GPU/memory monitor, power-menu overlay. When
-adding one, follow the existing module shape: a `modules/<name>/` directory, a
-render function taking `(cairo_t*, ..., x, box_top, box_height)` and returning the
-next x coordinate, and — if it needs live data — either a Hyprland IPC event hook
-(if relevant) or its own poll/event source integrated into `main.c`'s epoll loop
-the same way the clock's timerfd, Hyprland's event socket, and the tray's D-Bus
-connection are.
+Not yet implemented (planned for later passes, in no particular order): network,
+media player (MPRIS), CPU/GPU/memory monitor, power-menu overlay. When adding one,
+follow the existing module shape: a `modules/<name>/` directory, a render function
+taking `(cairo_t*, ..., x, box_top, box_height)` and returning the next x
+coordinate, and — if it needs live data — either a Hyprland IPC event hook (if
+relevant) or its own poll/event source integrated into `main.c`'s epoll loop the
+same way the clock's timerfd, Hyprland's event socket, the tray's D-Bus connection,
+and the volume/mic modules' PulseAudio connection are.

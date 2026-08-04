@@ -2,7 +2,9 @@
 
 #include "config/config.h"
 #include "modules/clock/clock.h"
+#include "modules/mic/mic.h"
 #include "modules/tray/tray.h"
+#include "modules/volume/volume.h"
 #include "modules/workspaces/workspaces.h"
 
 void render_output(cairo_t *cr, Output *output, int width, int height) {
@@ -18,11 +20,13 @@ void render_output(cairo_t *cr, Output *output, int width, int height) {
     workspaces_render(cr, output, 0.0, 0.0, (double)height);
 
     // Right region: the reference Bar.qml's actual rightLayout order is Mic,
-    // Volume, Network, Clock, Tray -- Tray is rightmost. With none of those
-    // three modules built yet, Tray is the new true-rightmost element and Clock
-    // sits immediately to its left, preserving that relative order. Center
-    // region is intentionally left empty -- scaffolding for a future module
-    // (media player in the reference bar).
+    // Volume, Network, Clock, Tray -- Tray is rightmost, drawn first here since
+    // this loop works right-to-left. Network isn't built yet, so Volume sits
+    // directly left of Clock for now. Center region is intentionally left
+    // empty -- scaffolding for a future module (media player in the reference
+    // bar).
     double tray_left_x = tray_render(cr, output, (double)width, 0.0, (double)height);
-    clock_render(cr, tray_left_x, 0.0, (double)height);
+    double clock_left_x = clock_render(cr, tray_left_x, 0.0, (double)height);
+    double volume_left_x = volume_render(cr, output, clock_left_x, 0.0, (double)height);
+    mic_render(cr, output, volume_left_x, 0.0, (double)height);
 }

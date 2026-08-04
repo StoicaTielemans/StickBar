@@ -36,8 +36,10 @@ extern const BarGeometry BAR;
 
 typedef struct {
     const char *family;
-    int label;  // px, default bar module text size
-    int sm;     // px, workspace numeral text size
+    int label;   // px, default bar module text size
+    int sm;      // px, workspace numeral text size
+    int heading; // px, the audio device popup's default/mute marker icon column,
+                 // matching the reference config.js's font.sizes.heading
 } FontConfig;
 
 extern const FontConfig FONT;

@@ -2,8 +2,11 @@
 
 #include <linux/input-event-codes.h> // BTN_LEFT, BTN_RIGHT
 
+#include "audio/device_popup.h"
+#include "modules/mic/mic.h"
 #include "modules/tray/tray.h"
 #include "modules/tray/tray_context_menu.h"
+#include "modules/volume/volume.h"
 #include "modules/workspaces/workspaces.h"
 #include "wayland/context.h"
 
@@ -53,6 +56,8 @@ static void pointer_motion(void *data, struct wl_pointer *pointer, uint32_t time
 
     if (tray_context_menu_is_menu_surface(app->pointer_over_surface)) {
         tray_context_menu_handle_motion(app->pointer_x, app->pointer_y);
+    } else if (device_popup_is_menu_surface(app->pointer_over_surface)) {
+        device_popup_handle_motion(app->pointer_x, app->pointer_y);
     }
 }
 
@@ -64,9 +69,13 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
         return;
     }
 
-    // Popup-surface clicks (menu entries + click-catcher) aren't Output-keyed at
+    // Popup-surface clicks (menu entries + click-catcher, for both the tray's
+    // context menu and the volume/mic device dropdown) aren't Output-keyed at
     // all -- checked first, before falling through to the bar-surface path
-    // below, since a popup/catcher surface never matches any Output.
+    // below, since a popup/catcher surface never matches any Output. The two
+    // popup kinds are independent singletons (see audio/device_popup.h) --
+    // having both open at once isn't defended against here, just checked for
+    // in whichever order happens to be written below.
     if (tray_context_menu_is_menu_surface(app->pointer_over_surface)) {
         tray_context_menu_handle_click(app->pointer_x, app->pointer_y);
         return;
@@ -75,23 +84,40 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
         tray_context_menu_close();
         return;
     }
+    if (device_popup_is_menu_surface(app->pointer_over_surface)) {
+        device_popup_handle_click(app->pointer_x, app->pointer_y);
+        return;
+    }
+    if (device_popup_is_catcher_surface(app->pointer_over_surface)) {
+        device_popup_close();
+        return;
+    }
 
-    // Bar-surface clicks (tray icons + workspace pills): two explicit call
-    // sites rather than a generic dispatch table -- with the tray as the
-    // second clickable module, N=2 doesn't yet justify that indirection.
-    // Revisit if/when a third bar-surface-clickable module lands (volume/
-    // network are on the roadmap).
+    // Bar-surface clicks (tray icons, workspace pills, volume/mic boxes): four
+    // explicit call sites rather than a generic dispatch table, same reasoning
+    // as before -- each handler already does its own hit-testing internally, so
+    // this is a flat list of "ask everyone, whoever's rect matches wins," not an
+    // indirection layer worth building at this N. workspaces_handle_click()
+    // only ever reacts to left-click (its own internal convention, unrelated to
+    // volume/mic); tray_handle_click(), volume_handle_click(), and
+    // mic_handle_click() each branch on `button` internally instead (the tray's
+    // has-menu-overrides-button rule; volume/mic's left-mutes/right-opens-
+    // dropdown rule -- see modules/volume/volume.h), so all three are called
+    // unconditionally here regardless of which button fired.
     if (app->pointer_over) {
         if (button == BTN_LEFT) {
             workspaces_handle_click(app->pointer_over, app->pointer_x, app->pointer_y);
         }
         tray_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
+        volume_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
+        mic_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
     }
 }
 
-// Scroll/axis input isn't used by any bar module in this pass -- these are no-op
-// stubs present only because wl_pointer_listener requires every callback in the
-// struct to be non-NULL, not because we expect them to fire meaningfully.
+// Axis/scroll input is otherwise unused by any bar module -- these remain
+// no-op stubs present only because wl_pointer_listener requires every callback
+// in the struct to be non-NULL. pointer_axis_discrete() below is the one
+// exception, driving the volume/mic modules' scroll-to-adjust.
 static void pointer_axis(void *data, struct wl_pointer *p, uint32_t time, uint32_t axis, wl_fixed_t value) {
     (void)data; (void)p; (void)time; (void)axis; (void)value;
 }
@@ -104,8 +130,38 @@ static void pointer_axis_source(void *data, struct wl_pointer *p, uint32_t axis_
 static void pointer_axis_stop(void *data, struct wl_pointer *p, uint32_t time, uint32_t axis) {
     (void)data; (void)p; (void)time; (void)axis;
 }
+
+// Drives the volume/mic modules' "scroll to adjust by one step" behavior.
+// `discrete` is ±1 (occasionally more on some drivers, but magnitude is
+// deliberately ignored -- one call here is meant to represent exactly one
+// wheel notch, matching the "steps of N%" behavior volume_handle_scroll()/
+// mic_handle_scroll() implement) per full wheel click; SEAT_VERSION=7
+// (wayland/registry.c) is what makes this event (added in wl_pointer v5)
+// available at all -- the newer, higher-resolution axis_value120 (v8) isn't,
+// since the pointer object is only ever created at the bound seat's version.
+//
+// Direction convention: per wayland.xml, the axis `value`/`discrete` sign
+// shares "a coordinate space identical to those of motion events" (y
+// increasing downward) -- so a positive value corresponds to the same
+// direction as scrolling a page *down*. This maps the conventional way most
+// Linux volume-control scroll bindings do: scrolling up (`discrete < 0`)
+// increases, scrolling down (`discrete > 0`) decreases. Not independently
+// verified against this machine's actual mouse (no working synthetic-input
+// setup here to test with -- see the tray's own honestly-flagged margin-math
+// fix for the same caveat pattern); trivial to flip if it turns out backwards
+// in practice.
 static void pointer_axis_discrete(void *data, struct wl_pointer *p, uint32_t axis, int32_t discrete) {
-    (void)data; (void)p; (void)axis; (void)discrete;
+    (void)p;
+    if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL || discrete == 0) {
+        return;
+    }
+    AppContext *app = data;
+    if (!app->pointer_over) {
+        return; // scrolled over a popup/catcher surface or nothing at all
+    }
+    int direction = discrete < 0 ? 1 : -1; // see comment above
+    volume_handle_scroll(app->pointer_over, app->pointer_x, app->pointer_y, direction);
+    mic_handle_scroll(app->pointer_over, app->pointer_x, app->pointer_y, direction);
 }
 static void pointer_axis_value120(void *data, struct wl_pointer *p, uint32_t axis, int32_t value120) {
     (void)data; (void)p; (void)axis; (void)value120;

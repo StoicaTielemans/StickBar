@@ -19,6 +19,13 @@ libsystemd     = dependency('libsystemd') # pkg-config module name is "libsystem
                                            # "sd-bus" -- provides sd-bus, the D-Bus client
                                            # library the tray module uses to talk to
                                            # StatusNotifierItem/DBusMenu
+libpulse       = dependency('libpulse')   # PulseAudio client library, used by
+                                           # src/audio/pulse_client.c to talk to
+                                           # pipewire-pulse (or any real PulseAudio
+                                           # server) for the volume/mic modules --
+                                           # see CLAUDE.md's "PulseAudio / volume &
+                                           # mic" section for why libpulse rather
+                                           # than raw libpipewire
 
 wayland_scanner = find_program('wayland-scanner')
 
@@ -78,10 +85,14 @@ sources = files(
   'src/bar/popup_surface.c',
   'src/modules/tray/tray.c',
   'src/modules/tray/tray_context_menu.c',
+  'src/audio/pulse_client.c',
+  'src/audio/device_popup.c',
+  'src/modules/volume/volume.c',
+  'src/modules/mic/mic.c',
 )
 
 executable('customBar',
   sources + generated_sources + generated_headers,
-  dependencies: [wayland_client, cairo, pangocairo, cjson, libsystemd],
+  dependencies: [wayland_client, cairo, pangocairo, cjson, libsystemd, libpulse],
   include_directories: include_directories('src'),
 )

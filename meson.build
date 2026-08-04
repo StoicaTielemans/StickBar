@@ -1,0 +1,73 @@
+project('customBar', 'c',
+  version: '0.1.0',
+  default_options: [
+    'c_std=gnu11',      # accept GNU C extensions used in a couple of places; note this
+                         # does NOT expose glibc-only APIs like memfd_create() on its
+                         # own -- files needing those still #define _GNU_SOURCE themselves
+    'warning_level=2',
+  ],
+)
+
+wayland_client = dependency('wayland-client')
+# wayland-cursor is intentionally not linked yet: this pass doesn't set a pointer
+# cursor image on hover (the bar still gets pointer input/clicks correctly without
+# it, just no visible cursor change) -- add it back when that's implemented.
+cairo          = dependency('cairo')
+pangocairo     = dependency('pangocairo')
+cjson          = dependency('libcjson')   # pkg-config module name is "libcjson", not "cjson"
+
+wayland_scanner = find_program('wayland-scanner')
+
+# wayland-scanner turns a protocol XML into a C header (the wl_interface/struct
+# declarations client code includes) and a matching .c file (the wl_interface
+# definitions those declarations point at) — both are needed to link.
+wl_scanner_client_header = generator(wayland_scanner,
+  output: '@BASENAME@-client-protocol.h',
+  arguments: ['client-header', '@INPUT@', '@OUTPUT@'],
+)
+wl_scanner_private_code = generator(wayland_scanner,
+  output: '@BASENAME@-protocol.c',
+  arguments: ['private-code', '@INPUT@', '@OUTPUT@'],
+)
+
+# The layer-shell protocol's get_popup request references xdg_popup. Compiling
+# against just a forward declaration works fine (no popups are actually used in this
+# pass), but wayland-scanner's generated *-protocol.c for layer-shell still emits a
+# reference to the `xdg_popup_interface` symbol as part of that request's wl_message
+# signature -- so linking fails without xdg-shell.xml's own generated code to
+# actually define it, even though nothing here calls into xdg_popup itself. Pulled
+# from the system wayland-protocols package rather than vendored, since (unlike
+# wlr-layer-shell) it's a stable upstream protocol that's reliably installed
+# alongside wayland-protocols.
+wayland_protocols_dep = dependency('wayland-protocols')
+xdg_shell_xml = wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir') / 'stable/xdg-shell/xdg-shell.xml'
+
+protocol_xmls = files('protocols/wlr-layer-shell-unstable-v1.xml') + files(xdg_shell_xml)
+
+generated_headers = wl_scanner_client_header.process(protocol_xmls)
+generated_sources = wl_scanner_private_code.process(protocol_xmls)
+
+sources = files(
+  'src/main.c',
+  'src/config/config.c',
+  'src/config/glyphs.c',
+  'src/wayland/registry.c',
+  'src/wayland/event_loop.c',
+  'src/wayland/output.c',
+  'src/wayland/pointer.c',
+  'src/wayland/shm_buffer.c',
+  'src/bar/bar_surface.c',
+  'src/render/render.c',
+  'src/render/module_box.c',
+  'src/hyprland/ipc_request.c',
+  'src/hyprland/ipc_events.c',
+  'src/hyprland/dispatch.c',
+  'src/modules/workspaces/workspaces.c',
+  'src/modules/clock/clock.c',
+)
+
+executable('customBar',
+  sources + generated_sources + generated_headers,
+  dependencies: [wayland_client, cairo, pangocairo, cjson],
+  include_directories: include_directories('src'),
+)

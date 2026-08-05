@@ -184,7 +184,11 @@ customBar/
         │   └── mem.c             memory % module box render + hit-rect +
         │                         right-click-opens-dropdown handling
         ├── clock/
-        │   └── clock.c           timerfd-driven formatted time string + rendering
+        │   ├── clock.c           timerfd-driven formatted time string + rendering +
+        │   │                     hit-rect + right-click-opens-calendar handling
+        │   └── clock_calendar_popup.c  read-only 12-month year-calendar dropdown
+        │                         (today highlighted), structurally the clock's own
+        │                         single-widget twin of tray_context_menu.c
         ├── volume/
         │   └── volume.c          default-sink module box render + hit-rect +
         │                         click(mute)/scroll(±5%) handling
@@ -224,11 +228,12 @@ customBar/
   directly into `modules/workspaces/workspaces.h`, `modules/tray/tray.h` /
   `modules/tray/tray_context_menu.h`, `modules/volume/volume.h`,
   `modules/mic/mic.h`, `modules/cpu/cpu.h`, `modules/gpu/gpu.h`,
-  `modules/mem/mem.h`, `audio/device_popup.h`, and
+  `modules/mem/mem.h`, `modules/clock/clock.h` /
+  `modules/clock/clock_calendar_popup.h`, `audio/device_popup.h`, and
   `sysmon/sysmon_info_popup.h` for click/scroll routing — a flat list of
   explicit call sites, not a generic dispatch table (see "D-Bus / system
-  tray" below for why that still isn't worth building; now at N=7 clickable
-  bar-surface modules plus 3 popup kinds, still cheap enough as a flat list
+  tray" below for why that still isn't worth building; now at N=8 clickable
+  bar-surface modules plus 4 popup kinds, still cheap enough as a flat list
   that the indirection wouldn't pay for itself).
 - **`AppContext.pointer_over` vs `pointer_over_surface`**: `pointer_over_surface`
   is the raw `wl_surface*` currently under the pointer, always kept up to date.
@@ -749,6 +754,59 @@ dropdown, rather than one shared tooltip for all three.
   `Output.index` from inside the click handler and screenshotting the matching
   monitor's actual x-offset instead. See "Running / testing changes" above.
 
+## Clock year-calendar popup
+
+The reference bar's `ClockWidget.qml` shows a small current-week strip on
+hover and a full 12-month year-calendar grid (`ClockYearPopup.qml`) on
+left-click, toggled via `yearOpen = !yearOpen`. This project reproduces only
+the year-calendar grid, and reachable via **right**-click, not left or hover.
+
+- **Right-click, not left-click-toggle or hover, per this project's own
+  already-established convention** (see "System monitor (CPU/GPU/memory)"
+  above): there's no hover/timer infrastructure in `wayland/pointer.c` (it
+  only tracks which single surface the pointer currently sits over, no
+  hover-duration or per-module enter/leave callbacks), and building one purely
+  to reproduce the reference's week-strip hover preview wasn't judged worth it
+  for a single widget — the same tradeoff already made for volume/mic's device
+  dropdown and cpu/gpu/mem's info dropdowns. The week-strip preview itself is
+  therefore not reproduced at all, only the year grid; a right-click toggles
+  it open/closed, mirroring the reference's own `yearOpen` toggle semantics
+  exactly, just on a different button.
+- **`modules/clock/clock_calendar_popup.c` is structurally
+  `tray_context_menu.c`'s single-widget twin**: same popup/click-catcher/
+  outside-click-dismiss shape (one full-screen transparent `LAYER_TOP` catcher
+  per currently-known output, menu itself on `LAYER_OVERLAY`), same
+  right-anchored-under-the-trigger anchor+margin math (including the
+  `BAR.height` exclusive-zone correction — see "D-Bus / system tray" above)
+  since the clock lives in the bar's right region like the tray, not the left
+  like CPU/GPU/memory.
+- **The year/month/day grid is computed from scratch in C** (no equivalent of
+  `CalendarUtils.js` existed yet): `days_in_month()`/`first_weekday_mon0()`
+  both go through `mktime()`'s own date normalization (asking for "day 0 of
+  the following month" rather than a hand-rolled leap-year table, and reading
+  back `tm_wday` for the 1st of the month) rather than reimplementing calendar
+  math by hand — noon (`tm_hour = 12`) is used for both to stay clear of any
+  DST transition exactly at midnight.
+- **Every month card is padded to a uniform 6 week-rows**, unlike the
+  reference's own per-month-height `Repeater` (which lets Qt's `GridLayout`
+  leave blank space under a shorter card in the same row when neighboring
+  cards in that row need more weeks) — a deliberate simplification so all 12
+  cards line up into a perfectly uniform grid via plain arithmetic, without
+  needing to replicate Qt's row-height-negotiation behavior.
+- **The displayed year/today's date is snapshotted once at popup-open time**,
+  not live-updated while open — same "snapshot at open, don't bother
+  keeping fresh for a short-lived popup" choice already made for
+  `tray_context_menu.c`'s DBusMenu entries (unlike `device_popup.c`'s
+  sink/source rows, which *are* kept live because PulseAudio's cache updates
+  are already free — see "PulseAudio / volume & mic" above for that
+  distinction).
+- **Three new shared font-size tokens were added to `config/config.h`'s
+  `FontConfig`** (`xs`=8, `md`=11, `title`=16), ported directly from the
+  reference `config.js`'s own `font.sizes.{xs,md,title}` values — these are
+  generic enough (fine print, secondary emphasis, large titles) to be genuine
+  shared tokens rather than one-off local tuning, unlike e.g. the workspace
+  pill's own local padding constants.
+
 ## Conventions
 
 - **This project is commented far more heavily than this assistant's usual
@@ -877,11 +935,21 @@ dropdown, rather than one shared tooltip for all three.
   silently be dropped from both the aggregate calculation's *display* (though
   not from `/proc/stat`'s own aggregate `cpu` line, which is still parsed and
   used for the overall percentage) and the dropdown's per-core grid.
+- **Clock: no week-strip hover preview** — only the reference's year-calendar
+  grid is reproduced, not `ClockWeekPopup.qml`'s hover-triggered current-week
+  strip; see "Clock year-calendar popup" above for why.
+- **Clock: the calendar popup doesn't coordinate with any other popup kind**
+  — same undefended, rare v1 edge case as volume/mic's and CPU/GPU/memory's
+  own equivalent limitations above.
+- **Clock: no reflow if the popup would overflow past the output's left
+  edge** (clamped, not repositioned) — same limitation as the tray's own
+  context menu, inherited from reusing its identical anchor math.
 
 ## Scope / roadmap
 
 Implemented: bar shell (per-output layer-surface, double-buffered shm rendering),
-workspace indicator (kanji pills, occupied/focused logic, click-to-focus), clock,
+workspace indicator (kanji pills, occupied/focused logic, click-to-focus), clock
+(with a right-click year-calendar dropdown — see "Clock year-calendar popup"),
 system tray (SNI item tracking, icon rendering, DBusMenu context menu, click routing),
 volume/mic (default sink/source display, click-to-mute, scroll-to-adjust, device
 dropdown for picking the default sink/source — see "PulseAudio / volume & mic"),

@@ -3,6 +3,8 @@
 #include <linux/input-event-codes.h> // BTN_LEFT, BTN_RIGHT
 
 #include "audio/device_popup.h"
+#include "modules/clock/clock.h"
+#include "modules/clock/clock_calendar_popup.h"
 #include "modules/cpu/cpu.h"
 #include "modules/gpu/gpu.h"
 #include "modules/mem/mem.h"
@@ -107,6 +109,14 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
         sysmon_info_popup_close();
         return;
     }
+    if (clock_calendar_popup_is_menu_surface(app->pointer_over_surface)) {
+        // Read-only content, same as the sysmon info popup above.
+        return;
+    }
+    if (clock_calendar_popup_is_catcher_surface(app->pointer_over_surface)) {
+        clock_calendar_popup_close();
+        return;
+    }
 
     // Bar-surface clicks (tray icons, workspace pills, volume/mic/cpu/gpu/mem
     // boxes): explicit call sites rather than a generic dispatch table, same
@@ -127,6 +137,7 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
         tray_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         volume_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         mic_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
+        clock_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         cpu_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         gpu_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         mem_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);

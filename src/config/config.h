@@ -36,10 +36,13 @@ extern const BarGeometry BAR;
 
 typedef struct {
     const char *family;
+    int xs;      // px, fine print -- e.g. the clock's year-calendar day numbers
+    int sm;      // px, workspace numeral text size / weekday initials
+    int md;      // px, secondary emphasis -- e.g. the year-calendar's month names
     int label;   // px, default bar module text size
-    int sm;      // px, workspace numeral text size
     int heading; // px, the audio device popup's default/mute marker icon column,
                  // matching the reference config.js's font.sizes.heading
+    int title;   // px, large title text -- e.g. the year-calendar's year number
 } FontConfig;
 
 extern const FontConfig FONT;

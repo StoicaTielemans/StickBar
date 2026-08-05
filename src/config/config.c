@@ -42,7 +42,10 @@ const BarGeometry BAR = {
 
 const FontConfig FONT = {
     .family = "JetBrainsMono Nerd Font",
-    .label = 12,
+    .xs = 8,
     .sm = 9,
+    .md = 11,
+    .label = 12,
     .heading = 14,
+    .title = 16,
 };

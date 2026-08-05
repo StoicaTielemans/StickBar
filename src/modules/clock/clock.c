@@ -1,16 +1,47 @@
 #include "modules/clock/clock.h"
 
+#include <linux/input-event-codes.h> // BTN_RIGHT
 #include <stdio.h>
 #include <time.h>
 
 #include "config/config.h"
 #include "config/glyphs.h"
+#include "modules/clock/clock_calendar_popup.h"
 #include "render/module_box.h"
 
 // Cached formatted string, e.g. "󰃮 04/08/26 󰥔 14:03:07" -- refreshed once per
 // second by clock_tick() (driven from main.c's timerfd), read by clock_render() on
 // every frame without reformatting.
 static char g_time_str[64] = "";
+
+// How many different Output pointers we keep the box's hit-rect for -- sized
+// generously (this machine has 2 monitors), matching the convention already
+// used by every other per-output hit-rect table in this project (e.g.
+// modules/cpu/cpu.c).
+#define MAX_TRACKED_OUTPUTS 8
+
+typedef struct {
+    Output *output; // NULL if this slot is unused
+    double x, y, w, h;
+} OutputBoxRect;
+
+static OutputBoxRect g_rects[MAX_TRACKED_OUTPUTS];
+
+static OutputBoxRect *rect_for_output(Output *output) {
+    OutputBoxRect *free_slot = NULL;
+    for (int i = 0; i < MAX_TRACKED_OUTPUTS; i++) {
+        if (g_rects[i].output == output) {
+            return &g_rects[i];
+        }
+        if (!free_slot && g_rects[i].output == NULL) {
+            free_slot = &g_rects[i];
+        }
+    }
+    if (free_slot) {
+        free_slot->output = output;
+    }
+    return free_slot;
+}
 
 void clock_tick(void) {
     char calendar_glyph[5];
@@ -32,7 +63,7 @@ void clock_tick(void) {
               local.tm_hour, local.tm_min, local.tm_sec);
 }
 
-double clock_render(cairo_t *cr, double right_edge_x, double box_top, double box_height) {
+double clock_render(cairo_t *cr, Output *output, double right_edge_x, double box_top, double box_height) {
     if (g_time_str[0] == '\0') {
         // Guards against rendering before the first clock_tick() (main.c calls it
         // once at startup before the event loop begins, but this keeps the
@@ -53,8 +84,35 @@ double clock_render(cairo_t *cr, double right_edge_x, double box_top, double box
                                    g_time_str, FONT.label, true, COLORS.mauve);
 
     (void)text_h;
+
+    OutputBoxRect *rect = rect_for_output(output);
+    if (rect) {
+        rect->x = box_x;
+        rect->y = box_top;
+        rect->w = box_w;
+        rect->h = box_height;
+    }
+
     // Matches tray_render()'s own convention of baking BAR.item_spacing into
     // its returned x, so the next (further left) right-region module doesn't
     // render flush against this box with no gap.
     return box_x - BAR.item_spacing;
+}
+
+void clock_handle_click(Output *output, double x, double y, uint32_t button) {
+    if (button != BTN_RIGHT) {
+        return;
+    }
+    OutputBoxRect *rect = NULL;
+    for (int i = 0; i < MAX_TRACKED_OUTPUTS; i++) {
+        if (g_rects[i].output == output) {
+            rect = &g_rects[i];
+            break;
+        }
+    }
+    if (!rect || x < rect->x || x >= rect->x + rect->w || y < rect->y || y >= rect->y + rect->h) {
+        return;
+    }
+
+    clock_calendar_popup_toggle(output, rect->x, rect->y, rect->w, rect->h);
 }

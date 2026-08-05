@@ -35,7 +35,7 @@ void render_output(cairo_t *cr, Output *output, int width, int height) {
     // empty -- scaffolding for a future module (media player in the reference
     // bar).
     double tray_left_x = tray_render(cr, output, (double)width, 0.0, (double)height);
-    double clock_left_x = clock_render(cr, tray_left_x, 0.0, (double)height);
+    double clock_left_x = clock_render(cr, output, tray_left_x, 0.0, (double)height);
     double volume_left_x = volume_render(cr, output, clock_left_x, 0.0, (double)height);
     mic_render(cr, output, volume_left_x, 0.0, (double)height);
 }

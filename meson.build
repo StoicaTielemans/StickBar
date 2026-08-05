@@ -75,6 +75,7 @@ sources = files(
   'src/hyprland/dispatch.c',
   'src/modules/workspaces/workspaces.c',
   'src/modules/clock/clock.c',
+  'src/modules/clock/clock_calendar_popup.c',
   'src/dbus/dbus_loop.c',
   'src/dbus/sni_watcher.c',
   'src/dbus/sni_watcher_service.c',

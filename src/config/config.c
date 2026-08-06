@@ -43,9 +43,19 @@ const BarGeometry BAR = {
 const FontConfig FONT = {
     .family = "JetBrainsMono Nerd Font",
     .xs = 8,
-    .sm = 9,
+    .sm = 10,     // was 9 -- bumped alongside `label` below so the workspace
+                  // pills' kanji numerals scale with the rest of the bar's
+                  // now-larger module text instead of looking comparatively tiny
     .md = 11,
-    .label = 12,
+    .label = 14,  // was 12 -- the size every bar module box's text renders at
+                  // (CPU/GPU/MEM, clock, volume/mic, media, network); bumped
+                  // because the previous 12px looked cramped/"blocky" against
+                  // BAR.height's 20px. 14px is close to the practical ceiling
+                  // here: JetBrainsMono Nerd Font's line height at 14px is
+                  // ~18.5px (computed from the font's own hhea ascent/descent
+                  // via fontTools), which still fits within the 20px bar
+                  // height when vertically centered -- 16px's ~21px line
+                  // height would already clip against the bar's own edges.
     .heading = 14,
     .title = 16,
 };

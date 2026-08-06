@@ -13,9 +13,10 @@ project is echoing in C — consult that repo's own `CLAUDE.md` and source when 
 module, rather than guessing at parity).
 
 This is being built in **stages, not all at once**. The current state has: bar shell,
-workspace indicator, clock, system tray, volume/mic, CPU/GPU/memory monitoring, and
-a media (MPRIS) player widget. Network and the power-menu overlay are still
-unimplemented — see "Scope / roadmap" below before assuming a module exists.
+workspace indicator, clock, system tray, volume/mic, CPU/GPU/memory monitoring, a
+media (MPRIS) player widget, and a network/Wi-Fi status widget. The power-menu
+overlay is still unimplemented — see "Scope / roadmap" below before assuming a
+module exists.
 
 ## Running / testing changes
 
@@ -68,6 +69,22 @@ protocol errors or Hyprland IPC failures.
   external change and confirm the bar's PropertiesChanged subscription
   picks it up without needing to click anything, same idea as the volume/mic
   cross-reference above.
+- `ip route show default` / `cat /proc/net/route` / `cat /proc/net/wireless` /
+  `ip -4 addr show dev <iface>` / `cat /sys/class/net/<iface>/{operstate,
+  address,mtu,speed,duplex}` are the cross-reference for the network module
+  -- confirmed directly against this development machine's own real routing
+  table and interface (`enp8s0`, Ethernet) while writing
+  `network/network_client.c`'s parsing (e.g. `/proc/net/route`'s gateway hex
+  `0100A8C0` reverses to `192.168.0.1`, matching `ip route show default`
+  exactly). This machine has no Wi-Fi interface, so the `isWifi`-branching
+  code paths (`/proc/net/wireless` detection, the Wi-Fi icon variants, the
+  link-speed/duplex fields being *omitted* for Wi-Fi) are reasoned from the
+  reference `NetworkMonitor.qml`'s own logic and spec-level understanding of
+  `/proc/net/wireless`'s format, **not independently verified against a real
+  Wi-Fi adapter** on this machine — worth re-checking first if a bug ever
+  shows up specifically on a Wi-Fi-only report. `nmcli device wifi` / `iwctl
+  station wlan0 show` (whichever network manager is in use) are the
+  equivalent live cross-reference on a machine that does have Wi-Fi.
 - **Multi-monitor debugging gotcha, hit directly during this module's own
   development**: this machine's two outputs don't necessarily bind in the
   same left-to-right order `hyprctl monitors -j` lists them in (`Output.index`
@@ -192,6 +209,17 @@ customBar/
     │                             via gdk-pixbuf (no D-Bus types in this file,
     │                             deliberately -- same convention dbus/sni_icon.c
     │                             already documents for its own pure-conversion role)
+    ├── network/                  /proc + /sys + getifaddrs() plumbing for the
+    │                             network module (see "Network / Wi-Fi" below) --
+    │                             structurally the network-domain twin of sysmon/,
+    │                             polled on that same shared 5s timerfd rather than
+    │                             a timer of its own
+    │   └── network_client.c      /proc/net/route, /proc/net/wireless,
+    │                             /sys/class/net/<iface>/*, /etc/resolv.conf, and a
+    │                             native getifaddrs() IPv4 lookup, all re-read on
+    │                             every 5s poll; plain synchronous accessors, no
+    │                             locking (single-threaded polling, like
+    │                             sysmon_client.c, unlike pulse_client.c)
     └── modules/
         ├── workspaces/
         │   └── workspaces.c      occupied/focused set computation, kanji pills,
@@ -227,6 +255,15 @@ customBar/
         │                         prev/play-pause/next controls + a read-only
         │                         position/duration timeline -- structurally the
         │                         media-domain twin of device_popup.c
+        ├── network/
+        │   ├── network.c         default-route interface module box render + hit-
+        │   │                     rect + right-click-opens-dropdown handling (no
+        │   │                     left-click, same shape as cpu/gpu/mem)
+        │   └── network_info_popup.c  read-only interface-details dropdown
+        │                         (interface/IP/gateway/MAC/DNS/rx-tx) --
+        │                         structurally the network-domain twin of
+        │                         sysmon_info_popup.c, but right-anchored since
+        │                         this module lives in the bar's right region
         └── tray/
             ├── tray.c            icon row render + hit-rect recording + click
             │                     routing (Activate vs open-menu)
@@ -262,11 +299,12 @@ customBar/
   `modules/mic/mic.h`, `modules/cpu/cpu.h`, `modules/gpu/gpu.h`,
   `modules/mem/mem.h`, `modules/clock/clock.h` /
   `modules/clock/clock_calendar_popup.h`, `modules/media/media.h` /
-  `modules/media/media_popup.h`, `audio/device_popup.h`, and
+  `modules/media/media_popup.h`, `modules/network/network.h` /
+  `modules/network/network_info_popup.h`, `audio/device_popup.h`, and
   `sysmon/sysmon_info_popup.h` for click/scroll routing — a flat list of
   explicit call sites, not a generic dispatch table (see "D-Bus / system
-  tray" below for why that still isn't worth building; now at N=9 clickable
-  bar-surface modules plus 5 popup kinds, still cheap enough as a flat list
+  tray" below for why that still isn't worth building; now at N=10 clickable
+  bar-surface modules plus 6 popup kinds, still cheap enough as a flat list
   that the indirection wouldn't pay for itself).
 - **`AppContext.pointer_over` vs `pointer_over_surface`**: `pointer_over_surface`
   is the raw `wl_surface*` currently under the pointer, always kept up to date.
@@ -275,10 +313,10 @@ customBar/
   never stored on any `Output` (only `bar_surface.c`-owned surfaces are).
   `pointer.c`'s button handler checks each popup kind's surfaces first (the
   tray context menu's, then the audio device popup's, then the sysmon info
-  popup's, then the media popup's — each via its own `_is_menu_surface()` /
-  `_is_catcher_surface()` pair), *then* falls back to the `Output`-keyed path
-  — a popup/catcher surface never matches an `Output`, so this ordering is
-  required, not just tidier.
+  popup's, then the media popup's, then the network info popup's — each via
+  its own `_is_menu_surface()` / `_is_catcher_surface()` pair), *then* falls
+  back to the `Output`-keyed path — a popup/catcher surface never matches an
+  `Output`, so this ordering is required, not just tidier.
 
 ### Wayland plumbing gotchas (hit and fixed during initial implementation)
 
@@ -972,6 +1010,106 @@ userdata pointer, `in_use`-gated iteration, `_count()`/`_get(index)` accessors).
   `_mutedVolumes`, judged not essential for v1) and no click-to-seek on the
   timeline (see above). See "Known limitations" below.
 
+## Network / Wi-Fi
+
+The reference bar's `NetworkWidget.qml` + `NetworkTooltip.qml` wrap a
+`NetworkMonitor.qml` singleton that reads `/proc`/`/sys` natively (no persistent
+connection to NetworkManager/systemd-networkd/iwd or any other network-management
+D-Bus service — the reference doesn't talk to one, and this project doesn't either,
+for the same reason: everything it displays is derivable from plain files). This
+project's `network/network_client.c` is a direct C port of that same file-reading
+approach, structurally the network-domain twin of `sysmon/sysmon_client.c` — same
+"re-read everything from scratch on every poll, plain synchronous accessors, no
+locking" shape, reusing `main.c`'s existing 5-second sysmon timerfd rather than
+adding a second one for the same cadence (`NetworkMonitor.qml`'s own `Timer` uses
+the identical 5000ms interval).
+
+- **Default-route discovery**: `/proc/net/route`'s `Destination` column is
+  `00000000` for exactly the default route; that row's `Iface` and `Gateway`
+  columns give the active interface and its gateway. `Gateway`'s 8-hex-digit
+  value packs an IPv4 address as 4 raw bytes in the kernel's own wire order —
+  confirmed against this development machine's own real routing table (gateway
+  hex `0100A8C0` reverses to `192.168.0.1`, matching `ip route show default`
+  exactly), not just reasoned from spec text, using the same reversed-byte-pair
+  algorithm the reference `hexToIp()` uses, ported to C in `hex_to_ip()`.
+- **Wi-Fi vs. Ethernet detection**: `/proc/net/wireless` lists one line per
+  wireless interface (after two header lines) — an interface's mere *presence*
+  in that file (matched by its name prefixing a line, after trimming leading
+  whitespace) means it's a Wi-Fi device; nothing in this project actually parses
+  the quality/signal-level columns that follow, matching the reference's own
+  `NetworkMonitor.qml`, which reads the same file for the identical yes/no
+  purpose and never surfaces signal strength either.
+- **IPv4 address lookup uses `getifaddrs()` (POSIX libc), not a shelled-out
+  `ip -4 addr show dev <iface>`** — a deliberate improvement over the reference,
+  not just a stylistic port choice. `NetworkMonitor.qml` only re-runs its own `ip
+  addr` subprocess when the interface actually changes (its own `ifaceChanged`
+  gate, since a subprocess spawn is comparatively expensive and the IP rarely
+  changes once assigned); `getifaddrs()` is a single syscall over already
+  kernel-resident data, cheap enough to just call on every 5-second poll with no
+  equivalent change-gating needed, and it sidesteps interpolating a kernel-
+  reported interface name into a shell command string entirely (not a real
+  attack surface in practice — interface names are kernel/udev-controlled, not
+  user input — but a plain libc call needs no such reasoning about safety at
+  all). Same "no subprocess for something the OS already gives you a native call
+  for" instinct the reference's own `Time.qml` documents for its native
+  `new Date()` vs. shelling out to `date`.
+- **rx/tx rate is a delta between the two most recent polls**, sampled against
+  `CLOCK_MONOTONIC` (not wall-clock time, unlike the reference's own `Date.now()`
+  — immune to an NTP time jump mid-session skewing one sample's elapsed-time
+  divisor), reset (no prior sample to diff against) whenever the default-route
+  interface itself changes — same self-correcting "0 until the next poll"
+  behavior `sysmon_client.c`'s own CPU-jiffies delta already has, and the same
+  reason a network-interface change (e.g. Ethernet unplugged, Wi-Fi took over)
+  shouldn't diff two byte counters that belong to two different interfaces.
+- **DNS servers**: every `nameserver` line in `/etc/resolv.conf`, capped at 8
+  entries (`MAX_DNS_SERVERS` in `network_client.c`) — comfortably above the 3
+  glibc's own resolver actually honors, matching this project's usual bounded-
+  array convention rather than a note-worthy real limitation.
+- **The bar widget (`modules/network/network.c`) shows the connection-state icon
+  plus a live rx/tx rate** (`↓12.3 KB/s ↑4.5 KB/s`, or `Disconnected` when the
+  interface is down but still has a default route, matching the reference's own
+  label text exactly) — the down/up arrows are plain BMP Unicode (`↓`/`↑`, not
+  Nerd Font PUA glyphs) but still routed through `glyph_utf8()` with numeric
+  codepoints rather than hand-typed as raw literals, per this project's usual
+  glyph convention (see "Conventions" below), even though these two are common
+  enough that hand-typing them would likely have been fine in practice.
+- **Accent color is `COLORS.teal`, not the reference's own `Config.colors.green`**
+  — a forced deviation, not a preference: this project's own earlier CPU/GPU/
+  memory pass already claimed `green` for the GPU module (see "System monitor
+  (CPU/GPU/memory)" above), which didn't exist as a conflict in the reference
+  (its `SystemMonitorWidget.qml` and `NetworkWidget.qml` are visually
+  independent widgets that never needed to coordinate on a shared accent-color
+  pool the way this project's per-module color assignment does). `teal` was
+  picked from the palette's remaining unclaimed colors as the closest visual
+  analogue to green still available.
+- **No left-click action; right-click opens the info dropdown** — matches
+  `modules/cpu/cpu.h`'s own established convention exactly (there's no obvious
+  single "primary action" for a status-only widget, unlike volume/mic's
+  click-to-mute), and is itself already a deviation from the reference (hover
+  tooltip, no click at all) for the same reason every other popup in this bar
+  makes that same swap: `wayland/pointer.c` has no hover-duration/timer
+  infrastructure.
+  `modules/network/network_info_popup.c` is structurally the network-domain twin
+  of `sysmon/sysmon_info_popup.c` (single read-only text block, snapshotted at
+  open time, not live-refreshed while open — this data only changes once every
+  5-second poll tick anyway, so there's no equivalent of `device_popup.c`'s
+  live-while-open refresh to bother with) — but anchored **TOP+RIGHT**, unlike
+  `sysmon_info_popup.c`'s TOP+LEFT, since the network widget lives in the bar's
+  *right* region (between Volume and Clock, matching the reference `Bar.qml`'s
+  own `rightLayout` order) rather than the left like CPU/GPU/memory. Body text
+  mirrors `NetworkTooltip.qml`'s own `NetworkMonitor.tooltip` → `buildTooltip()`
+  exactly, including omitting the `LINK SPEED`/`duplex` line entirely for Wi-Fi
+  (those fields don't apply) and the blank-line section breaks between the
+  connection-details block, the rate/totals block, and the DNS list.
+- **Not independently verified against a real Wi-Fi adapter** — this development
+  machine has only Ethernet (`enp8s0`); every Wi-Fi-specific code path (the
+  `/proc/net/wireless` detection, the Wi-Fi icon variants, `LINK SPEED`/duplex
+  being omitted) is reasoned from the reference's own logic and
+  `/proc/net/wireless`'s documented format, not confirmed live the way the
+  Ethernet path's route/gateway/IP parsing was. See "Running / testing changes"
+  above for the cross-reference commands to use if this ever needs checking on
+  Wi-Fi-capable hardware.
+
 ## Conventions
 
 - **This project is commented far more heavily than this assistant's usual
@@ -1137,6 +1275,26 @@ userdata pointer, `in_use`-gated iteration, `_count()`/`_get(index)` accessors).
   dynamic growth" convention as every other fixed-array table in this
   project (`sni_registry.c`'s `MAX_TRAY_ITEMS`, `device_popup.c`'s
   `MAX_DEVICE_ROWS`).
+- **Network: no VPN/tunnel-interface awareness** — this module (like the
+  reference) only ever looks at whichever interface currently owns the
+  default route; a VPN that adds its own default route makes this correctly
+  show the VPN's own interface/IP, but there's no indication *that* it's a
+  VPN specifically (no icon variant, no "via" annotation).
+- **Network: no signal-strength/quality display for Wi-Fi** — `/proc/net/
+  wireless` is read only to answer "is this interface Wi-Fi at all," not
+  parsed for its quality/link-level columns, matching the reference's own
+  `NetworkMonitor.qml`, which reads the same file for the same yes/no
+  purpose only.
+- **Network: not independently verified against a real Wi-Fi adapter** — see
+  "Network / Wi-Fi" above for exactly which code paths that affects and what
+  to re-check first if a bug ever surfaces specifically on Wi-Fi.
+- **Network: DNS server list is capped at 8 entries**
+  (`MAX_DNS_SERVERS` in `network_client.c`) — comfortably above the 3 glibc's
+  own resolver actually honors from `/etc/resolv.conf`, so this is a
+  theoretical cap rather than a real limitation in practice.
+- **Network: the popup doesn't coordinate with any other popup kind** — same
+  undefended, rare v1 edge case as every other module's own equivalent
+  limitation above.
 
 ## Scope / roadmap
 
@@ -1149,13 +1307,15 @@ dropdown for picking the default sink/source — see "PulseAudio / volume & mic"
 CPU/GPU/memory monitoring (three independent left-region modules, each with its own
 accent color and right-click info dropdown, split from the reference's single
 combined widget per explicit user request — see "System monitor (CPU/GPU/memory)"),
-and a media (MPRIS) player widget (centered in the bar, click-to-play-pause, a
+a media (MPRIS) player widget (centered in the bar, click-to-play-pause, a
 right-click dropdown listing every tracked player with prev/play-pause/next
-controls — see "Media (MPRIS)").
+controls — see "Media (MPRIS)"), and a network/Wi-Fi status widget (default-route
+interface display with a live rx/tx rate, a right-click dropdown with
+interface/IP/gateway/MAC/DNS details — see "Network / Wi-Fi").
 
-Not yet implemented (planned for later passes, in no particular order): network,
-the power-menu overlay. When adding one, follow the existing module shape: a
-`modules/<name>/` directory, a render function taking
+Not yet implemented (planned for later passes): the power-menu overlay. When
+adding it, follow the existing module shape: a `modules/<name>/` directory, a
+render function taking
 `(cairo_t*, ..., x, box_top, box_height)` and returning the next x coordinate, and
 — if it needs live data — either a Hyprland IPC event hook (if relevant) or its
 own poll/event source integrated into `main.c`'s epoll loop the same way the

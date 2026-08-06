@@ -19,6 +19,7 @@
 #include "modules/media/media_popup.h"
 #include "modules/workspaces/workspaces.h"
 #include "mpris/mpris_client.h"
+#include "network/network_client.h"
 #include "sysmon/sysmon_client.h"
 #include "wayland/context.h"
 #include "wayland/event_loop.h"
@@ -55,7 +56,9 @@ static int create_clock_timer(void) {
 }
 
 // 5-second interval, matching the reference SystemMonitor.qml's own polling
-// Timer exactly.
+// Timer exactly -- also drives network_client_poll() below (see that call
+// site), since NetworkMonitor.qml's own Timer uses the identical 5000ms
+// interval and reusing this one avoids a second timerfd for the same cadence.
 static int create_sysmon_timer(void) {
     int fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
     if (fd < 0) {
@@ -116,6 +119,10 @@ int main(void) {
     clock_tick();
     sysmon_client_init();
     sysmon_client_poll();
+    // No network_client_init() equivalent needed -- see network_client.h's
+    // own doc comment for why this module has no delta-based baseline to
+    // seed beyond what its first poll below already self-primes.
+    network_client_poll();
     output_mark_all_dirty(&app);
 
     int epoll_fd = event_loop_create();
@@ -252,6 +259,10 @@ int main(void) {
                 // acceptable blocking window here (bounded, ~15-45ms, once
                 // per 5 seconds, not per-frame or per-click).
                 sysmon_client_poll();
+                // Piggybacks on this same 5-second timer rather than adding
+                // a second poll source -- matches the reference
+                // NetworkMonitor.qml's own identical 5000ms interval.
+                network_client_poll();
                 output_mark_all_dirty(&app);
             } else if (hypr_events && fd == hypr_fd) {
                 if (!hyprland_events_pump(hypr_events, &app)) {

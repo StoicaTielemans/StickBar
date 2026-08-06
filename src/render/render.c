@@ -7,6 +7,7 @@
 #include "modules/media/media.h"
 #include "modules/mem/mem.h"
 #include "modules/mic/mic.h"
+#include "modules/network/network.h"
 #include "modules/tray/tray.h"
 #include "modules/volume/volume.h"
 #include "modules/workspaces/workspaces.h"
@@ -29,13 +30,13 @@ void render_output(cairo_t *cr, Output *output, int width, int height) {
     double gpu_right_x = gpu_render(cr, output, cpu_right_x, 0.0, (double)height);
     mem_render(cr, output, gpu_right_x, 0.0, (double)height);
 
-    // Right region: the reference Bar.qml's actual rightLayout order is Mic,
-    // Volume, Network, Clock, Tray -- Tray is rightmost, drawn first here since
-    // this loop works right-to-left. Network isn't built yet, so Volume sits
-    // directly left of Clock for now.
+    // Right region: matches the reference Bar.qml's actual rightLayout order,
+    // Mic, Volume, Network, Clock, Tray -- Tray is rightmost, drawn first
+    // here since this loop works right-to-left.
     double tray_left_x = tray_render(cr, output, (double)width, 0.0, (double)height);
     double clock_left_x = clock_render(cr, output, tray_left_x, 0.0, (double)height);
-    double volume_left_x = volume_render(cr, output, clock_left_x, 0.0, (double)height);
+    double network_left_x = network_render(cr, output, clock_left_x, 0.0, (double)height);
+    double volume_left_x = volume_render(cr, output, network_left_x, 0.0, (double)height);
     mic_render(cr, output, volume_left_x, 0.0, (double)height);
 
     // Center region: matches the reference bar's own centerLayout, which

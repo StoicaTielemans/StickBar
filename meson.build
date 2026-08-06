@@ -107,6 +107,9 @@ sources = files(
   'src/mpris/mpris_art.c',
   'src/modules/media/media.c',
   'src/modules/media/media_popup.c',
+  'src/network/network_client.c',
+  'src/modules/network/network.c',
+  'src/modules/network/network_info_popup.c',
 )
 
 executable('customBar',

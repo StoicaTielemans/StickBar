@@ -11,6 +11,8 @@
 #include "modules/media/media_popup.h"
 #include "modules/mem/mem.h"
 #include "modules/mic/mic.h"
+#include "modules/network/network.h"
+#include "modules/network/network_info_popup.h"
 #include "modules/tray/tray.h"
 #include "modules/tray/tray_context_menu.h"
 #include "modules/volume/volume.h"
@@ -121,6 +123,14 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
         sysmon_info_popup_close();
         return;
     }
+    if (network_info_popup_is_menu_surface(app->pointer_over_surface)) {
+        // Read-only content, same as the sysmon info popup above.
+        return;
+    }
+    if (network_info_popup_is_catcher_surface(app->pointer_over_surface)) {
+        network_info_popup_close();
+        return;
+    }
     if (clock_calendar_popup_is_menu_surface(app->pointer_over_surface)) {
         // Read-only content, same as the sysmon info popup above.
         return;
@@ -141,8 +151,10 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
     // button rule; volume/mic's left-mutes/right-opens-dropdown rule;
     // cpu/gpu/mem's right-opens-dropdown-only rule, no left-click action at
     // all -- see modules/cpu/cpu.h; media's own left-toggles-play/right-
-    // opens-dropdown rule, matching volume/mic's shape exactly), so all of
-    // them are called unconditionally here regardless of which button fired.
+    // opens-dropdown rule, matching volume/mic's shape exactly; network's
+    // own right-opens-dropdown-only rule, matching cpu/gpu/mem's shape
+    // exactly), so all of them are called unconditionally here regardless of
+    // which button fired.
     if (app->pointer_over) {
         if (button == BTN_LEFT) {
             workspaces_handle_click(app->pointer_over, app->pointer_x, app->pointer_y);
@@ -155,6 +167,7 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
         gpu_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         mem_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         media_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
+        network_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
     }
 }
 

@@ -54,6 +54,27 @@
 #define GLYPH_ICON_MEDIA_PREV  0xF04AEu // md-skip_previous
 #define GLYPH_ICON_MEDIA_NEXT  0xF04ADu // md-skip_next
 
+// Network icons, matching NetworkWidget.qml's icon() thresholds exactly:
+// no default route at all, disconnected (Wi-Fi vs. Ethernet), connected
+// (Wi-Fi vs. Ethernet) -- codepoints derived the same way as the media
+// icons above (read via Python's ord() from the reference source, not
+// retyped by eye).
+#define GLYPH_ICON_NETWORK_UNKNOWN 0xF06B0u // md-help_network -- no default route
+#define GLYPH_ICON_WIFI_OFF        0xF05AAu // md-wifi_off
+#define GLYPH_ICON_ETHERNET_OFF    0xF0202u // md-ethernet_off (actually lan-disconnect)
+#define GLYPH_ICON_WIFI_ON         0xF05A9u // md-wifi
+#define GLYPH_ICON_ETHERNET_ON     0xF0200u // md-ethernet
+
+// Plain BMP Unicode arrows (not Nerd Font PUA glyphs), used by the network
+// module's rx/tx rate label ("↓12.3 KB/s ↑4.5 KB/s", matching
+// NetworkWidget.qml's own label text exactly) -- still routed through
+// glyph_utf8() rather than hand-typed as raw UTF-8 literals, per this
+// project's own convention against hand-typing multi-byte sequences, even
+// though these two are common enough that most editors handle them
+// correctly.
+#define GLYPH_ARROW_DOWN 0x2193u
+#define GLYPH_ARROW_UP   0x2191u
+
 // Encodes a single Unicode codepoint as UTF-8 into `out`, nul-terminated.
 // `out` must have room for at least 5 bytes (up to 4 bytes of encoding + '\0').
 // Returns the number of encoded bytes (excluding the terminator).

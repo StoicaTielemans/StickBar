@@ -26,6 +26,14 @@ libpulse       = dependency('libpulse')   # PulseAudio client library, used by
                                            # see CLAUDE.md's "PulseAudio / volume &
                                            # mic" section for why libpulse rather
                                            # than raw libpipewire
+gdk_pixbuf     = dependency('gdk-pixbuf-2.0') # image decoding (PNG/JPEG/etc.), used
+                                           # by src/mpris/mpris_art.c to decode a
+                                           # local MPRIS mpris:artUrl into a cairo
+                                           # surface for the media popup's
+                                           # thumbnail -- cairo alone only decodes
+                                           # PNG natively, which would miss most
+                                           # real-world (commonly JPEG) cover art;
+                                           # see CLAUDE.md's "Media (MPRIS)" section
 
 wayland_scanner = find_program('wayland-scanner')
 
@@ -95,10 +103,14 @@ sources = files(
   'src/modules/cpu/cpu.c',
   'src/modules/gpu/gpu.c',
   'src/modules/mem/mem.c',
+  'src/mpris/mpris_client.c',
+  'src/mpris/mpris_art.c',
+  'src/modules/media/media.c',
+  'src/modules/media/media_popup.c',
 )
 
 executable('customBar',
   sources + generated_sources + generated_headers,
-  dependencies: [wayland_client, cairo, pangocairo, cjson, libsystemd, libpulse],
+  dependencies: [wayland_client, cairo, pangocairo, cjson, libsystemd, libpulse, gdk_pixbuf],
   include_directories: include_directories('src'),
 )

@@ -44,6 +44,16 @@
 #define GLYPH_ICON_GPU 0xF08AEu // md-expansion_card
 #define GLYPH_ICON_MEM 0xF035Bu // md-memory
 
+// Media (MPRIS) icons, codepoints derived by reading them directly out of the
+// reference MediaWidget.qml/MediaPopup.qml source via Python's ord() (both
+// files use the same play/pause pair), not retyped by eye -- confirmed
+// present in JetBrainsMonoNerdFont-Regular.ttf's cmap via fontTools, same as
+// every other glyph in this file.
+#define GLYPH_ICON_MEDIA_PLAY  0xF040Au // md-play
+#define GLYPH_ICON_MEDIA_PAUSE 0xF03E4u // md-pause
+#define GLYPH_ICON_MEDIA_PREV  0xF04AEu // md-skip_previous
+#define GLYPH_ICON_MEDIA_NEXT  0xF04ADu // md-skip_next
+
 // Encodes a single Unicode codepoint as UTF-8 into `out`, nul-terminated.
 // `out` must have room for at least 5 bytes (up to 4 bytes of encoding + '\0').
 // Returns the number of encoded bytes (excluding the terminator).

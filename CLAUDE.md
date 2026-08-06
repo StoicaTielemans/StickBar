@@ -13,9 +13,9 @@ project is echoing in C — consult that repo's own `CLAUDE.md` and source when 
 module, rather than guessing at parity).
 
 This is being built in **stages, not all at once**. The current state has: bar shell,
-workspace indicator, clock, system tray, volume/mic, and CPU/GPU/memory monitoring.
-Network, media player, and the power-menu overlay are all still unimplemented — see
-"Scope / roadmap" below before assuming a module exists.
+workspace indicator, clock, system tray, volume/mic, CPU/GPU/memory monitoring, and
+a media (MPRIS) player widget. Network and the power-menu overlay are still
+unimplemented — see "Scope / roadmap" below before assuming a module exists.
 
 ## Running / testing changes
 
@@ -60,6 +60,14 @@ protocol errors or Hyprland IPC failures.
   100*(t-a)/t}' /proc/meminfo` reproduces the memory module's own percent
   calculation exactly, useful for confirming an off-by-something isn't hiding
   in the rounding.
+- `busctl --user list | grep mpris` / `busctl --user introspect
+  <name> /org/mpris/MediaPlayer2` / `playerctl -a metadata` (if installed)
+  are the cross-reference for the media module -- `playerctl play-pause` /
+  `playerctl next` / `playerctl previous` against a real running player
+  (e.g. a browser tab or Spotify) are a convenient way to trigger a live
+  external change and confirm the bar's PropertiesChanged subscription
+  picks it up without needing to click anything, same idea as the volume/mic
+  cross-reference above.
 - **Multi-monitor debugging gotcha, hit directly during this module's own
   development**: this machine's two outputs don't necessarily bind in the
   same left-to-right order `hyprctl monitors -j` lists them in (`Output.index`
@@ -170,6 +178,20 @@ customBar/
     │                             tray_context_menu.c's and device_popup.c's own
     │                             right-anchored popups, since these three modules
     │                             live in the bar's left region
+    ├── mpris/                    MPRIS (media player) plumbing for the media module
+    │                             (see "Media (MPRIS)" below) -- structurally the
+    │                             mpris-domain twin of dbus/'s SNI plumbing, reusing
+    │                             that same shared sd_bus session-bus connection
+    │                             rather than opening a second one
+    │   ├── mpris_client.c        tracked-player table (fixed-array, like
+    │   │                         sni_registry.c's), GetAll property fetch per
+    │   │                         player, PropertiesChanged + NameOwnerChanged
+    │   │                         subscriptions, fire-and-forget PlayPause/Next/
+    │   │                         Previous calls, on-demand Position polling
+    │   └── mpris_art.c           pure mpris:artUrl -> cairo_surface_t* conversion
+    │                             via gdk-pixbuf (no D-Bus types in this file,
+    │                             deliberately -- same convention dbus/sni_icon.c
+    │                             already documents for its own pure-conversion role)
     └── modules/
         ├── workspaces/
         │   └── workspaces.c      occupied/focused set computation, kanji pills,
@@ -195,6 +217,16 @@ customBar/
         ├── mic/
         │   └── mic.c             default-source module box render + hit-rect +
         │                         click(mute)/scroll(±5%) handling
+        ├── media/
+        │   ├── media.c           active-MPRIS-player module box render (centered
+        │   │                     in the bar, unlike every left/right-anchored
+        │   │                     module above) + hit-rect + click(play-pause)/
+        │   │                     right-click-opens-dropdown handling
+        │   └── media_popup.c     dropdown listing every tracked player (not just
+        │                         the active one), each row a thumbnail +
+        │                         prev/play-pause/next controls + a read-only
+        │                         position/duration timeline -- structurally the
+        │                         media-domain twin of device_popup.c
         └── tray/
             ├── tray.c            icon row render + hit-rect recording + click
             │                     routing (Activate vs open-menu)
@@ -229,11 +261,12 @@ customBar/
   `modules/tray/tray_context_menu.h`, `modules/volume/volume.h`,
   `modules/mic/mic.h`, `modules/cpu/cpu.h`, `modules/gpu/gpu.h`,
   `modules/mem/mem.h`, `modules/clock/clock.h` /
-  `modules/clock/clock_calendar_popup.h`, `audio/device_popup.h`, and
+  `modules/clock/clock_calendar_popup.h`, `modules/media/media.h` /
+  `modules/media/media_popup.h`, `audio/device_popup.h`, and
   `sysmon/sysmon_info_popup.h` for click/scroll routing — a flat list of
   explicit call sites, not a generic dispatch table (see "D-Bus / system
-  tray" below for why that still isn't worth building; now at N=8 clickable
-  bar-surface modules plus 4 popup kinds, still cheap enough as a flat list
+  tray" below for why that still isn't worth building; now at N=9 clickable
+  bar-surface modules plus 5 popup kinds, still cheap enough as a flat list
   that the indirection wouldn't pay for itself).
 - **`AppContext.pointer_over` vs `pointer_over_surface`**: `pointer_over_surface`
   is the raw `wl_surface*` currently under the pointer, always kept up to date.
@@ -242,10 +275,10 @@ customBar/
   never stored on any `Output` (only `bar_surface.c`-owned surfaces are).
   `pointer.c`'s button handler checks each popup kind's surfaces first (the
   tray context menu's, then the audio device popup's, then the sysmon info
-  popup's — each via its own `_is_menu_surface()` / `_is_catcher_surface()`
-  pair), *then* falls back to the `Output`-keyed path — a popup/catcher
-  surface never matches an `Output`, so this ordering is required, not just
-  tidier.
+  popup's, then the media popup's — each via its own `_is_menu_surface()` /
+  `_is_catcher_surface()` pair), *then* falls back to the `Output`-keyed path
+  — a popup/catcher surface never matches an `Output`, so this ordering is
+  required, not just tidier.
 
 ### Wayland plumbing gotchas (hit and fixed during initial implementation)
 
@@ -807,6 +840,138 @@ the year-calendar grid, and reachable via **right**-click, not left or hover.
   shared tokens rather than one-off local tuning, unlike e.g. the workspace
   pill's own local padding constants.
 
+## Media (MPRIS)
+
+The reference bar's `MediaWidget.qml` lives centered in the bar's own `centerLayout`
+(the only widget there) and wraps `Quickshell.Services.Mpris` via a `MediaPlayer.qml`
+singleton. This project's `mpris/mpris_client.c` talks to the same
+`org.mpris.MediaPlayer2.*` D-Bus protocol directly via sd-bus, reusing the tray's own
+shared session-bus connection (`dbus/dbus_loop.c`) rather than opening a second one —
+structurally the mpris-domain twin of `dbus/`'s SNI plumbing (`mpris_client.c`'s
+tracked-player table mirrors `sni_registry.c`'s `SniItem` array almost exactly: a
+fixed, non-relocated array so a slot's address stays valid as a `sd_bus_match_signal()`
+userdata pointer, `in_use`-gated iteration, `_count()`/`_get(index)` accessors).
+
+- **Player discovery**: `ListNames` on `org.freedesktop.DBus` at startup, filtered to
+  the `org.mpris.MediaPlayer2.` prefix; a global `NameOwnerChanged` subscription
+  (filtered *inside* the callback by that same prefix, not via a raw match-string
+  API this codebase doesn't otherwise use) catches players appearing/disappearing
+  afterward — same "global match, filter inside the callback" shape
+  `dbus/sni_watcher_service.c`'s own `on_name_owner_changed()` already uses for the
+  identical reason (D-Bus match rules can't filter an arbitrary name *prefix*
+  without that raw-string API). `playerctld` is excluded by a substring check on the
+  bus name, matching `MediaPlayer.qml`'s own filter — it's a shadow/mirror service
+  that duplicates whatever's actually playing under its own MPRIS name, so including
+  it would show every real player twice.
+- **Every MPRIS player lives at the same fixed object path**
+  (`/org/mpris/MediaPlayer2`), unlike SNI items (which each declare their own path) —
+  no per-item path discovery is needed here at all.
+  `mpris_client.c` subscribes to that path's `org.freedesktop.DBus.Properties`
+  interface with `member=NULL` (matches every signal from that interface, which in
+  practice is only ever `PropertiesChanged`) — same "match broadly, dispatch by
+  member name inside the callback" convention `sni_registry.c`'s own per-item
+  subscription already uses.
+- **On `PropertiesChanged`, the whole `Player`-interface property set is re-fetched
+  via a fresh `GetAll` call, rather than parsing the signal's own incremental
+  changed-properties payload.** Simpler and more robust than tracking partial
+  updates, at the cost of one extra round trip per change — the same tradeoff
+  `sni_registry.c`'s `refresh_icon()` already makes for `NewIcon` (re-fetch the one
+  property that matters rather than parse what the signal handed over). Acceptable
+  here since `PropertiesChanged` fires relatively rarely (track changes, play/pause
+  toggles), not on a hot path.
+- **`Identity` (the player's own display name, used as a title fallback) lives on the
+  root `org.mpris.MediaPlayer2` interface, not `Player`** — fetched as a second,
+  separate `sd_bus_get_property()` call after the `Player` GetAll. Best-effort: a
+  player that fails to answer it just keeps whatever identity string (possibly
+  empty) it already had, rather than treating the whole property fetch as failed.
+- **`xesam:artist` is an array of strings per spec** (a track can have multiple
+  credited artists) — only the first is kept, matching `trackText()`'s own
+  single-artist display. The D-Bus reader still drains every remaining array entry
+  before calling `sd_bus_message_exit_container()`, same reasoning
+  `sni_registry.c`'s `convert_best_pixmap_from_message()` already documents for
+  draining every `IconPixmap` entry rather than stopping early once the best one is
+  found — leaving unread bytes in a `sd_bus_message` before exiting its container is
+  not safe to skip.
+- **Fire-and-forget method calls** (`PlayPause`/`Next`/`Previous`, via
+  `mpris_player_toggle_playing()`/`_next()`/`_previous()`): `sd_bus_send()`, not
+  `sd_bus_call_method()`, for the same reason `dbus/sni_registry.c`'s
+  `sni_item_activate()` already documents — this runs from a UI click handler inside
+  the bar's single-threaded event loop, and blocking on a remote player's reply
+  would freeze the whole bar until it responds. `mpris_player_toggle_playing()`
+  always sends `PlayPause` unconditionally rather than replicating the reference
+  `togglePlaying()`'s `canTogglePlaying`-gated `Play()`/`Pause()` fallback —
+  `PlayPause` is spec-optional but implemented by essentially every real player, and
+  the extra capability branching wasn't judged worth it for v1.
+- **The bar widget (`modules/media/media.c`) is horizontally centered in the bar**,
+  the only module in this codebase that isn't anchored to either the left or right
+  region — matches the reference's own `centerLayout` /
+  `anchors.horizontalCenter: parent.horizontalCenter`. It shows the *active* player
+  (`mpris_active_player()`: first currently-`Playing` tracked player, or the first
+  tracked player at all, or nothing) and collapses to zero width when there's no
+  player at all, matching `MediaWidget.qml`'s own `visible: player !== null`.
+- **Left-click toggles play/pause; right-click opens a dropdown** listing every
+  tracked player (not just the active one), each row with prev/play-pause/next
+  controls — this project's now-established right-click-opens-dropdown convention
+  (see volume/mic/cpu/gpu/mem/clock above), replacing the reference's
+  hover-triggered `MediaPopup` since `wayland/pointer.c` has no hover-duration/timer
+  infrastructure (same reasoning already given for every other popup in this bar).
+  `modules/media/media_popup.c` is structurally the media-domain twin of
+  `audio/device_popup.c`: same popup/click-catcher/outside-click-dismiss shape, same
+  "recompute layout on every relevant live update while open, not just at open time"
+  model (`media_popup_refresh_if_open()`, called from `main.c` after every D-Bus
+  pump — cheap, since it's a no-op unless the popup is actually open) as
+  `device_popup.c`'s own `device_popup_refresh_if_open()`.
+  - **Anchored TOP+LEFT under the trigger's left edge**, like
+    `sysmon/sysmon_info_popup.c` rather than the tray's/audio popup's own
+    TOP+RIGHT anchoring — chosen because the media widget lives in the bar's
+    *center* region rather than flush against either edge, so growing the popup
+    rightward from the trigger's left edge was judged the more reasonable default.
+    No overflow-past-either-edge clamping is added, same documented limitation as
+    every other popup in this bar.
+- **Each dropdown row also shows a thumbnail and a read-only position/duration
+  timeline**, matching the reference `MediaPopup.qml`'s own layout fairly closely
+  (a left-hand `Image` beside a title + timeline + controls stack) rather than the
+  bar-widget-derived text-only row this section originally shipped with.
+  - **Thumbnail (`mpris/mpris_art.c`)**: MPRIS's `mpris:artUrl` is only fetched for
+    `file://` URIs, decoded via `gdk-pixbuf-2.0` (a new dependency, added
+    specifically for this — cairo alone only decodes PNG natively, which would miss
+    most real-world, commonly-JPEG cover art) and converted to a premultiplied
+    `CAIRO_FORMAT_ARGB32` surface by hand, the same "no toolkit's own
+    cairo-integration helper, do the pixel conversion directly" approach
+    `dbus/sni_icon.c` already takes for SNI `IconPixmap` bytes. `http(s)://` and
+    other schemes are skipped entirely (returns `NULL`, drawn as a plain
+    placeholder square) — this project has no HTTP client, so a streaming
+    service's own CDN-hosted art (Spotify's own cover-art URLs, most in-browser
+    media) never gets fetched; only locally-cached art (mpv, VLC, Firefox's own
+    cached media thumbnails) shows up. Decoding happens once per real track
+    change (`mpris/mpris_client.c`'s `parse_metadata()` diffs the new `artUrl`
+    string against the cached one before reloading), not on every property
+    refresh, so a play/pause toggle (which re-sends the same `Metadata`) doesn't
+    re-decode the same image.
+  - **Position/duration timeline**: MPRIS's `Position` property isn't
+    push-notified via `PropertiesChanged` per spec (unlike everything else this
+    popup shows), so it needs actual polling while something's watching it, same
+    as the reference `MediaPopup.qml`'s own `Timer { running: root.visible }`
+    re-triggering `positionChanged()`. Rather than add a new poll source,
+    `media_popup_tick()` piggybacks on `main.c`'s already-ticking 1-second clock
+    timerfd (a no-op unless the popup is actually open) and re-fetches every
+    visible row's player's `Position` via a synchronous `sd_bus_get_property()`
+    call each second. `mpris/mpris_client.c` deliberately does *not* poll
+    `Position` on its own regular schedule — only `media_popup_tick()` (and
+    `media_popup_open()`, once, for the popup's very first frame) calls
+    `mpris_player_refresh_position()`, so a player nobody's looking at isn't
+    polled at all. The bar (the "24h sentinel" `mpris:length` heuristic, "m:ss"
+    formatting, the 4px filled bar) all mirror `MediaPopup.qml`'s own
+    `maxSaneDuration`/`formatTime()`/timeline styling. **Read-only, no
+    click-to-seek** — `SetPosition()` needs the track's own `mpris:trackid`
+    object path, which isn't cached anywhere (only the fields this popup
+    actually displays are), and adding it purely to support seeking wasn't
+    judged worth it here.
+- **Deliberately out of scope for this pass**: no per-player volume/mute control
+  (would need client-side mute-state bookkeeping like the reference's own
+  `_mutedVolumes`, judged not essential for v1) and no click-to-seek on the
+  timeline (see above). See "Known limitations" below.
+
 ## Conventions
 
 - **This project is commented far more heavily than this assistant's usual
@@ -944,6 +1109,34 @@ the year-calendar grid, and reachable via **right**-click, not left or hover.
 - **Clock: no reflow if the popup would overflow past the output's left
   edge** (clamped, not repositioned) — same limitation as the tray's own
   context menu, inherited from reusing its identical anchor math.
+- **Media: no click-to-seek on the timeline, no per-player volume/mute
+  control** — both deliberately out of scope for this pass; see "Media
+  (MPRIS)" above for the specific reasoning behind each.
+- **Media: thumbnails only load for `file://` art URLs** — `http(s)://` art
+  (Spotify's own cover-art CDN, most in-browser media) always falls back to
+  the placeholder square, since this project has no HTTP client; see "Media
+  (MPRIS)" above.
+- **Media: playback position is only ever polled while the dropdown is open**
+  (once a second, piggybacked on the existing clock timer) — the bar widget
+  itself shows no position/duration at all, only the dropdown does; this
+  matches the reference `MediaWidget.qml`, which doesn't show a timeline on
+  the bar widget either (only `MediaPopup.qml` does).
+- **Media: `PlayPause` is sent unconditionally**, not gated on the player's
+  own `CanPlay`/`CanPause` capabilities the way the reference's
+  `togglePlaying()` is — see "Media (MPRIS)" above for why that gating wasn't
+  replicated. In practice this only matters for a player that both lacks
+  `PlayPause` *and* reports `CanPlay`/`CanPause` as false, which would be an
+  unusual/broken MPRIS implementation.
+- **Media: the popup doesn't coordinate with any other popup kind** — same
+  undefended, rare v1 edge case as volume/mic's, CPU/GPU/memory's, and the
+  clock's own equivalent limitations above.
+- **Media: player list is capped at 16 tracked players**
+  (`MAX_MPRIS_PLAYERS` in `mpris_client.c`) — comfortably above any real
+  desktop's simultaneous player count, but a genuinely pathological case
+  would silently drop players past that cap, same "documented cap, not
+  dynamic growth" convention as every other fixed-array table in this
+  project (`sni_registry.c`'s `MAX_TRAY_ITEMS`, `device_popup.c`'s
+  `MAX_DEVICE_ROWS`).
 
 ## Scope / roadmap
 
@@ -955,14 +1148,17 @@ volume/mic (default sink/source display, click-to-mute, scroll-to-adjust, device
 dropdown for picking the default sink/source — see "PulseAudio / volume & mic"),
 CPU/GPU/memory monitoring (three independent left-region modules, each with its own
 accent color and right-click info dropdown, split from the reference's single
-combined widget per explicit user request — see "System monitor (CPU/GPU/memory)").
+combined widget per explicit user request — see "System monitor (CPU/GPU/memory)"),
+and a media (MPRIS) player widget (centered in the bar, click-to-play-pause, a
+right-click dropdown listing every tracked player with prev/play-pause/next
+controls — see "Media (MPRIS)").
 
 Not yet implemented (planned for later passes, in no particular order): network,
-media player (MPRIS), power-menu overlay. When adding one, follow the existing
-module shape: a `modules/<name>/` directory, a render function taking
+the power-menu overlay. When adding one, follow the existing module shape: a
+`modules/<name>/` directory, a render function taking
 `(cairo_t*, ..., x, box_top, box_height)` and returning the next x coordinate, and
 — if it needs live data — either a Hyprland IPC event hook (if relevant) or its
 own poll/event source integrated into `main.c`'s epoll loop the same way the
-clock's timerfd, Hyprland's event socket, the tray's D-Bus connection, the volume/
-mic modules' PulseAudio connection, and the CPU/GPU/memory modules' own 5-second
-timerfd are.
+clock's timerfd, Hyprland's event socket, the tray's/media module's shared D-Bus
+connection, the volume/mic modules' PulseAudio connection, and the CPU/GPU/memory
+modules' own 5-second timerfd are.

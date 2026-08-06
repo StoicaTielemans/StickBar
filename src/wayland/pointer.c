@@ -7,6 +7,8 @@
 #include "modules/clock/clock_calendar_popup.h"
 #include "modules/cpu/cpu.h"
 #include "modules/gpu/gpu.h"
+#include "modules/media/media.h"
+#include "modules/media/media_popup.h"
 #include "modules/mem/mem.h"
 #include "modules/mic/mic.h"
 #include "modules/tray/tray.h"
@@ -64,6 +66,8 @@ static void pointer_motion(void *data, struct wl_pointer *pointer, uint32_t time
         tray_context_menu_handle_motion(app->pointer_x, app->pointer_y);
     } else if (device_popup_is_menu_surface(app->pointer_over_surface)) {
         device_popup_handle_motion(app->pointer_x, app->pointer_y);
+    } else if (media_popup_is_menu_surface(app->pointer_over_surface)) {
+        media_popup_handle_motion(app->pointer_x, app->pointer_y);
     }
 }
 
@@ -98,6 +102,14 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
         device_popup_close();
         return;
     }
+    if (media_popup_is_menu_surface(app->pointer_over_surface)) {
+        media_popup_handle_click(app->pointer_x, app->pointer_y);
+        return;
+    }
+    if (media_popup_is_catcher_surface(app->pointer_over_surface)) {
+        media_popup_close();
+        return;
+    }
     if (sysmon_info_popup_is_menu_surface(app->pointer_over_surface)) {
         // Read-only content -- a click lands here but there's nothing to
         // dispatch to, unlike the two interactive popups above; absorbed so
@@ -128,8 +140,9 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
     // branches on `button` internally instead (the tray's has-menu-overrides-
     // button rule; volume/mic's left-mutes/right-opens-dropdown rule;
     // cpu/gpu/mem's right-opens-dropdown-only rule, no left-click action at
-    // all -- see modules/cpu/cpu.h), so all of them are called unconditionally
-    // here regardless of which button fired.
+    // all -- see modules/cpu/cpu.h; media's own left-toggles-play/right-
+    // opens-dropdown rule, matching volume/mic's shape exactly), so all of
+    // them are called unconditionally here regardless of which button fired.
     if (app->pointer_over) {
         if (button == BTN_LEFT) {
             workspaces_handle_click(app->pointer_over, app->pointer_x, app->pointer_y);
@@ -141,6 +154,7 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
         cpu_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         gpu_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         mem_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
+        media_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
     }
 }
 

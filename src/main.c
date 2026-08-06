@@ -16,7 +16,9 @@
 #include "dbus/sni_watcher_service.h"
 #include "hyprland/ipc_events.h"
 #include "modules/clock/clock.h"
+#include "modules/media/media_popup.h"
 #include "modules/workspaces/workspaces.h"
+#include "mpris/mpris_client.h"
 #include "sysmon/sysmon_client.h"
 #include "wayland/context.h"
 #include "wayland/event_loop.h"
@@ -174,6 +176,12 @@ int main(void) {
             if (!sni_watcher_service_try_start(bus)) {
                 sni_watcher_register_host(bus);
             }
+            // Media (MPRIS): reuses this same session-bus connection rather
+            // than opening a second one -- see mpris/mpris_client.h's own
+            // doc comment. No separate "degrade gracefully" branch needed
+            // here beyond the tray's own: mpris_client_init() just finds
+            // zero players if nothing's playing, the same as an empty tray.
+            mpris_client_init(bus, &app);
             // Flushes the registration/subscription requests just made above and
             // re-derives dbus_fd's real interest mask/timeout, same as every
             // other dbus_loop_pump() call later in the main loop.
@@ -229,6 +237,11 @@ int main(void) {
                 // which is required or it stays permanently "readable".
                 (void)!read(timer_fd, &expirations, sizeof(expirations));
                 clock_tick();
+                // Piggybacks on this already-ticking 1s timer rather than
+                // adding a new poll source -- see media_popup_tick()'s own
+                // doc comment for why MPRIS position needs polling at all.
+                // A no-op unless the media popup is actually open.
+                media_popup_tick();
                 output_mark_all_dirty(&app);
             } else if (fd == sysmon_timer_fd) {
                 uint64_t expirations;
@@ -250,6 +263,17 @@ int main(void) {
                     (void)!read(dbus_timeout_fd, &expirations, sizeof(expirations));
                 }
                 dbus_loop_pump(bus, epoll_fd, dbus_fd, dbus_timeout_fd);
+                // Cheap no-op unless the media popup is actually open (see
+                // media_popup_refresh_if_open()'s own doc comment). The bar
+                // widget itself doesn't need an equivalent unconditional
+                // output_mark_all_dirty() call here -- unlike pulse_client's
+                // notify-fd below (only ever signaled on an actual cache
+                // change), this fd is ready on *any* D-Bus activity, most of
+                // which doesn't touch tray or MPRIS state, so each module's
+                // own signal handler (sni_registry.c's, mpris_client.c's)
+                // already calls output_mark_all_dirty() itself, granularly,
+                // only when something actually changed.
+                media_popup_refresh_if_open();
             } else if (pulse_ok && fd == pulse_fd) {
                 // The cache itself is already updated by the time this fires
                 // (pulse_client's background thread writes to it before

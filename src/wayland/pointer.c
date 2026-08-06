@@ -13,6 +13,8 @@
 #include "modules/mic/mic.h"
 #include "modules/network/network.h"
 #include "modules/network/network_info_popup.h"
+#include "modules/powermenu/arch_logo.h"
+#include "modules/powermenu/power_menu.h"
 #include "modules/tray/tray.h"
 #include "modules/tray/tray_context_menu.h"
 #include "modules/volume/volume.h"
@@ -70,6 +72,8 @@ static void pointer_motion(void *data, struct wl_pointer *pointer, uint32_t time
         device_popup_handle_motion(app->pointer_x, app->pointer_y);
     } else if (media_popup_is_menu_surface(app->pointer_over_surface)) {
         media_popup_handle_motion(app->pointer_x, app->pointer_y);
+    } else if (power_menu_is_menu_surface(app->pointer_over_surface)) {
+        power_menu_handle_motion(app->pointer_over_surface, app->pointer_x, app->pointer_y);
     }
 }
 
@@ -88,6 +92,14 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
     // popup kinds are independent singletons (see audio/device_popup.h) --
     // having both open at once isn't defended against here, just checked for
     // in whichever order happens to be written below.
+    if (power_menu_is_menu_surface(app->pointer_over_surface)) {
+        // Unlike every other popup here, the power menu's own full-screen
+        // surface doubles as its own click-catcher -- one call handles both
+        // "landed on a button" and "landed on the dimmed background" (see
+        // power_menu_handle_click()'s own doc comment).
+        power_menu_handle_click(app->pointer_over_surface, app->pointer_x, app->pointer_y);
+        return;
+    }
     if (tray_context_menu_is_menu_surface(app->pointer_over_surface)) {
         tray_context_menu_handle_click(app->pointer_x, app->pointer_y);
         return;
@@ -153,12 +165,16 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
     // all -- see modules/cpu/cpu.h; media's own left-toggles-play/right-
     // opens-dropdown rule, matching volume/mic's shape exactly; network's
     // own right-opens-dropdown-only rule, matching cpu/gpu/mem's shape
-    // exactly), so all of them are called unconditionally here regardless of
+    // exactly; arch_logo's own left-click-only rule, checked internally the
+    // same way cpu/gpu/mem/network check their own button rules internally
+    // rather than being pre-filtered here like workspaces_handle_click()
+    // is), so all of them are called unconditionally here regardless of
     // which button fired.
     if (app->pointer_over) {
         if (button == BTN_LEFT) {
             workspaces_handle_click(app->pointer_over, app->pointer_x, app->pointer_y);
         }
+        arch_logo_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         tray_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         volume_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         mic_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);

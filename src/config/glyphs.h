@@ -75,6 +75,19 @@
 #define GLYPH_ARROW_DOWN 0x2193u
 #define GLYPH_ARROW_UP   0x2191u
 
+// Arch logo + power menu icons, codepoints derived by reading them directly
+// out of the reference ArchLogoWidget.qml/PowerMenu.qml source via Python's
+// ord() (in PowerMenu.qml's own on-screen order: Logout, Restart,
+// Shutdown), not retyped by eye -- confirmed present in
+// JetBrainsMonoNerdFont-Regular.ttf's cmap via fontTools, same as every
+// other glyph in this file. GLYPH_ICON_ARCH_LOGO is in the font's ordinary
+// (BMP) Private Use Area, not the Supplementary PUA every other glyph here
+// lives in -- glyph_utf8() already handles both ranges correctly.
+#define GLYPH_ICON_ARCH_LOGO 0xF303u  // nf-linux-archlinux
+#define GLYPH_ICON_LOGOUT    0xF0343u // nf-md-logout
+#define GLYPH_ICON_RESTART   0xF0453u // nf-md-restart
+#define GLYPH_ICON_SHUTDOWN  0xF0425u // nf-md-power
+
 // Encodes a single Unicode codepoint as UTF-8 into `out`, nul-terminated.
 // `out` must have room for at least 5 bytes (up to 4 bytes of encoding + '\0').
 // Returns the number of encoded bytes (excluding the terminator).

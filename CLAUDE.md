@@ -14,9 +14,8 @@ module, rather than guessing at parity).
 
 This is being built in **stages, not all at once**. The current state has: bar shell,
 workspace indicator, clock, system tray, volume/mic, CPU/GPU/memory monitoring, a
-media (MPRIS) player widget, and a network/Wi-Fi status widget. The power-menu
-overlay is still unimplemented — see "Scope / roadmap" below before assuming a
-module exists.
+media (MPRIS) player widget, a network/Wi-Fi status widget, and a power-menu
+overlay. See "Scope / roadmap" below before assuming a module exists.
 
 ## Running / testing changes
 
@@ -85,6 +84,15 @@ protocol errors or Hyprland IPC failures.
   shows up specifically on a Wi-Fi-only report. `nmcli device wifi` / `iwctl
   station wlan0 show` (whichever network manager is in use) are the
   equivalent live cross-reference on a machine that does have Wi-Fi.
+- `pkill -SIGUSR1 -x customBar` (with the bar already running) is the
+  cross-reference for the power menu's Hyprland-keybind trigger path — the
+  same command the Hyprland keybind itself runs (see "Power menu" below for
+  the exact `hyprland.conf` line), so this exercises the identical code path
+  without needing to actually add the keybind first. Confirmed this pixel-
+  exact against a real `grim` screenshot during development: sampling the
+  rendered PNG's own RGB values at each button's border landed exactly on
+  `COLORS.yellow`/`sky`/`red`'s known hex values, at exactly the expected
+  150×150 size with a 24px gap between buttons.
 - **Multi-monitor debugging gotcha, hit directly during this module's own
   development**: this machine's two outputs don't necessarily bind in the
   same left-to-right order `hyprctl monitors -j` lists them in (`Output.index`
@@ -264,11 +272,24 @@ customBar/
         │                         structurally the network-domain twin of
         │                         sysmon_info_popup.c, but right-anchored since
         │                         this module lives in the bar's right region
-        └── tray/
-            ├── tray.c            icon row render + hit-rect recording + click
-            │                     routing (Activate vs open-menu)
-            └── tray_context_menu.c   popup layer-surface + click-catchers +
-                                  hover/click handling for the DBusMenu entries
+        ├── tray/
+        │   ├── tray.c            icon row render + hit-rect recording + click
+        │   │                     routing (Activate vs open-menu)
+        │   └── tray_context_menu.c   popup layer-surface + click-catchers +
+        │                         hover/click handling for the DBusMenu entries
+        └── powermenu/            the logout/restart/shutdown overlay (see "Power
+                                  menu" below) -- the bar's own leftmost item
+                                  doubles as its click trigger, matching the
+                                  reference's own ArchLogoWidget/PowerMenuState
+                                  split
+            ├── arch_logo.c        leftmost bar item: a bordered-less "cutout"
+            │                     box (solid sapphire fill, mantle-colored glyph)
+            │                     + hit-rect + click(toggle) handling
+            └── power_menu.c       one full-screen zwlr_layer_surface_v1 per
+                                  output (LAYER_OVERLAY), each showing its own
+                                  centered Logout/Restart/Shutdown row -- opened
+                                  by arch_logo.c's click *or* main.c's SIGUSR1
+                                  signalfd handler (the Hyprland keybind trigger)
 ```
 
 ### Core data model
@@ -300,23 +321,26 @@ customBar/
   `modules/mem/mem.h`, `modules/clock/clock.h` /
   `modules/clock/clock_calendar_popup.h`, `modules/media/media.h` /
   `modules/media/media_popup.h`, `modules/network/network.h` /
-  `modules/network/network_info_popup.h`, `audio/device_popup.h`, and
-  `sysmon/sysmon_info_popup.h` for click/scroll routing — a flat list of
-  explicit call sites, not a generic dispatch table (see "D-Bus / system
-  tray" below for why that still isn't worth building; now at N=10 clickable
-  bar-surface modules plus 6 popup kinds, still cheap enough as a flat list
-  that the indirection wouldn't pay for itself).
+  `modules/network/network_info_popup.h`,
+  `modules/powermenu/arch_logo.h` / `modules/powermenu/power_menu.h`,
+  `audio/device_popup.h`, and `sysmon/sysmon_info_popup.h` for click/scroll
+  routing — a flat list of explicit call sites, not a generic dispatch table
+  (see "D-Bus / system tray" below for why that still isn't worth building;
+  now at N=11 clickable bar-surface modules plus 7 popup kinds, still cheap
+  enough as a flat list that the indirection wouldn't pay for itself).
 - **`AppContext.pointer_over` vs `pointer_over_surface`**: `pointer_over_surface`
   is the raw `wl_surface*` currently under the pointer, always kept up to date.
   `pointer_over` is the `Output*` it resolves to *if* it's one of the bar's own
   surfaces — `NULL` for any popup or click-catcher surface, since those are
   never stored on any `Output` (only `bar_surface.c`-owned surfaces are).
-  `pointer.c`'s button handler checks each popup kind's surfaces first (the
-  tray context menu's, then the audio device popup's, then the sysmon info
-  popup's, then the media popup's, then the network info popup's — each via
-  its own `_is_menu_surface()` / `_is_catcher_surface()` pair), *then* falls
-  back to the `Output`-keyed path — a popup/catcher surface never matches an
-  `Output`, so this ordering is required, not just tidier.
+  `pointer.c`'s button handler checks each popup kind's surfaces in turn (the
+  power menu's, the tray context menu's, the audio device popup's, the
+  sysmon info popup's, the media popup's, then the network info popup's —
+  each via its own `_is_menu_surface()` / `_is_catcher_surface()` pair;
+  since every popup kind's surfaces are disjoint from every other's, the
+  order among them doesn't actually matter functionally), *then* falls back
+  to the `Output`-keyed path — a popup/catcher surface never matches an
+  `Output`, so checking the popup kinds first is required, not just tidier.
 
 ### Wayland plumbing gotchas (hit and fixed during initial implementation)
 
@@ -1110,6 +1134,160 @@ the identical 5000ms interval).
   above for the cross-reference commands to use if this ever needs checking on
   Wi-Fi-capable hardware.
 
+## Power menu
+
+The reference bar's logout/restart/shutdown overlay is its own second full shell
+"part" (`powermenu/`, alongside `bar/`), triggered by `bar/modules/ArchLogoWidget.qml`
+— the bar's own leftmost item, doing double duty as both a widget and a button —
+toggling a shared `PowerMenuState` singleton. This project reproduces that same
+split: `modules/powermenu/arch_logo.c` is the bar-surface trigger,
+`modules/powermenu/power_menu.c` is the overlay itself, and both only ever talk to
+each other through `power_menu_toggle()` — matching `PowerMenuState.toggle()`
+exactly, with no separate `_open()`/`_close()` pair exposed, since every trigger
+this bar has (the button, and the keybind below) always wants toggle semantics.
+
+- **`ArchLogoWidget.qml`'s "cutout" styling is deliberately *not* routed through
+  the usual bordered module-box look** every other widget uses: a solid
+  `COLORS.sapphire` fill with the Arch glyph rendered in `COLORS.mantle` (the
+  bar's own background), no border at all (`module_box_draw_rect()` called with
+  `border_width = 0.0`) — so the logo reads as a shape cut out of a solid block,
+  not colored text on a dark box. `sapphire` and `red` (used below for the
+  Shutdown button) were both still fully unclaimed by any other module's own
+  accent color at the time this was added — unlike the network module's own
+  forced `teal`-instead-of-`green` substitution (see "Network / Wi-Fi" above),
+  no collision to work around here.
+- **The Arch logo's box is sized from the glyph's *ink* extent, not the
+  reference's own `implicitWidth: label.implicitWidth + 8`** — a real bug
+  caught live (the user reported "the arch logo is cut off"), not a
+  hypothetical. `module_box_measure_text()`'s underlying
+  `pango_layout_get_pixel_size()` returns Pango's *logical* extent (roughly
+  the cursor-advance width), which for most glyphs comfortably contains the
+  glyph's own visible ink once the usual `+12px` pad is added — but a direct
+  Pango probe (`pango_layout_get_pixel_extents()`, which returns both ink and
+  logical rects) showed this specific glyph draws ink **14px wide at 14px
+  bold, while its own logical/advance width is only 8px** — a 6px gap, far
+  larger than any other glyph in this project hits (the CPU icon, for
+  comparison, is 11px ink vs. 8px logical — comfortably absorbed by the usual
+  padding). Sized from the *logical* width with the reference's own tight
+  `+8px` pad, roughly 2px of the glyph's own mantle-colored "cutout" ink fell
+  outside the sapphire box, where it blended invisibly into the matching
+  background — visually truncating the logo. Fixed by adding
+  `module_box_measure_text_ink()` (`render/module_box.c`/`.h`) and sizing
+  this one box from that instead, plus reverting to the standard `+12px` pad
+  (no longer pixel-matching the reference's own tighter number, since that
+  number was tuned against the wrong measurement to begin with).
+  `module_box_draw_text_centered()`'s own internal centering still uses the
+  *logical* width (via `module_box_measure_text`), which is fine — the wider
+  box computed from the ink extent gives it enough slack on both sides
+  regardless.
+- **One full-screen `zwlr_layer_surface_v1` per currently-known output**
+  (`LAYER_OVERLAY`, all four edges anchored, no margin, matching the reference's
+  own `Variants { model: Quickshell.screens }` — each screen gets its own
+  `PanelWindow` with its own centered button row, not one surface spanning a
+  combined virtual desktop) — same `popup_surface_create(..., 0, 0, ...,
+  ANCHOR_TOP|BOTTOM|LEFT|RIGHT, ...)` shape every other popup's *click-catcher*
+  surfaces already use (see `sysmon/sysmon_info_popup.c`'s `create_catchers()`),
+  except this surface actually draws visible content instead of staying
+  transparent. The real per-output pixel size is read back from `Output.width`/
+  `Output.height` (already tracked from `wl_output`'s own `mode` event) rather
+  than from the popup surface's `configure` callback, since `popup_surface.c`
+  doesn't expose that size back to its caller — safe here because a
+  full-anchored, zero-margin popup surface's real size is always exactly its
+  own output's size.
+- **The overlay's own full-screen surface doubles as its own click-catcher** —
+  the one place in this project where a popup doesn't need `tray_context_menu.c`'s
+  usual separate transparent catcher-surface-underneath-a-smaller-menu shape,
+  since the menu content already covers the entire output by itself.
+  `power_menu_handle_click()` hit-tests the three buttons directly; landing on
+  one triggers that action, landing anywhere else (the dimmed background) just
+  closes the menu — both paths call `power_menu_toggle()`'s own internal
+  `close_overlay()` unconditionally first, matching the reference's own
+  `PowerMenuState.close()` called before dispatching whichever action fired.
+- **Background dim is 30% alpha over `COLORS.crust`, painted with
+  `CAIRO_OPERATOR_SOURCE`, not the default `OVER`**
+  (`cairo_set_source_rgba(cr, COLORS.crust.r, ..., 0.302)`), matching the
+  reference's own `"#4D" + Config.colors.crust.substring(1)` (`0x4D / 255 ≈
+  0.302`) — the alpha value confirmed pixel-exact against a real screenshot
+  during development (`grim` + sampling the rendered PNG's own RGB values
+  landed exactly on `COLORS.yellow`/`sky`/`red`'s known hex values and each
+  button's exact 150×150 + 24px-gap geometry), but the *operator* was a real
+  bug caught live (the user reported the background getting darker on hover),
+  not a hypothetical. This surface is backed by one of two ping-ponged shm
+  buffers (`wayland/shm_buffer.c`), so whichever buffer a given redraw lands
+  in still holds *its own* previous frame's content, not a blank slate — every
+  other popup in this project either paints something fully opaque (which
+  safely overwrites stale content under any operator) or is genuinely
+  transparent (`draw_transparent()`, which already used `SOURCE` for exactly
+  this reason), so this dim layer was the first *translucent* full-surface
+  paint in the codebase, and the first place this went unnoticed. Painted with
+  the default `OVER`, every hover-triggered `redraw_all()` call (see below)
+  blended another 30%-alpha layer on top of whatever that buffer already had
+  — confirmed with a standalone test replicating the exact scenario: 5
+  redraws into the same un-cleared buffer climbed from alpha 77/255 to
+  212/255 under `OVER`, while `SOURCE` held constant at 77/255 (≈30%) across
+  all 5. `SOURCE` replaces the destination outright regardless of its prior
+  contents, which is what a "redraw this popup's entire content from
+  scratch" call should always do.
+- **Buttons are 150×150, not the reference's own 180×180** — matches this
+  project's established "everywhere else runs a bit more compact than the
+  reference's Qt-driven sizing" precedent (see `modules/media/media_popup.c`'s
+  own thumbnail scale-down for the same reasoning), even though a full-screen
+  overlay has plenty of room to spare. `FONT.display` (a new size tier, 32px —
+  the reference's own `config.js` uses 40) was added to `config.h`'s
+  `FontConfig` specifically for the button icons, matching the reference's own
+  dedicated `font.sizes.display` tier that (per the reference's own `CLAUDE.md`)
+  "exists only for this one use."
+- **Explicit per-button code (Logout/Restart/Shutdown), not a data-driven
+  table** — a `static const` table can't hold `COLORS.*` values at all (`COLORS`
+  is `extern const`, not a compile-time constant, so referencing it inside a
+  static initializer is a compile error), and three buttons is small enough
+  that explicit code reads at least as clearly as a table would anyway,
+  matching this project's existing preference for a flat list over indirection
+  at this kind of N (`wayland/pointer.c`'s own click-routing list is the same
+  shape).
+- **Actions**: Logout sends `dispatch exit` over Hyprland's request socket
+  (`hyprland_dispatch_exit()`, `hyprland/dispatch.c`) — unlike
+  `hyprland_dispatch_focus_workspace()`'s own Lua-vs-classic dual-form probing,
+  `exit` takes no arguments at all, so there's no argument-syntax ambiguity
+  between the two config styles to work around; the plain classic form works on
+  both. Restart/Shutdown run `systemctl reboot` / `systemctl poweroff` via a
+  plain blocking `system()` call — acceptable here (unlike a bar module doing
+  this on a recurring poll, which this project avoids elsewhere) because it's a
+  one-shot, user-triggered action that's about to end the session anyway; a
+  few hundred milliseconds of the event loop blocking on it is irrelevant.
+- **Hyprland-keybind trigger, via `SIGUSR1` and a `signalfd`**: since customBar
+  has no IPC server of its own for an external command to message into (unlike
+  Quickshell, which has `qs ipc call`), `main.c` blocks `SIGUSR1` via
+  `sigprocmask()` and reads it back through a `signalfd` registered on the same
+  epoll loop as everything else — the same "just another readable fd, no
+  async-signal-safety concerns" shape every other event source in this project
+  already uses, and notably *not* the classic `signal()` + flip-a-flag pattern
+  `g_should_exit` (SIGINT/SIGTERM) uses, since that pattern only works for
+  "the main loop should notice eventually," not "call `power_menu_toggle()`
+  right now." Blocking happens early in `main()`, before `pulse_client_init()`
+  spawns its own background thread — POSIX signal masks are inherited at
+  thread-creation time, so this ensures that thread's mask blocks `SIGUSR1`
+  too (the correct multi-threaded-process pattern for `signalfd`: block
+  everywhere, only the thread holding the `signalfd` itself ever actually
+  reads a pending instance). Add a keybind like this to `hyprland.conf` to
+  wire it up:
+  ```
+  bind = SUPER, Escape, exec, pkill -SIGUSR1 -x customBar
+  ```
+  (any keybind works — `SUPER, Escape` is just one reasonable choice; `pkill
+  -x` matches the process name exactly, so it won't accidentally signal an
+  unrelated process with "customBar" as a substring of its own command line).
+- **The power menu doesn't coordinate with any other popup kind** — same
+  undefended, rare v1 edge case as every other popup pair's own equivalent
+  limitation elsewhere in this bar (see "PulseAudio / volume & mic" above for
+  the fullest explanation of why). In practice this matters more here than
+  for the others, since the power menu is a full-screen modal that visually
+  sits on top of everything (`LAYER_OVERLAY`, like every other popup) but
+  doesn't force any other already-open popup closed first — opening the power
+  menu while e.g. the tray context menu is already open leaves both
+  technically open at once, though the power menu's own full-screen surface
+  will visually cover the other in practice.
+
 ## Conventions
 
 - **This project is commented far more heavily than this assistant's usual
@@ -1295,6 +1473,24 @@ the identical 5000ms interval).
 - **Network: the popup doesn't coordinate with any other popup kind** — same
   undefended, rare v1 edge case as every other module's own equivalent
   limitation above.
+- **Power menu: no keyboard handling at all — Escape doesn't close it**, unlike
+  the reference's own `Keys.onEscapePressed`. This project has no keyboard
+  input plumbing anywhere (no `wl_keyboard` binding, no libxkbcommon
+  dependency), and adding one purely to support Escape-to-close here — when
+  click-outside-to-close (the same dismiss mechanism every other popup in
+  this bar already uses) already covers the primary use case — wasn't judged
+  worth the new subsystem for v1. Click the dimmed background, or either
+  trigger again (the button, or the SIGUSR1 keybind), to dismiss instead.
+- **Power menu: the two subprocess-launching actions (Restart/Shutdown) have
+  no confirmation step** — a single click immediately runs `systemctl
+  reboot`/`systemctl poweroff`, matching the reference exactly (it has no
+  confirmation dialog either), so this is parity, not a regression, but
+  worth knowing if a stray click is a real concern on a given setup.
+- **Power menu: doesn't coordinate with any other popup kind** — see "Power
+  menu" above for why this one's version of the usual undefended-popup-
+  coordination limitation matters slightly more than the others (the overlay
+  is full-screen and visually covers whatever else was open, without
+  actually closing it).
 
 ## Scope / roadmap
 
@@ -1309,16 +1505,18 @@ accent color and right-click info dropdown, split from the reference's single
 combined widget per explicit user request — see "System monitor (CPU/GPU/memory)"),
 a media (MPRIS) player widget (centered in the bar, click-to-play-pause, a
 right-click dropdown listing every tracked player with prev/play-pause/next
-controls — see "Media (MPRIS)"), and a network/Wi-Fi status widget (default-route
+controls — see "Media (MPRIS)"), a network/Wi-Fi status widget (default-route
 interface display with a live rx/tx rate, a right-click dropdown with
-interface/IP/gateway/MAC/DNS details — see "Network / Wi-Fi").
+interface/IP/gateway/MAC/DNS details — see "Network / Wi-Fi"), and a power-menu
+overlay (an Arch-logo bar button plus a `SIGUSR1`-driven Hyprland keybind, both
+toggling a full-screen Logout/Restart/Shutdown overlay — see "Power menu").
 
-Not yet implemented (planned for later passes): the power-menu overlay. When
-adding it, follow the existing module shape: a `modules/<name>/` directory, a
-render function taking
+Not yet implemented: nothing from the original reference-bar feature set remains
+unported. Future additions should follow the existing module shape: a
+`modules/<name>/` directory, a render function taking
 `(cairo_t*, ..., x, box_top, box_height)` and returning the next x coordinate, and
 — if it needs live data — either a Hyprland IPC event hook (if relevant) or its
 own poll/event source integrated into `main.c`'s epoll loop the same way the
 clock's timerfd, Hyprland's event socket, the tray's/media module's shared D-Bus
-connection, the volume/mic modules' PulseAudio connection, and the CPU/GPU/memory
-modules' own 5-second timerfd are.
+connection, the volume/mic modules' PulseAudio connection, the CPU/GPU/memory
+modules' own 5-second timerfd, and the power menu's own SIGUSR1 signalfd are.

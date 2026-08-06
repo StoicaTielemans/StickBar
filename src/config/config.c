@@ -58,4 +58,10 @@ const FontConfig FONT = {
                   // height would already clip against the bar's own edges.
     .heading = 14,
     .title = 16,
+    // Reference config.js uses 40 -- scaled down slightly to 32, matching this
+    // project's established "everywhere else runs a bit more compact than the
+    // reference's Qt-driven sizing" precedent (see modules/media/media_popup.c's
+    // own thumbnail scale-down for the same reasoning), even though a
+    // full-screen power menu has plenty of room to spare.
+    .display = 32,
 };

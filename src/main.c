@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/epoll.h>
+#include <sys/signalfd.h>
 #include <sys/timerfd.h>
 #include <unistd.h>
 
@@ -17,6 +18,7 @@
 #include "hyprland/ipc_events.h"
 #include "modules/clock/clock.h"
 #include "modules/media/media_popup.h"
+#include "modules/powermenu/power_menu.h"
 #include "modules/workspaces/workspaces.h"
 #include "mpris/mpris_client.h"
 #include "network/network_client.h"
@@ -77,6 +79,39 @@ static int create_sysmon_timer(void) {
     return fd;
 }
 
+// Delivers SIGUSR1 through a signalfd (registered on the same epoll loop as
+// everything else) rather than a classic signal() handler -- this is the
+// Hyprland-keybind trigger for the power menu (`pkill -SIGUSR1 -x customBar`
+// or equivalent; see CLAUDE.md's "Power menu" section for the exact keybind
+// line), and unlike g_should_exit's flip-a-flag-and-let-the-main-loop-notice
+// approach, signalfd lets this be handled as just another readable fd with
+// no async-signal-safety concerns at all, since nothing runs until the main
+// loop's own read() of it. SIGUSR1 must be blocked via sigprocmask() first --
+// signalfd only ever reports signals that are also blocked from their normal
+// asynchronous delivery path; otherwise it would either be delivered async
+// (unsafe to act on directly) or, since SIGUSR1's default disposition is to
+// terminate the process, kill the bar the first time the keybind is used.
+// Called early in main(), before pulse_client_init() spawns its own
+// background thread -- POSIX signal masks are per-thread but inherited at
+// creation time, so blocking SIGUSR1 here ensures that thread inherits the
+// same blocked mask too (the correct pattern for signalfd in a
+// multi-threaded process: block everywhere, only the thread holding the
+// signalfd itself ever actually consumes a pending instance).
+static int create_powermenu_signal_fd(void) {
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGUSR1);
+    if (sigprocmask(SIG_BLOCK, &mask, NULL) < 0) {
+        perror("customBar: sigprocmask(SIGUSR1)");
+        return -1;
+    }
+    int fd = signalfd(-1, &mask, SFD_CLOEXEC | SFD_NONBLOCK);
+    if (fd < 0) {
+        perror("customBar: signalfd(SIGUSR1)");
+    }
+    return fd;
+}
+
 // Drops the current Hyprland event connection (if any) and tries once to
 // reconnect, re-registering the new fd on epoll. This is the "one reconnect
 // attempt, then disable the module" policy from the project plan -- it lives here
@@ -107,6 +142,10 @@ int main(void) {
     if (!wayland_connect(&app)) {
         return 1;
     }
+    // Stashes `app` for power_menu_toggle() to use when opening -- see
+    // power_menu_init()'s own doc comment for why it needs this (the SIGUSR1
+    // trigger path below has no Output/AppContext of its own to hand over).
+    power_menu_init(&app);
 
     // Populate an initial Hyprland snapshot, clock string, and sysmon snapshot
     // before the first frame renders, then mark every already-bound output
@@ -143,6 +182,17 @@ int main(void) {
     int sysmon_timer_fd = create_sysmon_timer();
     if (sysmon_timer_fd < 0 || !event_loop_add_fd(epoll_fd, sysmon_timer_fd, EPOLLIN)) {
         return 1;
+    }
+
+    // Power menu (Hyprland keybind trigger): an optional module, same
+    // "degrade gracefully" convention as every other fd registered below --
+    // if signalfd() itself fails for some reason, the bar still runs fine,
+    // just without a SIGUSR1 trigger (the Arch logo button still works
+    // regardless, since it doesn't go through this fd at all).
+    int powermenu_signal_fd = create_powermenu_signal_fd();
+    if (powermenu_signal_fd >= 0 && !event_loop_add_fd(epoll_fd, powermenu_signal_fd, EPOLLIN)) {
+        close(powermenu_signal_fd);
+        powermenu_signal_fd = -1;
     }
 
     HyprlandEvents *hypr_events = hyprland_events_connect();
@@ -264,6 +314,16 @@ int main(void) {
                 // NetworkMonitor.qml's own identical 5000ms interval.
                 network_client_poll();
                 output_mark_all_dirty(&app);
+            } else if (powermenu_signal_fd >= 0 && fd == powermenu_signal_fd) {
+                struct signalfd_siginfo info;
+                // Drains every pending instance (there's realistically ever
+                // only one, since SIGUSR1 isn't queued/repeated the way a
+                // real-time signal would be) -- required regardless, or the
+                // fd stays permanently "readable" the same way a timerfd
+                // does if its own expiration count isn't read.
+                while (read(powermenu_signal_fd, &info, sizeof(info)) == sizeof(info)) {
+                }
+                power_menu_toggle();
             } else if (hypr_events && fd == hypr_fd) {
                 if (!hyprland_events_pump(hypr_events, &app)) {
                     hypr_broke = true;
@@ -325,6 +385,9 @@ int main(void) {
     }
     close(timer_fd);
     close(sysmon_timer_fd);
+    if (powermenu_signal_fd >= 0) {
+        close(powermenu_signal_fd);
+    }
     close(epoll_fd);
 
     // Explicitly tear down every output's bar surface (releasing its layer-shell

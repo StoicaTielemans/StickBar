@@ -8,6 +8,7 @@
 #include "modules/mem/mem.h"
 #include "modules/mic/mic.h"
 #include "modules/network/network.h"
+#include "modules/powermenu/arch_logo.h"
 #include "modules/tray/tray.h"
 #include "modules/volume/volume.h"
 #include "modules/workspaces/workspaces.h"
@@ -19,13 +20,13 @@ void render_output(cairo_t *cr, Output *output, int width, int height) {
     cairo_set_source_rgba(cr, COLORS.mantle.r, COLORS.mantle.g, COLORS.mantle.b, COLORS.mantle.a);
     cairo_paint(cr);
 
-    // Left region: workspace pills flush against the left edge, then CPU/GPU/
-    // memory -- matches the reference bar's actual leftLayout order
-    // (ArchLogoWidget, HyprlandWindows, SystemMonitorWidget; ArchLogoWidget
-    // isn't built here, and SystemMonitorWidget's combined CPU/GPU/MEM stats
-    // are split into three separate modules per explicit user request, kept
-    // in that same relative left-to-right order).
-    double workspaces_right_x = workspaces_render(cr, output, 0.0, 0.0, (double)height);
+    // Left region: matches the reference bar's actual leftLayout order --
+    // ArchLogoWidget (the power-menu trigger), then HyprlandWindows
+    // (workspaces), then SystemMonitorWidget's CPU/GPU/MEM stats, split into
+    // three separate modules per explicit user request but kept in that same
+    // relative left-to-right order.
+    double arch_logo_right_x = arch_logo_render(cr, output, 0.0, 0.0, (double)height);
+    double workspaces_right_x = workspaces_render(cr, output, arch_logo_right_x, 0.0, (double)height);
     double cpu_right_x = cpu_render(cr, output, workspaces_right_x, 0.0, (double)height);
     double gpu_right_x = gpu_render(cr, output, cpu_right_x, 0.0, (double)height);
     mem_render(cr, output, gpu_right_x, 0.0, (double)height);

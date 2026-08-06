@@ -110,6 +110,8 @@ sources = files(
   'src/network/network_client.c',
   'src/modules/network/network.c',
   'src/modules/network/network_info_popup.c',
+  'src/modules/powermenu/arch_logo.c',
+  'src/modules/powermenu/power_menu.c',
 )
 
 executable('customBar',

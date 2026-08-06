@@ -116,6 +116,20 @@ void module_box_measure_text(const char *text, int font_size_px, bool bold,
     g_object_unref(layout);
 }
 
+void module_box_measure_text_ink(const char *text, int font_size_px, bool bold,
+                                  double *out_w, double *out_h) {
+    PangoLayout *layout = pango_cairo_create_layout(measure_context());
+    pango_layout_set_font_description(layout, cached_font(font_size_px, bold));
+    pango_layout_set_text(layout, text, -1);
+
+    PangoRectangle ink;
+    pango_layout_get_pixel_extents(layout, &ink, NULL);
+    if (out_w) *out_w = (double)ink.width;
+    if (out_h) *out_h = (double)ink.height;
+
+    g_object_unref(layout);
+}
+
 void module_box_draw_text_centered(cairo_t *cr, double x, double y, double w, double h,
                                     const char *text, int font_size_px, bool bold, Color color) {
     PangoLayout *layout = pango_cairo_create_layout(cr);

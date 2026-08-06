@@ -22,4 +22,13 @@
 // beyond checking for an error prefix.
 void hyprland_dispatch_focus_workspace(int id);
 
+// Asks Hyprland to end the session ("dispatch exit"), same as the reference
+// power menu's own `Hyprland.dispatch("exit")` Logout button. Unlike
+// hyprland_dispatch_focus_workspace()'s own Lua-vs-classic dual-form
+// handling, "exit" takes no arguments at all, so there's no argument-syntax
+// ambiguity between a Lua-configured and a classic-configured Hyprland to
+// probe/cache around -- the plain classic form works on both. Fire-and-forget,
+// logging to stderr only if Hyprland's own response looks like an error.
+void hyprland_dispatch_exit(void);
+
 #endif

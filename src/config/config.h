@@ -43,6 +43,10 @@ typedef struct {
     int heading; // px, the audio device popup's default/mute marker icon column,
                  // matching the reference config.js's font.sizes.heading
     int title;   // px, large title text -- e.g. the year-calendar's year number
+    int display; // px, the power menu's own large button icons -- matches the
+                 // reference config.js's font.sizes.display, a size tier that
+                 // exists only for this one use (nothing else in the bar needs
+                 // text this large)
 } FontConfig;
 
 extern const FontConfig FONT;

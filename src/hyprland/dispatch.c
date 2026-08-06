@@ -82,3 +82,14 @@ void hyprland_dispatch_focus_workspace(int id) {
     }
     free(response);
 }
+
+void hyprland_dispatch_exit(void) {
+    char *response = hyprland_ipc_request("dispatch exit");
+    if (!response) {
+        return; // hyprland_ipc_request() already logged the failure itself
+    }
+    if (response_looks_like_error(response)) {
+        fprintf(stderr, "customBar: Hyprland rejected 'dispatch exit' (%s)\n", response);
+    }
+    free(response);
+}

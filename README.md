@@ -42,8 +42,9 @@ cairo/pangocairo — no GTK, no other UI toolkit.
 - **Network / Wi-Fi** — the interface currently holding your default route,
   live upload/download rate, right-click for a dropdown with IP/gateway/MAC/
   DNS details.
-
-Not implemented: a power-menu overlay (logout/restart/shutdown).
+- **Power menu** — click the Arch logo (the bar's own leftmost item) for a
+  full-screen Logout/Restart/Shutdown overlay, or trigger it from a Hyprland
+  keybind (see "Power menu keybind" below).
 
 For a much more detailed writeup of how each module works internally —
 including known limitations and deliberate deviations from the reference
@@ -102,6 +103,21 @@ It's safe to run alongside another bar (like the Quickshell one it's modeled
 on) while you're trying it out — it opens its own independent Wayland
 connection and doesn't share any socket or lock file with anything else.
 
+## Power menu keybind
+
+The power menu (Logout/Restart/Shutdown) opens from the Arch logo button on
+the bar, or from a Hyprland keybind — the bar listens for `SIGUSR1` and
+toggles the menu open/closed when it receives it. Add a line like this to
+your `hyprland.conf`:
+
+```
+bind = SUPER, Escape, exec, pkill -SIGUSR1 -x customBar
+```
+
+Any keybind works — `SUPER, Escape` above is just one reasonable choice.
+`pkill -x` matches the process name exactly, so it won't accidentally signal
+some unrelated process.
+
 ## Known rough edges
 
 This is a first pass, not a finished product — a non-exhaustive list of
@@ -110,7 +126,8 @@ what's missing or unpolished:
 - No network manager beyond the pure `/proc`/`/sys` reads (no way to change
   Wi-Fi networks, forget a connection, etc. from the bar itself).
 - No HiDPI/fractional-scale handling.
-- No power-menu overlay.
+- No keyboard handling anywhere, including in the power menu — Escape doesn't
+  close it; click the dimmed background instead.
 - Several popups don't coordinate with each other (opening two at once, from
   different modules, can leave both open).
 - Wi-Fi-specific code paths were written against the spec/reference logic but

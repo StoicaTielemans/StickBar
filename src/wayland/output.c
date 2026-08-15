@@ -61,7 +61,7 @@ static void handle_done(void *data, struct wl_output *wl_output) {
         // reconfiguration, e.g. resolution change) -- live-resizing an
         // already-created bar surface in response isn't implemented in this first
         // pass, so just note it rather than silently doing nothing.
-        fprintf(stderr, "customBar: output reconfigured after initial setup "
+        fprintf(stderr, "gridBar: output reconfigured after initial setup "
                          "(live resize not implemented yet, bar geometry may be stale)\n");
         return;
     }
@@ -82,7 +82,7 @@ static const struct wl_output_listener output_listener = {
 void output_add(AppContext *app, uint32_t name, uint32_t version) {
     Output *output = calloc(1, sizeof(Output));
     if (!output) {
-        perror("customBar: calloc(Output)");
+        perror("gridBar: calloc(Output)");
         return;
     }
 

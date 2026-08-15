@@ -11,7 +11,7 @@ sd_bus *dbus_loop_connect(void) {
     sd_bus *bus = NULL;
     int rc = sd_bus_open_user(&bus);
     if (rc < 0) {
-        fprintf(stderr, "customBar: failed to connect to the D-Bus session bus (%s) "
+        fprintf(stderr, "gridBar: failed to connect to the D-Bus session bus (%s) "
                          "-- system tray disabled for this run\n", strerror(-rc));
         return NULL;
     }
@@ -25,7 +25,7 @@ int dbus_loop_fd(sd_bus *bus) {
 int dbus_loop_create_timeout_fd(void) {
     int fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
     if (fd < 0) {
-        perror("customBar: timerfd_create(dbus timeout)");
+        perror("gridBar: timerfd_create(dbus timeout)");
     }
     return fd;
 }

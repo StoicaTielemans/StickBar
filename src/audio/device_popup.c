@@ -89,12 +89,36 @@ static void truncate_to_width(const char *text, double max_w, int font_px, bool 
         return;
     }
 
+    // Candidates are still cut on UTF-8 codepoint boundaries, not raw byte
+    // counts, even though every description seen from this project's own
+    // hardware is plain ASCII (see above) -- costs nothing here and keeps
+    // this copy safe if that ever isn't true, matching the fix applied to
+    // modules/media's own two copies of this same algorithm after track
+    // titles/artists (which do routinely contain multi-byte UTF-8) were
+    // observed producing Pango "Invalid UTF-8 string" warnings.
     size_t len = strlen(text);
-    size_t lo = 0, hi = len;
+    size_t offsets[DESC_BUF_SIZE];
+    size_t n = 0;
+    for (size_t i = 0; i < len && n < DESC_BUF_SIZE - 1;) {
+        offsets[n++] = i;
+        unsigned char c = (unsigned char)text[i];
+        size_t clen = 1;
+        if ((c & 0xE0) == 0xC0) {
+            clen = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            clen = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            clen = 4;
+        }
+        i += clen;
+    }
+    offsets[n] = len;
+
+    size_t lo = 0, hi = n;
     while (lo < hi) {
         size_t mid = (lo + hi + 1) / 2;
         char candidate[DESC_BUF_SIZE];
-        snprintf(candidate, sizeof(candidate), "%.*s...", (int)mid, text);
+        snprintf(candidate, sizeof(candidate), "%.*s...", (int)offsets[mid], text);
         module_box_measure_text(candidate, font_px, bold, &w, &h);
         if (w <= max_w) {
             lo = mid;
@@ -102,7 +126,7 @@ static void truncate_to_width(const char *text, double max_w, int font_px, bool 
             hi = mid - 1;
         }
     }
-    snprintf(out, out_size, "%.*s...", (int)lo, text);
+    snprintf(out, out_size, "%.*s...", (int)offsets[lo], text);
 }
 
 // Recomputes row geometry (and the truncated description/percent strings

@@ -196,7 +196,7 @@ static void poll_gpu(void) {
                      "r");
     if (!p) {
         if (!g_gpu_warned) {
-            fprintf(stderr, "customBar: failed to spawn nvidia-smi -- GPU module will show "
+            fprintf(stderr, "gridBar: failed to spawn nvidia-smi -- GPU module will show "
                              "\"unavailable\" for this run\n");
             g_gpu_warned = true;
         }
@@ -209,7 +209,7 @@ static void poll_gpu(void) {
 
     if (!got_line || rc != 0) {
         if (!g_gpu_warned) {
-            fprintf(stderr, "customBar: nvidia-smi query failed -- is an NVIDIA GPU/driver "
+            fprintf(stderr, "gridBar: nvidia-smi query failed -- is an NVIDIA GPU/driver "
                              "present? GPU module will show \"unavailable\" for this run\n");
             g_gpu_warned = true;
         }

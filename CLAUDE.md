@@ -22,7 +22,7 @@ overlay. See "Scope / roadmap" below before assuming a module exists.
 ```sh
 meson setup build      # first time only
 meson compile -C build
-./build/customBar
+./build/gridBar
 ```
 
 No test suite — this is a UI skeleton with no headless-testable logic beyond IPC
@@ -30,13 +30,13 @@ parsing. Validate changes by running the bar and observing it (it's fine to run
 alongside the existing Quickshell bar; see below), plus watching stderr for Wayland
 protocol errors or Hyprland IPC failures.
 
-- **Running alongside Quickshell is safe.** customBar opens its own independent
+- **Running alongside Quickshell is safe.** gridBar opens its own independent
   Wayland connection and surfaces; it shares no socket, lock file, or singleton
   resource with Quickshell. Both bars are `LAYER_TOP` with `exclusive_zone=20`
   anchored top/left/right, so wlroots (Hyprland) accumulates the zones additively —
   running both stacks them as two 20px strips (confirmed via
   `hyprctl monitors -j`'s `reserved` field going from `[0,20,0,0]` to `[0,40,0,0]`
-  while customBar runs, and back to `[0,20,0,0]` after it exits cleanly).
+  while gridBar runs, and back to `[0,20,0,0]` after it exits cleanly).
 - **Screenshotting for visual verification**: `grim` and `slurp` are installed.
   `grim -g "X,Y WxH" out.png` grabs a pixel region across the whole virtual screen
   (multi-monitor X offsets are cumulative, e.g. a 1920-wide first monitor puts the
@@ -84,7 +84,7 @@ protocol errors or Hyprland IPC failures.
   shows up specifically on a Wi-Fi-only report. `nmcli device wifi` / `iwctl
   station wlan0 show` (whichever network manager is in use) are the
   equivalent live cross-reference on a machine that does have Wi-Fi.
-- `pkill -SIGUSR1 -x customBar` (with the bar already running) is the
+- `pkill -SIGUSR1 -x gridBar` (with the bar already running) is the
   cross-reference for the power menu's Hyprland-keybind trigger path — the
   same command the Hyprland keybind itself runs (see "Power menu" below for
   the exact `hyprland.conf` line), so this exercises the identical code path
@@ -114,7 +114,7 @@ this is a deliberate, explicit choice (see "Conventions" below), not the minimum
 viable structure for a project this size.
 
 ```
-customBar/
+gridBar/
 ├── meson.build
 ├── protocols/
 │   └── wlr-layer-shell-unstable-v1.xml   # vendored, see "Protocol codegen" below
@@ -460,7 +460,7 @@ clear that way.
   from sd-bus's absolute `CLOCK_MONOTONIC` microsecond deadline to a relative
   `itimerspec` — this is what makes sd-bus's own call-timeout bookkeeping fire at
   all when it isn't running its own default event loop.
-- **customBar can act as either the StatusNotifierWatcher itself or a Host
+- **gridBar can act as either the StatusNotifierWatcher itself or a Host
   client of someone else's, decided automatically at startup, with no other
   code needing to know or care which mode is active.** `main.c` always tries
   `dbus/sni_watcher_service.c`'s `sni_watcher_service_try_start()` first — it
@@ -471,7 +471,7 @@ clear that way.
   `ProtocolVersion`, and the `StatusNotifierItem{,Un}Registered`/
   `StatusNotifierHostRegistered` signals) so items register directly with this
   process. Only if that name is already owned by something else (confirmed
-  live by running with Quickshell stopped entirely: customBar claimed
+  live by running with Quickshell stopped entirely: gridBar claimed
   `org.kde.StatusNotifierWatcher` itself, and both EasyEffects and Steam showed
   up in `RegisteredStatusNotifierItems` with no other Watcher-providing process
   running) does `main.c` fall back to the original, unchanged Host-only path in
@@ -492,7 +492,7 @@ clear that way.
     KDE convention EasyEffects uses.
   - **Auto-unregister on item process exit** subscribes to
     `org.freedesktop.DBus`'s `NameOwnerChanged(sss)` signal (this fires for
-    *every* bus-name ownership change system-wide, not just ones customBar
+    *every* bus-name ownership change system-wide, not just ones gridBar
     tracks — D-Bus match rules can't filter down to "only names I've
     registered items under," so every firing is checked against the registry).
     An empty `new_owner` means that name's previous owner disconnected;
@@ -500,15 +500,15 @@ clear that way.
     under that bus name (a single client registering more than one item is
     rare but possible, so this isn't just `sni_registry_remove()` on one
     (bus_name, path) pair). Without this, closing an app would leave its icon
-    stuck in the tray forever with no other signal ever telling customBar it's
+    stuck in the tray forever with no other signal ever telling gridBar it's
     gone — this path has no precedent elsewhere in the codebase to lean on and
     was the one part of this feature confirmed only via a live
     start-app/quit-app/watch-icon-disappear test, not by reasoning about the
     spec text.
   - **Not implementing the Watcher role was the prior limitation this removes.**
     A machine with genuinely nothing providing *any* Watcher (neither
-    customBar's own service nor a fallback like Quickshell/KDE/snixembed)
-    would previously have left the tray silently empty forever; now customBar
+    gridBar's own service nor a fallback like Quickshell/KDE/snixembed)
+    would previously have left the tray silently empty forever; now gridBar
     itself is that provider by default.
 - **Bus-name/object-path splitting**: `RegisteredStatusNotifierItems` and the
   `StatusNotifierItem{,Un}Registered` signals give strings like
@@ -543,7 +543,7 @@ clear that way.
     specifically IconPixmap-shaped problem, and applying the same heuristic to
     a normal multi-color raster app logo loaded from an icon theme file risks
     wrongly recoloring a legitimately monochrome icon. Confirmed working live:
-    with Quickshell down (see below) and customBar as its own Watcher,
+    with Quickshell down (see below) and gridBar as its own Watcher,
     EasyEffects' tray icon renders in this bar's light `COLORS.text` instead of
     its dim baked-in color, while Steam's icon (no IconPixmap at all, resolved
     via the PNG fallback instead) is unaffected.
@@ -1255,7 +1255,7 @@ this bar has (the button, and the keybind below) always wants toggle semantics.
   this on a recurring poll, which this project avoids elsewhere) because it's a
   one-shot, user-triggered action that's about to end the session anyway; a
   few hundred milliseconds of the event loop blocking on it is irrelevant.
-- **Hyprland-keybind trigger, via `SIGUSR1` and a `signalfd`**: since customBar
+- **Hyprland-keybind trigger, via `SIGUSR1` and a `signalfd`**: since gridBar
   has no IPC server of its own for an external command to message into (unlike
   Quickshell, which has `qs ipc call`), `main.c` blocks `SIGUSR1` via
   `sigprocmask()` and reads it back through a `signalfd` registered on the same
@@ -1272,11 +1272,11 @@ this bar has (the button, and the keybind below) always wants toggle semantics.
   reads a pending instance). Add a keybind like this to `hyprland.conf` to
   wire it up:
   ```
-  bind = SUPER, Escape, exec, pkill -SIGUSR1 -x customBar
+  bind = SUPER, Escape, exec, pkill -SIGUSR1 -x gridBar
   ```
   (any keybind works — `SUPER, Escape` is just one reasonable choice; `pkill
   -x` matches the process name exactly, so it won't accidentally signal an
-  unrelated process with "customBar" as a substring of its own command line).
+  unrelated process with "gridBar" as a substring of its own command line).
 - **The power menu doesn't coordinate with any other popup kind** — same
   undefended, rare v1 edge case as every other popup pair's own equivalent
   limitation elsewhere in this bar (see "PulseAudio / volume & mic" above for
@@ -1347,12 +1347,12 @@ this bar has (the button, and the keybind below) always wants toggle semantics.
   librsvg/gdk-pixbuf, a new dependency this project doesn't have). Items with
   no `IconPixmap` *and* no PNG found by either path still render the muted
   placeholder square.
-- **Tray: no fallback if customBar's own Watcher registration itself fails**
+- **Tray: no fallback if gridBar's own Watcher registration itself fails**
   (e.g. `sd_bus_add_object_vtable()` erroring after the bus name was already
   claimed — logged to stderr, name released, falls back to Host mode) *and*
   no other Watcher happens to be running either — the tray then stays empty
   for the run, same underlying "nothing to connect to" failure mode as before,
-  just less likely to actually occur now that customBar provides its own
+  just less likely to actually occur now that gridBar provides its own
   Watcher by default.
 - **Tray: no submenu/nested-menu support** — `GetLayout`'s recursion depth is
   capped at 1, matching the reference's own flat rendering.

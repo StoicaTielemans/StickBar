@@ -1,4 +1,4 @@
-project('customBar', 'c',
+project('gridBar', 'c',
   version: '0.1.0',
   default_options: [
     'c_std=gnu11',      # accept GNU C extensions used in a couple of places; note this
@@ -114,7 +114,7 @@ sources = files(
   'src/modules/powermenu/power_menu.c',
 )
 
-executable('customBar',
+executable('gridBar',
   sources + generated_sources + generated_headers,
   dependencies: [wayland_client, cairo, pangocairo, cjson, libsystemd, libpulse, gdk_pixbuf],
   include_directories: include_directories('src'),

@@ -53,20 +53,20 @@ bool shm_buffers_resize(ShmBuffers *sb, struct wl_shm *shm, int width, int heigh
     size_t buffer_size = (size_t)stride * (size_t)height;
     size_t pool_size = buffer_size * 2; // two buffers, back to back in one pool
 
-    int fd = memfd_create("customBar-shm", MFD_CLOEXEC);
+    int fd = memfd_create("gridBar-shm", MFD_CLOEXEC);
     if (fd < 0) {
-        perror("customBar: memfd_create");
+        perror("gridBar: memfd_create");
         return false;
     }
     if (ftruncate(fd, (off_t)pool_size) < 0) {
-        perror("customBar: ftruncate");
+        perror("gridBar: ftruncate");
         close(fd);
         return false;
     }
 
     uint8_t *data = mmap(NULL, pool_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (data == MAP_FAILED) {
-        perror("customBar: mmap");
+        perror("gridBar: mmap");
         close(fd);
         return false;
     }

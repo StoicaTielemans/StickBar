@@ -60,12 +60,16 @@ void media_build_track_text(MprisPlayer *player, char *out, size_t out_size) {
     }
 }
 
-// Byte-based binary-search ellipsis truncation, mirroring
-// audio/device_popup.c's own truncate_to_width() -- duplicated rather than
-// shared since each caller's font/weight/max-width differ and this project's
-// convention (see every module's own MAX_TRACKED_OUTPUTS block) already
-// favors small local duplication over a shared helper for widget-specific
-// tuning like this.
+// Binary-search ellipsis truncation over UTF-8 codepoint boundaries,
+// mirroring audio/device_popup.c's own truncate_to_width() -- duplicated
+// rather than shared since each caller's font/weight/max-width differ and
+// this project's convention (see every module's own MAX_TRACKED_OUTPUTS
+// block) already favors small local duplication over a shared helper for
+// widget-specific tuning like this. Track titles/artists routinely contain
+// multi-byte UTF-8, so candidates are cut at codepoint offsets, not raw byte
+// counts -- cutting mid-sequence produces invalid UTF-8 that
+// pango_layout_set_text() (inside module_box_measure_text()) warns about and
+// silently drops.
 static void truncate_track_text(const char *text, double max_w, int font_px, bool bold, char *out,
                                  size_t out_size) {
     double w, h;
@@ -76,11 +80,28 @@ static void truncate_track_text(const char *text, double max_w, int font_px, boo
     }
 
     size_t len = strlen(text);
-    size_t lo = 0, hi = len;
+    size_t offsets[512];
+    size_t n = 0;
+    for (size_t i = 0; i < len && n < sizeof(offsets) / sizeof(offsets[0]) - 1;) {
+        offsets[n++] = i;
+        unsigned char c = (unsigned char)text[i];
+        size_t clen = 1;
+        if ((c & 0xE0) == 0xC0) {
+            clen = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            clen = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            clen = 4;
+        }
+        i += clen;
+    }
+    offsets[n] = len;
+
+    size_t lo = 0, hi = n;
     while (lo < hi) {
         size_t mid = (lo + hi + 1) / 2;
         char candidate[512];
-        snprintf(candidate, sizeof(candidate), "%.*s...", (int)mid, text);
+        snprintf(candidate, sizeof(candidate), "%.*s...", (int)offsets[mid], text);
         module_box_measure_text(candidate, font_px, bold, &w, &h);
         if (w <= max_w) {
             lo = mid;
@@ -88,7 +109,7 @@ static void truncate_track_text(const char *text, double max_w, int font_px, boo
             hi = mid - 1;
         }
     }
-    snprintf(out, out_size, "%.*s...", (int)lo, text);
+    snprintf(out, out_size, "%.*s...", (int)offsets[lo], text);
 }
 
 void media_render(cairo_t *cr, Output *output, double bar_width, double box_top, double box_height) {

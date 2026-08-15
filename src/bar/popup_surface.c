@@ -63,7 +63,7 @@ static void layer_surface_configure(void *data, struct zwlr_layer_surface_v1 *la
     // bar_surface.c's own configure handler does.
     if (first_configure || (int)width != surf->buffers.width || (int)height != surf->buffers.height) {
         if (!shm_buffers_resize(&surf->buffers, surf->app->shm, (int)width, (int)height)) {
-            fprintf(stderr, "customBar: failed to allocate shm buffers for a %ux%u popup surface\n", width, height);
+            fprintf(stderr, "gridBar: failed to allocate shm buffers for a %ux%u popup surface\n", width, height);
             return;
         }
     }
@@ -101,7 +101,7 @@ PopupSurface *popup_surface_create(AppContext *app, Output *output, int width, i
                                     uint32_t anchor, enum zwlr_layer_shell_v1_layer layer) {
     PopupSurface *surf = calloc(1, sizeof(PopupSurface));
     if (!surf) {
-        perror("customBar: calloc(PopupSurface)");
+        perror("gridBar: calloc(PopupSurface)");
         return NULL;
     }
     surf->app = app;

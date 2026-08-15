@@ -76,9 +76,14 @@ typedef struct {
 
 static MediaPopupState g_popup = { .hovered_index = -1 };
 
-// Byte-based binary-search ellipsis truncation -- see modules/media/media.c's
-// own copy of this same algorithm (and audio/device_popup.c's original) for
-// why it's duplicated locally rather than shared.
+// Binary-search ellipsis truncation over UTF-8 codepoint boundaries -- see
+// modules/media/media.c's own copy of this same algorithm (and
+// audio/device_popup.c's original) for why it's duplicated locally rather
+// than shared. Track titles/artists (unlike device_popup.c's ASCII-only
+// device descriptions) routinely contain multi-byte UTF-8, so candidates are
+// cut at codepoint offsets, not raw byte counts -- cutting mid-sequence
+// produces invalid UTF-8 that pango_layout_set_text() (inside
+// module_box_measure_text()) warns about and silently drops.
 static void truncate_to_width(const char *text, double max_w, int font_px, bool bold, char *out, size_t out_size) {
     double w, h;
     module_box_measure_text(text, font_px, bold, &w, &h);
@@ -88,11 +93,28 @@ static void truncate_to_width(const char *text, double max_w, int font_px, bool 
     }
 
     size_t len = strlen(text);
-    size_t lo = 0, hi = len;
+    size_t offsets[TRACK_BUF_SIZE];
+    size_t n = 0;
+    for (size_t i = 0; i < len && n < TRACK_BUF_SIZE - 1;) {
+        offsets[n++] = i;
+        unsigned char c = (unsigned char)text[i];
+        size_t clen = 1;
+        if ((c & 0xE0) == 0xC0) {
+            clen = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            clen = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            clen = 4;
+        }
+        i += clen;
+    }
+    offsets[n] = len;
+
+    size_t lo = 0, hi = n;
     while (lo < hi) {
         size_t mid = (lo + hi + 1) / 2;
         char candidate[TRACK_BUF_SIZE];
-        snprintf(candidate, sizeof(candidate), "%.*s...", (int)mid, text);
+        snprintf(candidate, sizeof(candidate), "%.*s...", (int)offsets[mid], text);
         module_box_measure_text(candidate, font_px, bold, &w, &h);
         if (w <= max_w) {
             lo = mid;
@@ -100,7 +122,7 @@ static void truncate_to_width(const char *text, double max_w, int font_px, bool 
             hi = mid - 1;
         }
     }
-    snprintf(out, out_size, "%.*s...", (int)lo, text);
+    snprintf(out, out_size, "%.*s...", (int)offsets[lo], text);
 }
 
 // "m:ss" -- matches MediaPopup.qml's own formatTime() exactly (no leading

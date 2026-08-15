@@ -65,7 +65,7 @@ void hyprland_dispatch_focus_workspace(int id) {
         }
 
         if (g_dispatch_style == DISPATCH_STYLE_UNKNOWN) {
-            fprintf(stderr, "customBar: Hyprland rejected the Lua dispatch syntax "
+            fprintf(stderr, "gridBar: Hyprland rejected the Lua dispatch syntax "
                              "(%s), falling back to the classic form for the rest "
                              "of this run\n", response);
         }
@@ -77,19 +77,47 @@ void hyprland_dispatch_focus_workspace(int id) {
     if (response_looks_like_error(response)) {
         // Both forms failed -- don't fail silently, since this is the only
         // fallback we have.
-        fprintf(stderr, "customBar: classic dispatch syntax also rejected (%s); "
+        fprintf(stderr, "gridBar: classic dispatch syntax also rejected (%s); "
                          "workspace %d was not focused\n", response, id);
     }
     free(response);
 }
 
 void hyprland_dispatch_exit(void) {
+    // Same Lua-vs-classic ambiguity as hyprland_dispatch_focus_workspace() above --
+    // confirmed live, not just theorized: on this machine's Lua-configured Hyprland,
+    // plain "dispatch exit" is parsed as the bareword expression `hl.dispatch(exit)`
+    // and rejected ("expected a dispatcher"), the same failure mode the workspace
+    // dispatcher already works around. The Lua form here is "dispatch hl.dsp.exit()"
+    // (no arguments, unlike hl.dsp.focus's workspace table). Reuses the same cached
+    // g_dispatch_style as the workspace dispatcher, since it's the same Hyprland
+    // instance and its dispatch style doesn't change at runtime.
+    if (g_dispatch_style != DISPATCH_STYLE_CLASSIC) {
+        char *response = hyprland_ipc_request("dispatch hl.dsp.exit()");
+        if (!response) {
+            return; // hyprland_ipc_request() already logged the failure itself
+        }
+        if (!response_looks_like_error(response)) {
+            g_dispatch_style = DISPATCH_STYLE_LUA;
+            free(response);
+            return;
+        }
+
+        if (g_dispatch_style == DISPATCH_STYLE_UNKNOWN) {
+            fprintf(stderr, "gridBar: Hyprland rejected the Lua dispatch syntax "
+                             "(%s), falling back to the classic form for the rest "
+                             "of this run\n", response);
+        }
+        free(response);
+        g_dispatch_style = DISPATCH_STYLE_CLASSIC;
+    }
+
     char *response = hyprland_ipc_request("dispatch exit");
     if (!response) {
         return; // hyprland_ipc_request() already logged the failure itself
     }
     if (response_looks_like_error(response)) {
-        fprintf(stderr, "customBar: Hyprland rejected 'dispatch exit' (%s)\n", response);
+        fprintf(stderr, "gridBar: Hyprland rejected 'dispatch exit' (%s)\n", response);
     }
     free(response);
 }

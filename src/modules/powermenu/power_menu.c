@@ -79,13 +79,13 @@ static void action_logout(void) {
 
 static void action_restart(void) {
     if (system("systemctl reboot") != 0) {
-        fprintf(stderr, "customBar: failed to launch 'systemctl reboot'\n");
+        fprintf(stderr, "gridBar: failed to launch 'systemctl reboot'\n");
     }
 }
 
 static void action_shutdown(void) {
     if (system("systemctl poweroff") != 0) {
-        fprintf(stderr, "customBar: failed to launch 'systemctl poweroff'\n");
+        fprintf(stderr, "gridBar: failed to launch 'systemctl poweroff'\n");
     }
 }
 

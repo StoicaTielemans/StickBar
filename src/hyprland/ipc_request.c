@@ -20,14 +20,14 @@ bool hyprland_ipc_socket_path(const char *filename, char *out, size_t out_size) 
 char *hyprland_ipc_request(const char *command) {
     char path[256];
     if (!hyprland_ipc_socket_path(".socket.sock", path, sizeof(path))) {
-        fprintf(stderr, "customBar: XDG_RUNTIME_DIR or HYPRLAND_INSTANCE_SIGNATURE not set "
+        fprintf(stderr, "gridBar: XDG_RUNTIME_DIR or HYPRLAND_INSTANCE_SIGNATURE not set "
                          "-- is this running inside a Hyprland session?\n");
         return NULL;
     }
 
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
-        perror("customBar: socket(hyprland request)");
+        perror("gridBar: socket(hyprland request)");
         return NULL;
     }
 
@@ -35,14 +35,14 @@ char *hyprland_ipc_request(const char *command) {
     strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
 
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        perror("customBar: connect(hyprland request socket)");
+        perror("gridBar: connect(hyprland request socket)");
         close(fd);
         return NULL;
     }
 
     size_t cmd_len = strlen(command);
     if (write(fd, command, cmd_len) != (ssize_t)cmd_len) {
-        perror("customBar: write(hyprland request)");
+        perror("gridBar: write(hyprland request)");
         close(fd);
         return NULL;
     }
@@ -55,7 +55,7 @@ char *hyprland_ipc_request(const char *command) {
     size_t cap = 4096, len = 0;
     char *buf = malloc(cap);
     if (!buf) {
-        perror("customBar: malloc(hyprland response buffer)");
+        perror("gridBar: malloc(hyprland response buffer)");
         close(fd);
         return NULL;
     }
@@ -65,7 +65,7 @@ char *hyprland_ipc_request(const char *command) {
             cap *= 2;
             char *grown = realloc(buf, cap);
             if (!grown) {
-                perror("customBar: realloc(hyprland response buffer)");
+                perror("gridBar: realloc(hyprland response buffer)");
                 free(buf);
                 close(fd);
                 return NULL;
@@ -74,7 +74,7 @@ char *hyprland_ipc_request(const char *command) {
         }
         ssize_t n = read(fd, buf + len, cap - len - 1);
         if (n < 0) {
-            perror("customBar: read(hyprland response)");
+            perror("gridBar: read(hyprland response)");
             free(buf);
             close(fd);
             return NULL;
@@ -102,7 +102,7 @@ cJSON *hyprland_ipc_request_json(const char *subcommand) {
     cJSON *json = cJSON_Parse(response);
     free(response);
     if (!json) {
-        fprintf(stderr, "customBar: hyprctl %s returned invalid JSON\n", full_command);
+        fprintf(stderr, "gridBar: hyprctl %s returned invalid JSON\n", full_command);
         return NULL;
     }
     return json;

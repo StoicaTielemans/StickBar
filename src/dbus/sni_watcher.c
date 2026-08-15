@@ -94,7 +94,7 @@ static void fetch_initial_items(sd_bus *bus) {
     int rc = sd_bus_get_property(bus, g_watcher_bus_name, WATCHER_PATH, WATCHER_INTERFACE,
                                   "RegisteredStatusNotifierItems", &err, &reply, "as");
     if (rc < 0) {
-        fprintf(stderr, "customBar: failed to fetch the initial tray item list (%s)\n",
+        fprintf(stderr, "gridBar: failed to fetch the initial tray item list (%s)\n",
                 err.message ? err.message : "unknown error");
         sd_bus_error_free(&err);
         return;
@@ -132,7 +132,7 @@ bool sni_watcher_register_host(sd_bus *bus) {
     }
 
     if (g_watcher_bus_name[0] == '\0') {
-        fprintf(stderr, "customBar: no StatusNotifierWatcher found (tried %s, %s) -- "
+        fprintf(stderr, "gridBar: no StatusNotifierWatcher found (tried %s, %s) -- "
                          "system tray will stay empty for this run\n",
                 WATCHER_BUS_NAMES[0], WATCHER_BUS_NAMES[1]);
         return false;

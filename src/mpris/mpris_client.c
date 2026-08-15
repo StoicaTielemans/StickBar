@@ -264,7 +264,7 @@ static void fetch_player_properties(MprisPlayer *item) {
                                  "org.freedesktop.DBus.Properties", "GetAll",
                                  &err, &reply, "s", MPRIS_PLAYER_INTERFACE);
     if (rc < 0) {
-        fprintf(stderr, "customBar: failed to fetch MPRIS properties for %s (%s)\n", item->bus_name,
+        fprintf(stderr, "gridBar: failed to fetch MPRIS properties for %s (%s)\n", item->bus_name,
                 err.message ? err.message : "unknown error");
         sd_bus_error_free(&err);
         return;
@@ -360,7 +360,7 @@ static void add_player(sd_bus *bus, const char *bus_name) {
     }
     MprisPlayer *item = find_free_slot();
     if (!item) {
-        fprintf(stderr, "customBar: MPRIS player limit (%d) reached, ignoring %s\n", MAX_MPRIS_PLAYERS, bus_name);
+        fprintf(stderr, "gridBar: MPRIS player limit (%d) reached, ignoring %s\n", MAX_MPRIS_PLAYERS, bus_name);
         return;
     }
 
@@ -437,7 +437,7 @@ static void fetch_initial_players(sd_bus *bus) {
         sd_bus_call_method(bus, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "ListNames",
                             &err, &reply, "");
     if (rc < 0) {
-        fprintf(stderr, "customBar: failed to list D-Bus names for MPRIS discovery (%s)\n",
+        fprintf(stderr, "gridBar: failed to list D-Bus names for MPRIS discovery (%s)\n",
                 err.message ? err.message : "unknown error");
         sd_bus_error_free(&err);
         return;

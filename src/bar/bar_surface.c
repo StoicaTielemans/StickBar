@@ -86,7 +86,7 @@ static void layer_surface_configure(void *data, struct zwlr_layer_surface_v1 *la
     bool size_changed = !surf->configured || (int)width != surf->buffers.width || (int)height != surf->buffers.height;
     if (size_changed) {
         if (!shm_buffers_resize(&surf->buffers, surf->app->shm, (int)width, (int)height)) {
-            fprintf(stderr, "gridBar: failed to allocate shm buffers for a %ux%u bar surface\n", width, height);
+            fprintf(stderr, "stickBar: failed to allocate shm buffers for a %ux%u bar surface\n", width, height);
             return;
         }
     }
@@ -117,7 +117,7 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
 BarSurface *bar_surface_create(AppContext *app, Output *output) {
     BarSurface *surf = calloc(1, sizeof(BarSurface));
     if (!surf) {
-        perror("gridBar: calloc(BarSurface)");
+        perror("stickBar: calloc(BarSurface)");
         return NULL;
     }
     surf->app = app;

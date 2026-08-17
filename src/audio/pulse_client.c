@@ -95,7 +95,7 @@ static void upsert_node(bool is_sink, uint32_t index, const char *name, const ch
     if (!node) {
         node = find_free_slot(is_sink);
         if (!node) {
-            fprintf(stderr, "gridBar: pulse %s limit (%d) reached, ignoring index %u\n",
+            fprintf(stderr, "stickBar: pulse %s limit (%d) reached, ignoring index %u\n",
                     is_sink ? "sink" : "source", MAX_PULSE_NODES, index);
             return;
         }
@@ -216,13 +216,13 @@ static void context_state_cb(pa_context *ctx, void *userdata) {
 bool pulse_client_init(void) {
     g_mainloop = pa_threaded_mainloop_new();
     if (!g_mainloop) {
-        fprintf(stderr, "gridBar: pa_threaded_mainloop_new() failed -- "
+        fprintf(stderr, "stickBar: pa_threaded_mainloop_new() failed -- "
                          "volume/mic controls disabled for this run\n");
         return false;
     }
 
     pa_mainloop_api *api = pa_threaded_mainloop_get_api(g_mainloop);
-    g_context = pa_context_new(api, "gridBar");
+    g_context = pa_context_new(api, "stickBar");
     if (!g_context) {
         pa_threaded_mainloop_free(g_mainloop);
         g_mainloop = NULL;
@@ -231,7 +231,7 @@ bool pulse_client_init(void) {
 
     g_notify_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (g_notify_fd < 0) {
-        perror("gridBar: eventfd(pulse notify)");
+        perror("stickBar: eventfd(pulse notify)");
         pa_context_unref(g_context);
         g_context = NULL;
         pa_threaded_mainloop_free(g_mainloop);
@@ -243,7 +243,7 @@ bool pulse_client_init(void) {
 
     if (pa_context_connect(g_context, NULL, PA_CONTEXT_NOFLAGS, NULL) < 0 ||
         pa_threaded_mainloop_start(g_mainloop) < 0) {
-        fprintf(stderr, "gridBar: failed to start the PulseAudio client thread -- "
+        fprintf(stderr, "stickBar: failed to start the PulseAudio client thread -- "
                          "volume/mic controls disabled for this run\n");
         pulse_client_shutdown();
         return false;
@@ -268,7 +268,7 @@ bool pulse_client_init(void) {
     pa_threaded_mainloop_unlock(g_mainloop);
 
     if (!ready) {
-        fprintf(stderr, "gridBar: failed to connect to the PulseAudio-compatible "
+        fprintf(stderr, "stickBar: failed to connect to the PulseAudio-compatible "
                          "server -- volume/mic controls disabled for this run\n");
         pulse_client_shutdown();
         return false;

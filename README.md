@@ -1,4 +1,4 @@
-# GridBar
+# StickBar
 
 A from-scratch C status bar for [Hyprland](https://hyprland.org/), built directly
 against Wayland (`wl_compositor`/`wl_shm`/`zwlr_layer_shell_v1`) and drawn with
@@ -89,14 +89,14 @@ Debian/Ubuntu) plus a Nerd Font of your choice from
 ```sh
 meson setup build
 meson compile -C build
-./build/gridBar
+./build/stickBar
 ```
 
 There's no install step yet — run the built binary directly, or wire it into
 your Hyprland config's `exec-once` once you're happy with it:
 
 ```
-exec-once = /path/to/GridBar/build/gridBar
+exec-once = /path/to/StickBar/build/stickBar
 ```
 
 It's safe to run alongside another bar (like the Quickshell one it's modeled
@@ -111,7 +111,7 @@ toggles the menu open/closed when it receives it. Add a line like this to
 your `hyprland.conf`:
 
 ```
-bind = SUPER, Escape, exec, pkill -SIGUSR1 -x gridBar
+bind = SUPER, Escape, exec, pkill -SIGUSR1 -x stickBar
 ```
 
 Any keybind works — `SUPER, Escape` above is just one reasonable choice.

@@ -7,7 +7,7 @@
 int event_loop_create(void) {
     int fd = epoll_create1(EPOLL_CLOEXEC);
     if (fd < 0) {
-        perror("gridBar: epoll_create1");
+        perror("stickBar: epoll_create1");
     }
     return fd;
 }
@@ -15,7 +15,7 @@ int event_loop_create(void) {
 bool event_loop_add_fd(int epoll_fd, int fd, uint32_t events) {
     struct epoll_event ev = { .events = events, .data.fd = fd };
     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev) < 0) {
-        perror("gridBar: epoll_ctl(ADD)");
+        perror("stickBar: epoll_ctl(ADD)");
         return false;
     }
     return true;

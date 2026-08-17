@@ -229,7 +229,7 @@ static void fetch_item_properties(SniItem *item) {
                                  "org.freedesktop.DBus.Properties", "GetAll",
                                  &err, &reply, "s", "org.kde.StatusNotifierItem");
     if (rc < 0) {
-        fprintf(stderr, "gridBar: failed to fetch tray item properties for %s%s (%s)\n",
+        fprintf(stderr, "stickBar: failed to fetch tray item properties for %s%s (%s)\n",
                 item->bus_name, item->path, err.message ? err.message : "unknown error");
         sd_bus_error_free(&err);
         return;
@@ -303,7 +303,7 @@ void sni_registry_add(sd_bus *bus, const char *bus_name, const char *path) {
     }
     SniItem *item = find_free_slot();
     if (!item) {
-        fprintf(stderr, "gridBar: tray item limit (%d) reached, ignoring %s%s\n",
+        fprintf(stderr, "stickBar: tray item limit (%d) reached, ignoring %s%s\n",
                 MAX_TRAY_ITEMS, bus_name, path);
         return;
     }

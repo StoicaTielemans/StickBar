@@ -42,7 +42,7 @@ static void handle_signal(int sig) {
 static int create_clock_timer(void) {
     int fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
     if (fd < 0) {
-        perror("gridBar: timerfd_create");
+        perror("stickBar: timerfd_create");
         return -1;
     }
     struct itimerspec spec = {
@@ -50,7 +50,7 @@ static int create_clock_timer(void) {
         .it_value = { .tv_sec = 1, .tv_nsec = 0 },
     };
     if (timerfd_settime(fd, 0, &spec, NULL) < 0) {
-        perror("gridBar: timerfd_settime");
+        perror("stickBar: timerfd_settime");
         close(fd);
         return -1;
     }
@@ -64,7 +64,7 @@ static int create_clock_timer(void) {
 static int create_sysmon_timer(void) {
     int fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
     if (fd < 0) {
-        perror("gridBar: timerfd_create(sysmon)");
+        perror("stickBar: timerfd_create(sysmon)");
         return -1;
     }
     struct itimerspec spec = {
@@ -72,7 +72,7 @@ static int create_sysmon_timer(void) {
         .it_value = { .tv_sec = 5, .tv_nsec = 0 },
     };
     if (timerfd_settime(fd, 0, &spec, NULL) < 0) {
-        perror("gridBar: timerfd_settime(sysmon)");
+        perror("stickBar: timerfd_settime(sysmon)");
         close(fd);
         return -1;
     }
@@ -81,7 +81,7 @@ static int create_sysmon_timer(void) {
 
 // Delivers SIGUSR1 through a signalfd (registered on the same epoll loop as
 // everything else) rather than a classic signal() handler -- this is the
-// Hyprland-keybind trigger for the power menu (`pkill -SIGUSR1 -x gridBar`
+// Hyprland-keybind trigger for the power menu (`pkill -SIGUSR1 -x stickBar`
 // or equivalent; see CLAUDE.md's "Power menu" section for the exact keybind
 // line), and unlike g_should_exit's flip-a-flag-and-let-the-main-loop-notice
 // approach, signalfd lets this be handled as just another readable fd with
@@ -102,12 +102,12 @@ static int create_powermenu_signal_fd(void) {
     sigemptyset(&mask);
     sigaddset(&mask, SIGUSR1);
     if (sigprocmask(SIG_BLOCK, &mask, NULL) < 0) {
-        perror("gridBar: sigprocmask(SIGUSR1)");
+        perror("stickBar: sigprocmask(SIGUSR1)");
         return -1;
     }
     int fd = signalfd(-1, &mask, SFD_CLOEXEC | SFD_NONBLOCK);
     if (fd < 0) {
-        perror("gridBar: signalfd(SIGUSR1)");
+        perror("stickBar: signalfd(SIGUSR1)");
     }
     return fd;
 }
@@ -206,7 +206,7 @@ int main(void) {
         }
     }
     if (!hypr_events) {
-        fprintf(stderr, "gridBar: workspace live-updates disabled (couldn't connect to "
+        fprintf(stderr, "stickBar: workspace live-updates disabled (couldn't connect to "
                          "Hyprland's event socket) -- the bar still renders, but workspace "
                          "pills won't update until it's restarted\n");
     }
@@ -275,7 +275,7 @@ int main(void) {
                 wayland_dispatch_cancel(app.display);
                 continue;
             }
-            perror("gridBar: epoll_wait");
+            perror("stickBar: epoll_wait");
             wayland_dispatch_cancel(app.display);
             break;
         }
@@ -365,7 +365,7 @@ int main(void) {
             hypr_events = reconnect_hypr_events(epoll_fd, hypr_events, hypr_fd);
             hypr_fd = hypr_events ? hyprland_events_fd(hypr_events) : -1;
             if (!hypr_events) {
-                fprintf(stderr, "gridBar: Hyprland event socket reconnect failed -- "
+                fprintf(stderr, "stickBar: Hyprland event socket reconnect failed -- "
                                  "workspace live-updates are now disabled for this run\n");
             }
         }

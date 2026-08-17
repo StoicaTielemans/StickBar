@@ -48,7 +48,7 @@ static const struct wl_registry_listener registry_listener = {
 bool wayland_connect(AppContext *app) {
     app->display = wl_display_connect(NULL);
     if (!app->display) {
-        fprintf(stderr, "gridBar: failed to connect to the Wayland display "
+        fprintf(stderr, "stickBar: failed to connect to the Wayland display "
                          "(is a Wayland compositor running and WAYLAND_DISPLAY set?)\n");
         return false;
     }
@@ -71,7 +71,7 @@ bool wayland_connect(AppContext *app) {
     wl_display_roundtrip(app->display);
 
     if (!app->compositor || !app->shm || !app->layer_shell) {
-        fprintf(stderr, "gridBar: compositor is missing a required Wayland global "
+        fprintf(stderr, "stickBar: compositor is missing a required Wayland global "
                          "(wl_compositor=%p wl_shm=%p zwlr_layer_shell_v1=%p) -- "
                          "is this running under a wlroots-based compositor?\n",
                 (void *)app->compositor, (void *)app->shm, (void *)app->layer_shell);

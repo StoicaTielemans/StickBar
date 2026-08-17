@@ -93,7 +93,7 @@ bool dbusmenu_fetch(sd_bus *bus, const char *bus_name, const char *menu_path,
     int rc = sd_bus_call_method(bus, bus_name, menu_path, MENU_INTERFACE, "GetLayout",
                                  &err, &reply, "iias", (int32_t)0, (int32_t)1, 0);
     if (rc < 0) {
-        fprintf(stderr, "gridBar: GetLayout failed for %s%s (%s)\n", bus_name, menu_path,
+        fprintf(stderr, "stickBar: GetLayout failed for %s%s (%s)\n", bus_name, menu_path,
                 err.message ? err.message : "unknown error");
         sd_bus_error_free(&err);
         return false;

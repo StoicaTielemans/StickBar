@@ -146,7 +146,7 @@ bool sni_watcher_service_try_start(sd_bus *bus) {
 
     sd_bus_slot *vtable_slot = NULL;
     if (sd_bus_add_object_vtable(bus, &vtable_slot, WATCHER_PATH, WATCHER_INTERFACE, watcher_vtable, bus) < 0) {
-        fprintf(stderr, "gridBar: claimed %s but failed to register its object -- "
+        fprintf(stderr, "stickBar: claimed %s but failed to register its object -- "
                          "falling back to Host mode\n", WATCHER_BUS_NAME_KDE);
         sd_bus_release_name(bus, WATCHER_BUS_NAME_KDE);
         return false;

@@ -45,7 +45,7 @@ static bool event_affects_workspaces(const char *event_name) {
 HyprlandEvents *hyprland_events_connect(void) {
     char path[256];
     if (!hyprland_ipc_socket_path(".socket2.sock", path, sizeof(path))) {
-        fprintf(stderr, "gridBar: cannot locate Hyprland's event socket "
+        fprintf(stderr, "stickBar: cannot locate Hyprland's event socket "
                          "(XDG_RUNTIME_DIR or HYPRLAND_INSTANCE_SIGNATURE unset)\n");
         return NULL;
     }
@@ -55,7 +55,7 @@ HyprlandEvents *hyprland_events_connect(void) {
     // one doing so on a spurious wakeup or an unlucky race.
     int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
     if (fd < 0) {
-        perror("gridBar: socket(hyprland events)");
+        perror("stickBar: socket(hyprland events)");
         return NULL;
     }
 
@@ -63,14 +63,14 @@ HyprlandEvents *hyprland_events_connect(void) {
     strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
 
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        perror("gridBar: connect(hyprland events socket)");
+        perror("stickBar: connect(hyprland events socket)");
         close(fd);
         return NULL;
     }
 
     HyprlandEvents *ev = calloc(1, sizeof(HyprlandEvents));
     if (!ev) {
-        perror("gridBar: calloc(HyprlandEvents)");
+        perror("stickBar: calloc(HyprlandEvents)");
         close(fd);
         return NULL;
     }
@@ -104,7 +104,7 @@ bool hyprland_events_pump(HyprlandEvents *ev, AppContext *app) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             return true; // spurious wakeup; nothing to do
         }
-        perror("gridBar: read(hyprland events)");
+        perror("stickBar: read(hyprland events)");
         return false;
     }
     if (n == 0) {

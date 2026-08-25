@@ -75,6 +75,15 @@
 #define GLYPH_ARROW_DOWN 0x2193u
 #define GLYPH_ARROW_UP   0x2191u
 
+// Privacy indicator icons (mic/webcam/screen-share currently in use). Mic
+// reuses GLYPH_ICON_MIC above (same glyph the mic/volume modules use).
+// Webcam/screen-share codepoints found via a live fontTools cmap search
+// against JetBrainsMonoNerdFont-Regular.ttf for glyph names containing
+// "webcam"/"monitor_share" -- same verification convention as every other
+// glyph in this file, not guessed from a Nerd Font cheat sheet.
+#define GLYPH_ICON_WEBCAM      0xF05A0u // nf-md-webcam
+#define GLYPH_ICON_SCREENSHARE 0xF1483u // nf-md-monitor_share
+
 // Arch logo + power menu icons, codepoints derived by reading them directly
 // out of the reference ArchLogoWidget.qml/PowerMenu.qml source via Python's
 // ord() (in PowerMenu.qml's own on-screen order: Logout, Restart,

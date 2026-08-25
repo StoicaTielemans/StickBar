@@ -9,6 +9,7 @@
 #include "modules/mic/mic.h"
 #include "modules/network/network.h"
 #include "modules/powermenu/arch_logo.h"
+#include "modules/privacy/privacy.h"
 #include "modules/tray/tray.h"
 #include "modules/volume/volume.h"
 #include "modules/workspaces/workspaces.h"
@@ -29,7 +30,8 @@ void render_output(cairo_t *cr, Output *output, int width, int height) {
     double workspaces_right_x = workspaces_render(cr, output, arch_logo_right_x, 0.0, (double)height);
     double cpu_right_x = cpu_render(cr, output, workspaces_right_x, 0.0, (double)height);
     double gpu_right_x = gpu_render(cr, output, cpu_right_x, 0.0, (double)height);
-    mem_render(cr, output, gpu_right_x, 0.0, (double)height);
+    double mem_right_x = mem_render(cr, output, gpu_right_x, 0.0, (double)height);
+    privacy_render(cr, output, mem_right_x, 0.0, (double)height);
 
     // Right region: matches the reference Bar.qml's actual rightLayout order,
     // Mic, Volume, Network, Clock, Tray -- Tray is rightmost, drawn first

@@ -22,6 +22,7 @@
 #include "modules/workspaces/workspaces.h"
 #include "mpris/mpris_client.h"
 #include "network/network_client.h"
+#include "pipewire/pipewire_client.h"
 #include "sysmon/sysmon_client.h"
 #include "wayland/context.h"
 #include "wayland/event_loop.h"
@@ -261,6 +262,27 @@ int main(void) {
         }
     }
 
+    // Privacy indicator (mic/webcam/screen-share): an optional module, same
+    // "degrade gracefully" convention as the tray's D-Bus connection and
+    // pulse_client above -- a missing/broken PipeWire connection just means
+    // the privacy module stays permanently collapsed for this run, not a
+    // fatal error. Placed after pulse_client_init() (order between the two
+    // doesn't matter -- no cross-dependency) but still after
+    // create_powermenu_signal_fd()'s sigprocmask() call above, for the same
+    // reason pulse_client_init() must be: pw_thread_loop_start() spawns a
+    // background thread, which inherits the calling thread's signal mask at
+    // creation time.
+    bool pipewire_ok = pipewire_client_init();
+    int pipewire_fd = -1;
+    if (pipewire_ok) {
+        pipewire_fd = pipewire_client_notify_fd();
+        if (!event_loop_add_fd(epoll_fd, pipewire_fd, EPOLLIN)) {
+            pipewire_client_shutdown();
+            pipewire_ok = false;
+            pipewire_fd = -1;
+        }
+    }
+
     struct epoll_event events[10];
 
     while (!g_should_exit) {
@@ -352,6 +374,13 @@ int main(void) {
                 pulse_client_pump();
                 device_popup_refresh_if_open();
                 output_mark_all_dirty(&app);
+            } else if (pipewire_ok && fd == pipewire_fd) {
+                // Same shape as the pulse_fd branch above: this fd is only
+                // ever signaled on an actual node/link graph change, so an
+                // unconditional redraw here (rather than each module calling
+                // it granularly, the dbus_fd branch's approach) is correct.
+                pipewire_client_pump();
+                output_mark_all_dirty(&app);
             }
         }
 
@@ -379,6 +408,9 @@ int main(void) {
     }
     if (pulse_ok) {
         pulse_client_shutdown();
+    }
+    if (pipewire_ok) {
+        pipewire_client_shutdown();
     }
     if (dbus_timeout_fd >= 0) {
         close(dbus_timeout_fd);

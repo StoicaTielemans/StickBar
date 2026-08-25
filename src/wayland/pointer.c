@@ -15,6 +15,8 @@
 #include "modules/network/network_info_popup.h"
 #include "modules/powermenu/arch_logo.h"
 #include "modules/powermenu/power_menu.h"
+#include "modules/privacy/privacy.h"
+#include "modules/privacy/privacy_info_popup.h"
 #include "modules/tray/tray.h"
 #include "modules/tray/tray_context_menu.h"
 #include "modules/volume/volume.h"
@@ -143,6 +145,14 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
         network_info_popup_close();
         return;
     }
+    if (privacy_info_popup_is_menu_surface(app->pointer_over_surface)) {
+        // Read-only content, same as the sysmon/network info popups above.
+        return;
+    }
+    if (privacy_info_popup_is_catcher_surface(app->pointer_over_surface)) {
+        privacy_info_popup_close();
+        return;
+    }
     if (clock_calendar_popup_is_menu_surface(app->pointer_over_surface)) {
         // Read-only content, same as the sysmon info popup above.
         return;
@@ -165,7 +175,9 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
     // all -- see modules/cpu/cpu.h; media's own left-toggles-play/right-
     // opens-dropdown rule, matching volume/mic's shape exactly; network's
     // own right-opens-dropdown-only rule, matching cpu/gpu/mem's shape
-    // exactly; arch_logo's own left-click-only rule, checked internally the
+    // exactly; privacy's own right-opens-dropdown-only rule, same shape
+    // again (and a no-op if it's collapsed, since its recorded rect's w/h
+    // are zeroed in that case); arch_logo's own left-click-only rule, checked internally the
     // same way cpu/gpu/mem/network check their own button rules internally
     // rather than being pre-filtered here like workspaces_handle_click()
     // is), so all of them are called unconditionally here regardless of
@@ -182,6 +194,7 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
         cpu_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         gpu_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         mem_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
+        privacy_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         media_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         network_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
     }

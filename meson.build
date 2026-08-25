@@ -34,6 +34,17 @@ gdk_pixbuf     = dependency('gdk-pixbuf-2.0') # image decoding (PNG/JPEG/etc.), 
                                            # PNG natively, which would miss most
                                            # real-world (commonly JPEG) cover art;
                                            # see CLAUDE.md's "Media (MPRIS)" section
+libpipewire    = dependency('libpipewire-0.3') # direct PipeWire client library
+                                           # (unlike libpulse above, which only
+                                           # ever talks the PulseAudio-compatible
+                                           # protocol for volume/mic control),
+                                           # used by src/pipewire/pipewire_client.c
+                                           # to monitor the live stream graph for
+                                           # the privacy indicator module (mic/
+                                           # webcam/screen-share) -- see
+                                           # CLAUDE.md's "Privacy indicator"
+                                           # section for why this needed the raw
+                                           # PipeWire API rather than libpulse
 
 wayland_scanner = find_program('wayland-scanner')
 
@@ -112,10 +123,13 @@ sources = files(
   'src/modules/network/network_info_popup.c',
   'src/modules/powermenu/arch_logo.c',
   'src/modules/powermenu/power_menu.c',
+  'src/pipewire/pipewire_client.c',
+  'src/modules/privacy/privacy.c',
+  'src/modules/privacy/privacy_info_popup.c',
 )
 
 executable('stickBar',
   sources + generated_sources + generated_headers,
-  dependencies: [wayland_client, cairo, pangocairo, cjson, libsystemd, libpulse, gdk_pixbuf],
+  dependencies: [wayland_client, cairo, pangocairo, cjson, libsystemd, libpulse, gdk_pixbuf, libpipewire],
   include_directories: include_directories('src'),
 )

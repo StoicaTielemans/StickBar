@@ -1,9 +1,10 @@
 #include "modules/volume/volume.h"
 
-#include <linux/input-event-codes.h> // BTN_LEFT, BTN_RIGHT
+#include <linux/input-event-codes.h> // BTN_LEFT, BTN_RIGHT, BTN_MIDDLE
 #include <stdio.h>
 
 #include "audio/device_popup.h"
+#include "audio/mixer_popup.h"
 #include "audio/pulse_client.h"
 #include "config/config.h"
 #include "config/glyphs.h"
@@ -97,7 +98,13 @@ void volume_handle_click(Output *output, double x, double y, uint32_t button) {
     if (button == BTN_LEFT) {
         pulse_default_sink_toggle_mute();
     } else if (button == BTN_RIGHT) {
+        // The device dropdown and the mixer both hang off this one box at the
+        // same spot -- close the other so they never stack on top of each other.
+        mixer_popup_close();
         device_popup_open(output, true, COLORS.sky, rect->x, rect->y, rect->w, rect->h);
+    } else if (button == BTN_MIDDLE) {
+        device_popup_close();
+        mixer_popup_open(output, COLORS.sky, rect->x, rect->y, rect->w, rect->h);
     }
 }
 

@@ -1,8 +1,9 @@
 #include "wayland/pointer.h"
 
-#include <linux/input-event-codes.h> // BTN_LEFT, BTN_RIGHT
+#include <linux/input-event-codes.h> // BTN_LEFT, BTN_RIGHT, BTN_MIDDLE
 
 #include "audio/device_popup.h"
+#include "audio/mixer_popup.h"
 #include "modules/clock/clock.h"
 #include "modules/clock/clock_calendar_popup.h"
 #include "modules/cpu/cpu.h"
@@ -72,6 +73,11 @@ static void pointer_motion(void *data, struct wl_pointer *pointer, uint32_t time
         tray_context_menu_handle_motion(app->pointer_x, app->pointer_y);
     } else if (device_popup_is_menu_surface(app->pointer_over_surface)) {
         device_popup_handle_motion(app->pointer_x, app->pointer_y);
+    } else if (mixer_popup_is_menu_surface(app->pointer_over_surface)) {
+        // Also drives slider drags: Wayland's implicit grab keeps
+        // pointer_over_surface on the mixer while the button is held, even
+        // if the pointer wanders outside it.
+        mixer_popup_handle_motion(app->pointer_x, app->pointer_y);
     } else if (media_popup_is_menu_surface(app->pointer_over_surface)) {
         media_popup_handle_motion(app->pointer_x, app->pointer_y);
     } else if (power_menu_is_menu_surface(app->pointer_over_surface)) {
@@ -83,7 +89,37 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
                             uint32_t time, uint32_t button, uint32_t state) {
     (void)pointer; (void)serial; (void)time;
     AppContext *app = data;
-    if (state != WL_POINTER_BUTTON_STATE_PRESSED || (button != BTN_LEFT && button != BTN_RIGHT)) {
+    if (state == WL_POINTER_BUTTON_STATE_RELEASED) {
+        // Releases only matter for ending the mixer's slider drag -- every
+        // other handler here acts on press alone. Unconditional (not gated on
+        // which surface it landed on), so a drag always ends even if the
+        // release somehow arrives elsewhere.
+        mixer_popup_handle_release();
+        return;
+    }
+    if (button != BTN_LEFT && button != BTN_RIGHT && button != BTN_MIDDLE) {
+        return;
+    }
+
+    // The mixer's own surfaces first, since it's the one popup that cares
+    // about which button was pressed (and the only one opened by middle-click).
+    if (mixer_popup_is_menu_surface(app->pointer_over_surface)) {
+        mixer_popup_handle_press(app->pointer_x, app->pointer_y, button);
+        return;
+    }
+    if (mixer_popup_is_catcher_surface(app->pointer_over_surface)) {
+        mixer_popup_close();
+        return;
+    }
+    // Middle-click is only bound on the volume box (opens the mixer). Filtered
+    // out here rather than passed down, since most of the handlers below don't
+    // take a button at all (popup menu clicks) or treat any non-left button as
+    // their secondary action (the tray's has-menu rule), and would otherwise
+    // misfire on a middle-click.
+    if (button == BTN_MIDDLE) {
+        if (app->pointer_over) {
+            volume_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
+        }
         return;
     }
 
@@ -242,10 +278,14 @@ static void pointer_axis_discrete(void *data, struct wl_pointer *p, uint32_t axi
         return;
     }
     AppContext *app = data;
+    int direction = discrete < 0 ? 1 : -1; // see comment above
+    if (mixer_popup_is_menu_surface(app->pointer_over_surface)) {
+        mixer_popup_handle_scroll(app->pointer_x, app->pointer_y, direction);
+        return;
+    }
     if (!app->pointer_over) {
         return; // scrolled over a popup/catcher surface or nothing at all
     }
-    int direction = discrete < 0 ? 1 : -1; // see comment above
     volume_handle_scroll(app->pointer_over, app->pointer_x, app->pointer_y, direction);
     mic_handle_scroll(app->pointer_over, app->pointer_x, app->pointer_y, direction);
 }

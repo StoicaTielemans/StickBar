@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 typedef struct PulseNode PulseNode; // opaque
+typedef struct PulseStream PulseStream; // opaque, one per app playback stream
 
 // Shared with modules/volume and modules/mic so the scroll step and the clamp
 // ceiling live in exactly one place. PULSE_MAX_VOLUME_PERCENT matches the
@@ -63,5 +64,23 @@ bool pulse_node_is_default(PulseNode *node);
 
 void pulse_node_set_default(PulseNode *node);
 void pulse_node_toggle_mute(PulseNode *node);
+
+// --- Per-application playback streams, for the mixer popup ---
+// PA "sink inputs": one per app currently holding an output stream open. Same
+// live-cache model as the sink/source enumeration above -- updated from the
+// background thread on every SINK_INPUT subscribe event, and signaled through
+// the same notify fd.
+int pulse_stream_count(void);
+PulseStream *pulse_stream_get(int index); // 0 <= index < pulse_stream_count()
+
+const char *pulse_stream_name(PulseStream *stream);
+int pulse_stream_volume_percent(PulseStream *stream);
+bool pulse_stream_muted(PulseStream *stream);
+
+// Clamped to 0..PULSE_MAX_VOLUME_PERCENT. Silent no-op if the stream has since
+// gone away (safe to call with a stale pointer) or doesn't support volume.
+void pulse_stream_set_volume_percent(PulseStream *stream, int percent);
+void pulse_stream_adjust_volume(PulseStream *stream, int delta_percent);
+void pulse_stream_toggle_mute(PulseStream *stream);
 
 #endif

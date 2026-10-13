@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "audio/device_popup.h"
+#include "audio/mixer_popup.h"
 #include "audio/pulse_client.h"
 #include "bar/bar_surface.h"
 #include "dbus/dbus_loop.h"
@@ -373,6 +374,7 @@ int main(void) {
                 // signaling) -- pump() just drains the eventfd counter.
                 pulse_client_pump();
                 device_popup_refresh_if_open();
+                mixer_popup_refresh_if_open();
                 output_mark_all_dirty(&app);
             } else if (pipewire_ok && fd == pipewire_fd) {
                 // Same shape as the pulse_fd branch above: this fd is only

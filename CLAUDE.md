@@ -184,9 +184,12 @@ stickBar/
     │   ├── pulse_client.c        pa_threaded_mainloop connection, live sink/source
     │   │                         cache (fixed-array, like sni_registry.c), volume/
     │   │                         mute/default-device get+set, eventfd notification
-    │   └── device_popup.c        shared sink/source dropdown popup (used by both
-    │                             modules/volume and modules/mic) -- structurally
-    │                             the audio-domain twin of tray_context_menu.c
+    │   ├── device_popup.c        shared sink/source dropdown popup (used by both
+    │   │                         modules/volume and modules/mic) -- structurally
+    │   │                         the audio-domain twin of tray_context_menu.c
+    │   └── mixer_popup.c         per-app volume mixer (middle-click on the volume
+    │                             box): one row per PA sink input, with a
+    │                             click/drag/scroll slider + mute toggle
     ├── sysmon/                   /proc + nvidia-smi plumbing for CPU/GPU/memory
     │                             (see "System monitor (CPU/GPU/memory)" below) --
     │                             structurally the sysmon-domain twin of dbus/ and
@@ -735,6 +738,34 @@ PulseAudio (on PipeWire 1.6.8)`) — via **libpulse**, not raw `libpipewire`.
   else in this bar uses it) and is itself a conventional way to expose a
   secondary action alongside a primary click, mirroring how the tray already
   distinguishes `Activate()` from opening its own context menu.
+- **Middle-click on the volume box opens a per-application mixer**
+  (`audio/mixer_popup.c`, no reference-bar equivalent — added per explicit
+  user request). `pulse_client.c` additionally tracks PA *sink inputs* (one
+  per app playback stream, `PA_SUBSCRIPTION_MASK_SINK_INPUT`) in a third
+  fixed array (`MAX_PULSE_STREAMS` = 32), named by `application.name` with
+  the stream's own name as fallback. Each mixer row: app name, a 0–100%
+  slider (click to jump, drag to adjust, scroll for ±5% — scroll can still
+  push past 100% up to the shared 200% cap), the percent, and a mute-toggle
+  icon. Mic-side source outputs (apps *recording*) aren't listed.
+  - **Drag relies on Wayland's implicit pointer grab**: while the button is
+    held, motion keeps arriving on the mixer surface even outside it, so
+    `wayland/pointer.c` routes button *releases* (previously ignored
+    entirely) to `mixer_popup_handle_release()` to end the drag. Middle-click
+    is filtered in `pointer_button()` to reach only `volume_handle_click()` —
+    several other handlers treat "any non-left button" as their secondary
+    action (the tray's has-menu rule) and would misfire otherwise.
+  - **Live resize is done by recreating the menu surface, not by
+    `set_size()` on the existing one.** Apps start/stop streams far more
+    often than devices appear, so unlike `device_popup.c` this popup must
+    change height while open. A `zwlr_layer_surface_v1_set_size()` + commit
+    was tried first and Hyprland unmapped the popup on shrink (no `closed`
+    event, no protocol error, it just vanished) — confirmed live via `grim`
+    with `paplay` streams starting/ending; destroy-and-recreate (the same
+    path every popup open already uses) was then confirmed working for
+    grow → shrink → grow. An in-progress drag loses its grab across a
+    recreate; the next release still ends it.
+  - The mixer and the sink device dropdown close each other on open (both
+    hang off the same box at the same spot).
 - **Scroll direction convention** (`wayland/pointer.c`'s
   `pointer_axis_discrete()`): scrolling up decreases the wheel's `discrete`
   value below zero and increases volume; scrolling down does the reverse —
@@ -1490,6 +1521,13 @@ this bar has (the button, and the keybind below) always wants toggle semantics.
   is fixed at open time — a live device appearing/disappearing while the
   popup is open updates existing rows' content (icons, percent, default
   marker) live, but won't resize the popup to add/remove a row for it.
+- **Mixer: playback streams only** — apps recording from a mic (PA source
+  outputs) aren't listed; no per-app output-device routing either (that's
+  `pa_context_move_sink_input_by_index`, not wired up). Opening and live
+  row add/remove were verified via a temporary debug hook + `grim`, but the
+  slider click/drag, scroll, and mute toggle were **not** exercised with a
+  real pointer (no `/dev/uinput` access in the dev environment this pass) —
+  the drag path is reasoned from the implicit-grab semantics.
 - **CPU/GPU/memory: GPU stats are NVIDIA-only, via `nvidia-smi`** — no AMD
   (`radeontop`/`rocm-smi`) or Intel (`intel_gpu_top`) equivalent. On a
   machine with a non-NVIDIA GPU, `sysmon_gpu_available()` stays permanently

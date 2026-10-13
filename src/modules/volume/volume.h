@@ -16,7 +16,8 @@
 double volume_render(cairo_t *cr, Output *output, double right_edge_x, double box_top, double box_height);
 
 // Hit-tests (x, y) against `output`'s most recently rendered box. Left-click
-// toggles mute; right-click opens the sink device dropdown (audio/device_popup.c).
+// toggles mute; right-click opens the sink device dropdown (audio/device_popup.c);
+// middle-click opens the per-app volume mixer (audio/mixer_popup.c).
 // No-op if (x, y) doesn't land on the box.
 void volume_handle_click(Output *output, double x, double y, uint32_t button);
 

@@ -31,6 +31,25 @@ static pa_threaded_mainloop *g_mainloop = NULL;
 static pa_context *g_context = NULL;
 static int g_notify_fd = -1;
 
+// Per-application playback streams ("sink inputs" in PA terms -- one per app
+// currently holding an output stream open, e.g. Firefox, Spotify, mpv), for
+// audio/mixer_popup.c's per-app volume mixer. Same fixed-array, never-
+// relocated-slot convention as PulseNode above, for the same reason: the
+// mixer popup holds PulseStream* across redraws.
+#define MAX_PULSE_STREAMS 32
+
+struct PulseStream {
+    bool in_use;
+    uint32_t index;
+    uint8_t channels;
+    bool has_volume;  // false for e.g. passthrough streams, which can't be
+                      // volume-adjusted at all -- the mixer still lists them,
+                      // but setting their volume is silently skipped
+    char name[256];   // application.name, falling back to the stream's own name
+    int volume_percent;
+    bool muted;
+};
+
 static struct PulseNode g_sinks[MAX_PULSE_NODES];
 static struct PulseNode g_sources[MAX_PULSE_NODES];
 static char g_default_sink_name[256] = "";
@@ -118,6 +137,24 @@ static void remove_node(bool is_sink, uint32_t index) {
     }
 }
 
+static struct PulseStream g_streams[MAX_PULSE_STREAMS];
+
+static struct PulseStream *find_stream_by_index(uint32_t index) {
+    for (int i = 0; i < MAX_PULSE_STREAMS; i++) {
+        if (g_streams[i].in_use && g_streams[i].index == index) {
+            return &g_streams[i];
+        }
+    }
+    return NULL;
+}
+
+static void remove_stream(uint32_t index) {
+    struct PulseStream *stream = find_stream_by_index(index);
+    if (stream) {
+        memset(stream, 0, sizeof(*stream)); // in_use = false
+    }
+}
+
 // --- PA callbacks (mainloop thread) ---
 
 static void sink_info_cb(pa_context *ctx, const pa_sink_info *info, int eol, void *userdata) {
@@ -135,6 +172,43 @@ static void source_info_cb(pa_context *ctx, const pa_source_info *info, int eol,
         return;
     }
     upsert_node(false, info->index, info->name, info->description, &info->volume, info->mute);
+    notify_dirty();
+}
+
+static void sink_input_info_cb(pa_context *ctx, const pa_sink_input_info *info, int eol, void *userdata) {
+    (void)ctx; (void)userdata;
+    if (eol || !info) {
+        return;
+    }
+    struct PulseStream *stream = find_stream_by_index(info->index);
+    if (!stream) {
+        for (int i = 0; i < MAX_PULSE_STREAMS; i++) {
+            if (!g_streams[i].in_use) {
+                stream = &g_streams[i];
+                break;
+            }
+        }
+        if (!stream) {
+            fprintf(stderr, "stickBar: pulse stream limit (%d) reached, ignoring index %u\n",
+                    MAX_PULSE_STREAMS, info->index);
+            return;
+        }
+        memset(stream, 0, sizeof(*stream));
+        stream->in_use = true;
+        stream->index = info->index;
+    }
+
+    // application.name is what pavucontrol shows as each row's title too
+    // (e.g. "Firefox", "spotify") -- info->name is the stream's own name
+    // (often something generic like "AudioStream" or "Playback"), only used
+    // as a fallback for clients that don't set application.name at all.
+    const char *app_name = info->proplist ? pa_proplist_gets(info->proplist, PA_PROP_APPLICATION_NAME) : NULL;
+    snprintf(stream->name, sizeof(stream->name), "%s",
+             app_name && app_name[0] ? app_name : (info->name ? info->name : "Unknown app"));
+    stream->has_volume = info->has_volume != 0;
+    stream->channels = info->volume.channels;
+    stream->volume_percent = (int)lround((double)pa_cvolume_avg(&info->volume) * 100.0 / PA_VOLUME_NORM);
+    stream->muted = info->mute != 0;
     notify_dirty();
 }
 
@@ -175,6 +249,14 @@ static void subscribe_cb(pa_context *ctx, pa_subscription_event_type_t type, uin
             pa_context_get_source_info_by_index(ctx, idx, source_info_cb, NULL);
         }
         break;
+    case PA_SUBSCRIPTION_EVENT_SINK_INPUT:
+        if (kind == PA_SUBSCRIPTION_EVENT_REMOVE) {
+            remove_stream(idx);
+            notify_dirty();
+        } else {
+            pa_context_get_sink_input_info(ctx, idx, sink_input_info_cb, NULL);
+        }
+        break;
     case PA_SUBSCRIPTION_EVENT_SERVER:
         // Default sink/source changed -- re-fetch server info for the new names.
         pa_context_get_server_info(ctx, server_info_cb, NULL);
@@ -191,8 +273,10 @@ static void context_state_cb(pa_context *ctx, void *userdata) {
     case PA_CONTEXT_READY:
         pa_context_set_subscribe_callback(ctx, subscribe_cb, NULL);
         pa_context_subscribe(ctx, PA_SUBSCRIPTION_MASK_SINK | PA_SUBSCRIPTION_MASK_SOURCE |
-                                       PA_SUBSCRIPTION_MASK_SERVER, NULL, NULL);
+                                       PA_SUBSCRIPTION_MASK_SINK_INPUT | PA_SUBSCRIPTION_MASK_SERVER,
+                             NULL, NULL);
         pa_context_get_sink_info_list(ctx, sink_info_cb, NULL);
+        pa_context_get_sink_input_info_list(ctx, sink_input_info_cb, NULL);
         pa_context_get_source_info_list(ctx, source_info_cb, NULL);
         pa_context_get_server_info(ctx, server_info_cb, NULL);
         pa_threaded_mainloop_signal(g_mainloop, 0);
@@ -508,6 +592,87 @@ void pulse_node_toggle_mute(PulseNode *node) {
         pa_context_set_sink_mute_by_index(g_context, node->index, !node->muted, NULL, NULL);
     } else {
         pa_context_set_source_mute_by_index(g_context, node->index, !node->muted, NULL, NULL);
+    }
+    pa_threaded_mainloop_unlock(g_mainloop);
+}
+
+int pulse_stream_count(void) {
+    if (!g_mainloop) return 0;
+    pa_threaded_mainloop_lock(g_mainloop);
+    int count = 0;
+    for (int i = 0; i < MAX_PULSE_STREAMS; i++) {
+        if (g_streams[i].in_use) count++;
+    }
+    pa_threaded_mainloop_unlock(g_mainloop);
+    return count;
+}
+
+PulseStream *pulse_stream_get(int index) {
+    if (!g_mainloop) return NULL;
+    pa_threaded_mainloop_lock(g_mainloop);
+    int seen = 0;
+    PulseStream *result = NULL;
+    for (int i = 0; i < MAX_PULSE_STREAMS; i++) {
+        if (g_streams[i].in_use) {
+            if (seen == index) { result = &g_streams[i]; break; }
+            seen++;
+        }
+    }
+    pa_threaded_mainloop_unlock(g_mainloop);
+    return result;
+}
+
+const char *pulse_stream_name(PulseStream *stream) {
+    // Unlocked, same reasoning as pulse_node_description() above.
+    return stream->name;
+}
+
+int pulse_stream_volume_percent(PulseStream *stream) {
+    if (!g_mainloop) return 0;
+    pa_threaded_mainloop_lock(g_mainloop);
+    int pct = stream->volume_percent;
+    pa_threaded_mainloop_unlock(g_mainloop);
+    return pct;
+}
+
+bool pulse_stream_muted(PulseStream *stream) {
+    if (!g_mainloop) return false;
+    pa_threaded_mainloop_lock(g_mainloop);
+    bool muted = stream->muted;
+    pa_threaded_mainloop_unlock(g_mainloop);
+    return muted;
+}
+
+void pulse_stream_set_volume_percent(PulseStream *stream, int percent) {
+    if (!g_mainloop || !g_context) return;
+    pa_threaded_mainloop_lock(g_mainloop);
+    // The in_use check matters here, unlike the read-only accessors above: a
+    // caller can still be holding this pointer after the app closed its
+    // stream (e.g. mid-drag in the mixer popup), and a freed slot's zeroed
+    // `index` of 0 is a perfectly valid *other* stream's index on the server.
+    if (stream->in_use && stream->has_volume) {
+        int new_pct = clampi(percent, 0, PULSE_MAX_VOLUME_PERCENT);
+        pa_cvolume cv;
+        pa_cvolume_set(&cv, stream->channels > 0 ? stream->channels : 2,
+                       (pa_volume_t)lround((double)new_pct / 100.0 * PA_VOLUME_NORM));
+        // Fire-and-forget, same as pulse_default_sink_adjust_volume().
+        pa_context_set_sink_input_volume(g_context, stream->index, &cv, NULL, NULL);
+    }
+    pa_threaded_mainloop_unlock(g_mainloop);
+}
+
+void pulse_stream_adjust_volume(PulseStream *stream, int delta_percent) {
+    // Reads the cached percent under the lock first, then reuses the setter
+    // (which re-takes the lock) -- the lock isn't recursive, so the two
+    // can't nest.
+    pulse_stream_set_volume_percent(stream, pulse_stream_volume_percent(stream) + delta_percent);
+}
+
+void pulse_stream_toggle_mute(PulseStream *stream) {
+    if (!g_mainloop || !g_context) return;
+    pa_threaded_mainloop_lock(g_mainloop);
+    if (stream->in_use) {
+        pa_context_set_sink_input_mute(g_context, stream->index, !stream->muted, NULL, NULL);
     }
     pa_threaded_mainloop_unlock(g_mainloop);
 }

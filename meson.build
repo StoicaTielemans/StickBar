@@ -107,6 +107,7 @@ sources = files(
   'src/modules/tray/tray_context_menu.c',
   'src/audio/pulse_client.c',
   'src/audio/device_popup.c',
+  'src/audio/mixer_popup.c',
   'src/modules/volume/volume.c',
   'src/modules/mic/mic.c',
   'src/sysmon/sysmon_client.c',

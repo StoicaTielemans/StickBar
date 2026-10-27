@@ -3,6 +3,7 @@
 #include "config/config.h"
 #include "modules/clock/clock.h"
 #include "modules/cpu/cpu.h"
+#include "modules/eq/eq.h"
 #include "modules/gpu/gpu.h"
 #include "modules/media/media.h"
 #include "modules/mem/mem.h"
@@ -35,12 +36,15 @@ void render_output(cairo_t *cr, Output *output, int width, int height) {
 
     // Right region: matches the reference Bar.qml's actual rightLayout order,
     // Mic, Volume, Network, Clock, Tray -- Tray is rightmost, drawn first
-    // here since this loop works right-to-left.
+    // here since this loop works right-to-left. The DAC EQ module (no
+    // reference counterpart -- a StickBar-only addition) sits between Mic and
+    // Volume, keeping all the audio widgets together.
     double tray_left_x = tray_render(cr, output, (double)width, 0.0, (double)height);
     double clock_left_x = clock_render(cr, output, tray_left_x, 0.0, (double)height);
     double network_left_x = network_render(cr, output, clock_left_x, 0.0, (double)height);
     double volume_left_x = volume_render(cr, output, network_left_x, 0.0, (double)height);
-    mic_render(cr, output, volume_left_x, 0.0, (double)height);
+    double eq_left_x = eq_render(cr, output, volume_left_x, 0.0, (double)height);
+    mic_render(cr, output, eq_left_x, 0.0, (double)height);
 
     // Center region: matches the reference bar's own centerLayout, which
     // holds only the media widget, horizontally centered

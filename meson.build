@@ -127,6 +127,10 @@ sources = files(
   'src/pipewire/pipewire_client.c',
   'src/modules/privacy/privacy.c',
   'src/modules/privacy/privacy_info_popup.c',
+  'src/eq/eq_state.c',
+  'src/eq/eq_curve.c',
+  'src/modules/eq/eq.c',
+  'src/modules/eq/eq_popup.c',
 )
 
 executable('stickBar',

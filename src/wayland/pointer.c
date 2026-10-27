@@ -7,6 +7,8 @@
 #include "modules/clock/clock.h"
 #include "modules/clock/clock_calendar_popup.h"
 #include "modules/cpu/cpu.h"
+#include "modules/eq/eq.h"
+#include "modules/eq/eq_popup.h"
 #include "modules/gpu/gpu.h"
 #include "modules/media/media.h"
 #include "modules/media/media_popup.h"
@@ -80,6 +82,8 @@ static void pointer_motion(void *data, struct wl_pointer *pointer, uint32_t time
         mixer_popup_handle_motion(app->pointer_x, app->pointer_y);
     } else if (media_popup_is_menu_surface(app->pointer_over_surface)) {
         media_popup_handle_motion(app->pointer_x, app->pointer_y);
+    } else if (eq_popup_is_menu_surface(app->pointer_over_surface)) {
+        eq_popup_handle_motion(app->pointer_x, app->pointer_y);
     } else if (power_menu_is_menu_surface(app->pointer_over_surface)) {
         power_menu_handle_motion(app->pointer_over_surface, app->pointer_x, app->pointer_y);
     }
@@ -162,6 +166,14 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
         media_popup_close();
         return;
     }
+    if (eq_popup_is_menu_surface(app->pointer_over_surface)) {
+        eq_popup_handle_click(app->pointer_x, app->pointer_y);
+        return;
+    }
+    if (eq_popup_is_catcher_surface(app->pointer_over_surface)) {
+        eq_popup_close();
+        return;
+    }
     if (sysmon_info_popup_is_menu_surface(app->pointer_over_surface)) {
         // Read-only content -- a click lands here but there's nothing to
         // dispatch to, unlike the two interactive popups above; absorbed so
@@ -233,6 +245,8 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
         privacy_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         media_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         network_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
+        // Left *or* right opens the EQ dropdown -- see modules/eq/eq.h.
+        eq_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
     }
 }
 

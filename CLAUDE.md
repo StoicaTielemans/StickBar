@@ -231,6 +231,14 @@ stickBar/
     │                             every 5s poll; plain synchronous accessors, no
     │                             locking (single-threaded polling, like
     │                             sysmon_client.c, unlike pulse_client.c)
+    ├── eq/                       DAC EQ plumbing for the EQ module (see "EQ (TRN
+    │                             Black Pearl)" below) -- event-driven by its own
+    │                             inotify fd, not the shared 5s timer
+    │   ├── eq_state.c            state.json load (cJSON) + inotify watch on its
+    │   │                         directory + background double-forked
+    │   │                         `blackpearl-eq.py profile NAME` launcher
+    │   └── eq_curve.c            pure cairo curve drawing (no file/process
+    │                             handling), shared by the bar box and dropdown
     └── modules/
         ├── workspaces/
         │   └── workspaces.c      occupied/focused set computation, kanji pills,
@@ -275,6 +283,13 @@ stickBar/
         │                         structurally the network-domain twin of
         │                         sysmon_info_popup.c, but right-anchored since
         │                         this module lives in the bar's right region
+        ├── eq/
+        │   ├── eq.c              mini-curve + profile-name box (between mic and
+        │   │                     volume) + hit-rect; left- or right-click opens
+        │   │                     the dropdown
+        │   └── eq_popup.c        header + full EQ graph + clickable profile rows
+        │                         (zero2 / dt990 / dt990-loud); stays open while
+        │                         a profile applies, redraws on the state write
         ├── tray/
         │   ├── tray.c            icon row render + hit-rect recording + click
         │   │                     routing (Activate vs open-menu)
@@ -1420,6 +1435,73 @@ this bar has (the button, and the keybind below) always wants toggle semantics.
   technically open at once, though the power menu's own full-screen surface
   will visually cover the other in practice.
 
+## EQ (TRN Black Pearl)
+
+A StickBar-only module (no reference-bar equivalent) showing the hardware EQ
+of the user's TRN Black Pearl USB DAC, and switching between EQ profiles.
+The DAC itself is driven entirely by the separate DacController project's
+`blackpearl-eq.py` (`~/Code/github.com/StoicaTielemans/DacController`) --
+this module never opens the DAC's HID device.
+
+- **Why a state file instead of talking to the DAC.** The script owns the
+  DAC's WalkPlay HID protocol. A second process reading the DAC while the
+  script writes it steals replies on the shared hidraw node and makes the
+  script's read-back verification fail (seen directly while developing the
+  script, with the vendor website open at the same time). So the script
+  writes `$XDG_CACHE_HOME/blackpearl-eq/state.json` (default
+  `~/.cache/blackpearl-eq/`) after every command that changes or reads the
+  EQ -- profile name, gain mode, preamp, enabled flag, the bands, and a
+  pre-computed 64-point dB curve (20 Hz..20 kHz, log-spaced, preamp *not*
+  included) plus `peak_db`/`min_db` -- and the bar only ever reads that file.
+  No biquad math lives in C; the script computes the curve from the same RBJ
+  coefficients it sends to the DAC.
+- **Live updates: inotify, not polling.** `eq/eq_state.c` watches the
+  *directory* (not the file -- the script replaces it via temp file +
+  `rename()`, which would orphan a watch on the old inode) for
+  `IN_MOVED_TO | IN_CLOSE_WRITE`, filters events to the name `state.json`
+  (the script's own `state.json.tmp` also shows up), and reloads. The
+  directory is created at startup if missing so the watch can be armed
+  before the script has ever run. Registered on `main.c`'s epoll loop like
+  every other fd; redraw only when `eq_state_pump()` reports an actual parse.
+- **Applying a profile.** Clicking a dropdown row runs
+  `/usr/bin/python3 <script> profile NAME` via a double fork (the
+  intermediate child is reaped immediately, so the script's process is
+  reparented to init and never becomes a zombie -- a global `SIGCHLD`
+  handler was avoided because `sysmon_client.c` relies on `pclose()`'s own
+  wait). Everything the child needs (argv, an empty sigset) is prepared
+  before `fork()`, since the bar is multi-threaded (pulse/pipewire threads)
+  and only async-signal-safe calls are allowed between fork and exec --
+  which is also why it's `execv()` with an absolute interpreter path rather
+  than `execvp()`. The child resets its signal mask (main.c blocks SIGUSR1
+  for the power menu's signalfd, and a blocked mask survives exec) and
+  sends stdout/stderr to `/dev/null`. The script sets gain mode and desktop
+  volume itself (per the preset's `Gain:`/`Volume:` lines), writes the EQ,
+  and writes the state file, which arrives back via inotify. The script
+  path can be overridden with `BLACKPEARL_EQ_SCRIPT` (absolute path).
+- **Pending state.** The applied name shows as "NAME..." in the bar box and
+  "applying..." on its dropdown row until the next state write, or for at
+  most 15 s (`PENDING_TIMEOUT_SEC`) -- the script only fails without writing
+  state when the DAC is unplugged or inaccessible, and reports that on its
+  own stderr, which the bar discards.
+- **Rendering.** `eq/eq_curve.c` is pure cairo (same plumbing/rendering split
+  as `dbus/sni_icon.c`); both the 34px bar sparkline and the 300x120 dropdown
+  graph use it. The vertical scale is the smallest multiple of a step that
+  fits the curve's own peak/min, with a floor (+/-6 dB in the bar, +/-12 dB in
+  the dropdown), so gentle EQs aren't exaggerated and heavy ones aren't
+  clipped. A disabled EQ (`blackpearl-eq.py off`) is drawn in `overlay0`
+  instead of the module's `lavender` accent.
+- **Offered profiles** are a fixed list in `modules/eq/eq_popup.c`
+  (`zero2`, `dt990`, `dt990-loud`, per explicit user request -- a subset of
+  DacController's `presets/`); each must match a `presets/NAME.txt`. Both
+  left- and right-click on the bar box open the dropdown (choosing a profile
+  is the widget's only action). The dropdown stays open after a click, like
+  `audio/device_popup.c`, and redraws when the new state arrives.
+- **Testing without touching the DAC.** Run a second bar instance with
+  `XDG_CACHE_HOME` pointed at a scratch directory and write a state file
+  there (e.g. by importing `blackpearl-eq.py` and calling its `save_state()`)
+  -- this is how the inotify path was verified. Profile switching itself was
+  only verified through the script, not by a real click in the dropdown.
+
 ## Conventions
 
 - **This project is commented far more heavily than this assistant's usual
@@ -1668,6 +1750,9 @@ interface display with a live rx/tx rate, a right-click dropdown with
 interface/IP/gateway/MAC/DNS details — see "Network / Wi-Fi"), a power-menu
 overlay (an Arch-logo bar button plus a `SIGUSR1`-driven Hyprland keybind, both
 toggling a full-screen Logout/Restart/Shutdown overlay — see "Power menu"), and
+a DAC EQ widget with no reference-bar equivalent (mini EQ curve + profile name
+for a TRN Black Pearl, a dropdown with a full graph and profile switching via
+the DacController script — see "EQ (TRN Black Pearl)"), and
 a privacy indicator with no reference-bar equivalent (mic/webcam/screen-share
 usage via a direct PipeWire stream-graph monitor, collapsing to zero width when
 nothing's active, a right-click dropdown naming which app is using which — see

@@ -16,8 +16,10 @@
 #include "dbus/sni_registry.h"
 #include "dbus/sni_watcher.h"
 #include "dbus/sni_watcher_service.h"
+#include "eq/eq_state.h"
 #include "hyprland/ipc_events.h"
 #include "modules/clock/clock.h"
+#include "modules/eq/eq_popup.h"
 #include "modules/media/media_popup.h"
 #include "modules/powermenu/power_menu.h"
 #include "modules/workspaces/workspaces.h"
@@ -284,6 +286,20 @@ int main(void) {
         }
     }
 
+    // DAC EQ (TRN Black Pearl): an optional module, same "degrade
+    // gracefully" convention as everything above -- if the inotify watch
+    // can't be set up, the EQ box still shows whatever state was loaded at
+    // startup, it just won't live-update for this run. Needs no thread, so
+    // its position relative to the sigprocmask() call above doesn't matter.
+    int eq_fd = -1;
+    if (eq_state_init()) {
+        eq_fd = eq_state_watch_fd();
+        if (!event_loop_add_fd(epoll_fd, eq_fd, EPOLLIN)) {
+            eq_state_shutdown();
+            eq_fd = -1;
+        }
+    }
+
     struct epoll_event events[10];
 
     while (!g_should_exit) {
@@ -383,6 +399,14 @@ int main(void) {
                 // it granularly, the dbus_fd branch's approach) is correct.
                 pipewire_client_pump();
                 output_mark_all_dirty(&app);
+            } else if (eq_fd >= 0 && fd == eq_fd) {
+                // Fires on any write in ~/.cache/blackpearl-eq/; pump() only
+                // reports a change when state.json itself was (re)written and
+                // parsed, so the redraw stays granular like the dbus branch.
+                if (eq_state_pump()) {
+                    eq_popup_refresh_if_open();
+                    output_mark_all_dirty(&app);
+                }
             }
         }
 
@@ -413,6 +437,9 @@ int main(void) {
     }
     if (pipewire_ok) {
         pipewire_client_shutdown();
+    }
+    if (eq_fd >= 0) {
+        eq_state_shutdown();
     }
     if (dbus_timeout_fd >= 0) {
         close(dbus_timeout_fd);

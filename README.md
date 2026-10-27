@@ -45,6 +45,10 @@ cairo/pangocairo — no GTK, no other UI toolkit.
 - **Power menu** — click the Arch logo (the bar's own leftmost item) for a
   full-screen Logout/Restart/Shutdown overlay, or trigger it from a Hyprland
   keybind (see "Power menu keybind" below).
+- **DAC EQ** — a mini curve + profile name for a TRN Black Pearl USB DAC's
+  hardware EQ, read from the state file written by the companion
+  [DacController](https://github.com/StoicaTielemans/DacController) script;
+  click for a dropdown with a full EQ graph and one-click profile switching.
 
 For a much more detailed writeup of how each module works internally —
 including known limitations and deliberate deviations from the reference

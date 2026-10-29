@@ -16,9 +16,12 @@
 #define MAX_TRACKED_OUTPUTS 8
 
 // The profiles offered in the dropdown, in display order -- a deliberate
-// subset of DacController's presets/ (the user asked for exactly these
-// three: the IEM profile and the two DT 990 variants worth switching
-// between day to day). Each name must match a presets/NAME.txt file, since
+// subset of DacController's presets/ (the user asked for exactly these:
+// the IEM profile, the two DT 990 variants worth switching between day to
+// day, and a flat EQ at each gain mode -- flat-high/flat-low are presets
+// with no bands, so `profile` resets every band to 0 dB and sets the gain,
+// unlike the script's own `flat` command, which leaves gain alone). Each
+// name must match a presets/NAME.txt file, since
 // it's passed straight to `blackpearl-eq.py profile NAME`.
 typedef struct {
     const char *name;
@@ -29,6 +32,8 @@ static const EqProfileEntry PROFILES[] = {
     { "zero2",      "Zero:2 IEM - low gain" },
     { "dt990",      "DT 990 - full EQ, more bass" },
     { "dt990-loud", "DT 990 - treble fix, louder" },
+    { "flat-high",  "Flat EQ - high gain" },
+    { "flat-low",   "Flat EQ - low gain" },
 };
 #define PROFILE_COUNT ((int)(sizeof(PROFILES) / sizeof(PROFILES[0])))
 

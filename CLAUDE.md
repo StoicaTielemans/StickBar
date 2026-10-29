@@ -1491,7 +1491,8 @@ this module never opens the DAC's HID device.
   clipped. A disabled EQ (`blackpearl-eq.py off`) is drawn in `overlay0`
   instead of the module's `lavender` accent.
 - **Offered profiles** are a fixed list in `modules/eq/eq_popup.c`
-  (`zero2`, `dt990`, `dt990-loud`, per explicit user request -- a subset of
+  (`zero2`, `dt990`, `dt990-loud`, `flat-high`, `flat-low`, per explicit user
+  request -- a subset of
   DacController's `presets/`); each must match a `presets/NAME.txt`. Both
   left- and right-click on the bar box open the dropdown (choosing a profile
   is the widget's only action). The dropdown stays open after a click, like

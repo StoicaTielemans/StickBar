@@ -25,10 +25,30 @@ meson compile -C build
 ./build/stickBar
 ```
 
-No test suite — this is a UI skeleton with no headless-testable logic beyond IPC
-parsing. Validate changes by running the bar and observing it (it's fine to run
-alongside the existing Quickshell bar; see below), plus watching stderr for Wayland
-protocol errors or Hyprland IPC failures.
+There are no unit tests (almost nothing is headless-testable beyond IPC parsing),
+but `tests/` has **live regression tests**: each starts a second, short-lived bar
+instance next to the running one, observes it purely from the outside (`/proc`,
+`WAYLAND_DEBUG` output, exit status), and stops it — no source patching, so they
+test the exact binary that ships. Needs a running Wayland session; stdlib-only
+Python. See `tests/README.md` for what each one checks.
+
+```sh
+meson compile -C build && python3 tests/run_all.py   # ~40s, extra bars flash briefly
+python3 tests/perf_compare.py --against HEAD~1        # CPU/memory/compositor table vs. a ref
+```
+
+Each test was confirmed to *fail* against the build from before the fix it
+guards (commit `1814d4e`), not just to pass now. Beyond that, validate changes
+by running the bar and observing it (it's fine to run alongside the existing
+Quickshell bar; see below), plus watching stderr for Wayland protocol errors or
+Hyprland IPC failures.
+
+- **`WAYLAND_DEBUG` timestamps are UTC wall-clock** (`[HH:MM:SS.micro]`, from
+  `CLOCK_REALTIME`), not local time and not monotonic. The sub-second part is
+  what makes `test_clock_alignment.py` possible without instrumenting the bar;
+  mapping a `time.time()` window onto log lines needs `gmtime()`, not
+  `localtime()` — a first version of `test_redraw.py` used local time, matched
+  zero commits, and passed vacuously (now it fails if its window is empty).
 
 - **Running alongside Quickshell is safe.** stickBar opens its own independent
   Wayland connection and surfaces; it shares no socket, lock file, or singleton
@@ -119,6 +139,8 @@ stickBar/
 ├── meson.build
 ├── protocols/
 │   └── wlr-layer-shell-unstable-v1.xml   # vendored, see "Protocol codegen" below
+├── tests/                        live regression tests + perf_compare.py (see
+│                                 "Running / testing changes" and tests/README.md)
 └── src/
     ├── main.c                    entry point: wires everything up, owns the epoll
     │                             loop, owns teardown

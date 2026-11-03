@@ -30,7 +30,7 @@
 #define GRAPH_LABEL_H 14.0
 #define GRAPH_LABEL_GAP 3.0
 #define GRAPH_SPLIT_GAP 8.0
-#define GRAPH_CELLS_W (SYSMON_CPU_HISTORY_LEN / 2) // one sample per dot column
+#define GRAPH_MIN_CELLS_W 30 // 5 minutes of 5s samples, one per dot column
 #define USAGE_CELLS_H 4
 #define TEMP_CELLS_H 2
 #define AXIS_H 12.0
@@ -84,6 +84,14 @@ static double text_width(const char *text, int size, bool bold) {
 static void draw_text_right(cairo_t *cr, double right_x, double y, double h, const char *text, int size, bool bold,
                             Color color) {
     module_box_draw_text_left(cr, right_x - text_width(text, size, bold), y, h, text, size, bold, color);
+}
+
+// The graph fills its card: as many cells as fit (one 5s sample per dot
+// column), up to the whole history. GRAPH_MIN_CELLS_W (5 minutes) only sets
+// the card's minimum width; a wider card shows a longer stretch of history.
+static int graph_cells(double w) {
+    int cells = braille_graph_cells_for_width(w - CARD_PAD * 2.0);
+    return cells < SYSMON_CPU_HISTORY_LEN / 2 ? cells : SYSMON_CPU_HISTORY_LEN / 2;
 }
 
 // Green -> yellow -> red; a function since COLORS isn't a compile-time
@@ -230,7 +238,8 @@ static void graph_label_row(cairo_t *cr, double x, double y, double w, const cha
 }
 
 static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
-    double graph_w = braille_graph_width(GRAPH_CELLS_W);
+    int cells = graph_cells(w);
+    double graph_w = braille_graph_width(cells);
     double usage_h = braille_graph_height(USAGE_CELLS_H);
     double temp_h = braille_graph_height(TEMP_CELLS_H);
     double h = CARD_PAD * 2.0 + (GRAPH_LABEL_H + GRAPH_LABEL_GAP) * 2.0 + usage_h + GRAPH_SPLIT_GAP + temp_h;
@@ -239,12 +248,17 @@ static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
     }
     module_box_draw_rect(cr, x, y, w, h, COLORS.base, COLORS.surface1, 1.0);
 
-    int n = sysmon_cpu_history_len();
+    // Only the samples the graph has room for (and so the peaks over them).
+    int first = sysmon_cpu_history_len() - cells * 2;
+    if (first < 0) {
+        first = 0;
+    }
+    int n = sysmon_cpu_history_len() - first;
     double usage[SYSMON_CPU_HISTORY_LEN], temp[SYSMON_CPU_HISTORY_LEN];
     double usage_peak = 0.0, temp_peak = 0.0;
     for (int i = 0; i < n; i++) {
-        usage[i] = sysmon_cpu_util_history(i);
-        double t = sysmon_cpu_temp_history(i);
+        usage[i] = sysmon_cpu_util_history(first + i);
+        double t = sysmon_cpu_temp_history(first + i);
         // Zero of the graph is TEMP_GRAPH_MIN_C (see gpu_popup.c).
         temp[i] = t > TEMP_GRAPH_MIN_C ? t - TEMP_GRAPH_MIN_C : 0.0;
         if (usage[i] > usage_peak) {
@@ -266,7 +280,7 @@ static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
     cy += GRAPH_LABEL_H + GRAPH_LABEL_GAP;
     Color usage_gradient[3];
     heat_gradient(usage_gradient);
-    braille_graph_draw(cr, graph_x, cy, GRAPH_CELLS_W, USAGE_CELLS_H, usage, n, 100.0, true, usage_gradient);
+    braille_graph_draw(cr, graph_x, cy, cells, USAGE_CELLS_H, usage, n, 100.0, true, usage_gradient);
     cy += usage_h + GRAPH_SPLIT_GAP;
 
     snprintf(left, sizeof(left), "temp %d°C", sysmon_cpu_temp_c());
@@ -274,7 +288,7 @@ static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
     graph_label_row(cr, inner_x, cy, inner_w, left, COLORS.peach, right);
     cy += GRAPH_LABEL_H + GRAPH_LABEL_GAP;
     const Color temp_gradient[3] = {COLORS.peach, COLORS.maroon, COLORS.red};
-    braille_graph_draw(cr, graph_x, cy, GRAPH_CELLS_W, TEMP_CELLS_H, temp, n, TEMP_GRAPH_MAX_C - TEMP_GRAPH_MIN_C,
+    braille_graph_draw(cr, graph_x, cy, cells, TEMP_CELLS_H, temp, n, TEMP_GRAPH_MAX_C - TEMP_GRAPH_MIN_C,
                        true, temp_gradient);
     return h;
 }
@@ -378,7 +392,9 @@ static double paint_content(cairo_t *cr, double w) {
     y += SECTION_GAP;
     y += paint_graph_card(cr, x, y, w);
     if (cr) {
-        module_box_draw_text_left(cr, x, y + 2.0, AXIS_H, "5 min ago", FONT.xs, false, COLORS.overlay0);
+        char span[24];
+        braille_graph_span_label(span, sizeof(span), graph_cells(w), 5.0);
+        module_box_draw_text_left(cr, x, y + 2.0, AXIS_H, span, FONT.xs, false, COLORS.overlay0);
         draw_text_right(cr, x + w, y + 2.0, AXIS_H, "now", FONT.xs, false, COLORS.overlay0);
     }
     y += AXIS_H + 2.0 + SECTION_GAP;
@@ -391,7 +407,7 @@ static double paint_content(cairo_t *cr, double w) {
 }
 
 static double content_width(void) {
-    double w = braille_graph_width(GRAPH_CELLS_W) + CARD_PAD * 2.0;
+    double w = braille_graph_width(GRAPH_MIN_CELLS_W) + CARD_PAD * 2.0;
     double cores_w = core_cell_w() * 2.0 + CORE_COLUMN_GAP;
     if (cores_w > w) {
         w = cores_w;

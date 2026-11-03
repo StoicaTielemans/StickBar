@@ -1,6 +1,7 @@
 #include "render/braille_graph.h"
 
 #include <math.h>
+#include <stdio.h>
 
 // Braille cell geometry: 2x4 dots per cell, DOT_PITCH apart within a cell
 // and CELL_GAP extra between cells -- the extra gap is what makes it read
@@ -16,6 +17,20 @@ static double cell_h(void) { return DOTS_Y * DOT_PITCH + CELL_GAP; }
 
 double braille_graph_width(int cells_w) { return cells_w * cell_w(); }
 double braille_graph_height(int cells_h) { return cells_h * cell_h(); }
+
+int braille_graph_cells_for_width(double width) {
+    int cells = (int)floor(width / cell_w());
+    return cells > 0 ? cells : 0;
+}
+
+void braille_graph_span_label(char *out, size_t out_size, int cells_w, double seconds_per_sample) {
+    double seconds = cells_w * DOTS_X * seconds_per_sample;
+    if (seconds < 90.0) {
+        snprintf(out, out_size, "%.0f s ago", seconds);
+    } else {
+        snprintf(out, out_size, "%.0f min ago", seconds / 60.0);
+    }
+}
 
 // Offset of dot `index` (counted along one axis, across all cells) from the
 // start of that axis: whole cells first, then the dot's place in its cell.

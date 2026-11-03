@@ -3,6 +3,7 @@
 
 #include <cairo.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "config/config.h"
 
@@ -23,6 +24,14 @@
 // Pixel size of a graph `cells_w` cells wide / `cells_h` cells tall.
 double braille_graph_width(int cells_w);
 double braille_graph_height(int cells_h);
+
+// The most whole cells that fit in `width` pixels -- for a graph that fills
+// its card instead of sitting centred in it at a fixed size.
+int braille_graph_cells_for_width(double width);
+
+// The left end of the time axis under a graph `cells_w` cells wide, one
+// sample per dot column every `seconds_per_sample`: "8 min ago".
+void braille_graph_span_label(char *out, size_t out_size, int cells_w, double seconds_per_sample);
 
 // Draws `n` samples (oldest first) into the graph whose top-left corner is
 // (x, y). The newest sample is the rightmost dot column; with fewer samples

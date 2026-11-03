@@ -312,7 +312,7 @@ stickBar/
         │   │                     rect + right-click-opens-dropdown handling (no
         │   │                     left-click, same shape as cpu/gpu/mem)
         │   └── network_info_popup.c  read-only dropdown: status header, braille
-        │                         rx/tx graph of the last 5 min, details grid,
+        │                         rx/tx graph (5-10 min, as fits), details grid,
         │                         DNS tags; repainted every 5s poll while open
         │                         -- right-anchored since this module lives in
         │                         the bar's right region
@@ -1104,6 +1104,16 @@ dropdown, rather than one shared tooltip for all three.
       `sysmon_client_poll()`; the graph's peak labels start from the current
       (refreshed) values, so `used 40%` never sits beside `peak 31%` when
       the fresh read is ahead of the last poll sample.
+    - **Graph width (applies to all four graph dropdowns)**: the graphs
+      used to be a fixed 30 cells (60 samples, 5 min) centred in the card,
+      and every card is wider than that (text rows set the width), so the
+      newest dots stopped well short of the right border -- the user
+      pointed it out on this dropdown. Now `graph_cells()` in each popup
+      fits as many cells as the card holds (`braille_graph_cells_for_width()`),
+      the histories hold 120 samples (10 min) so a wide card can fill, peaks
+      are taken over the visible samples only, and the axis label comes
+      from the real span (`braille_graph_span_label()`: e.g. `8 min ago` on
+      the memory card). 30 cells stays as each card's minimum width.
     - Verified with real `ydotool` right-clicks on a second bar instance:
       apps/free/avail vs `free -b`, zram vs `mm_stat`, PSI vs
       `/proc/pressure/memory`; with a 3 GB `bytearray` held by `python3`,
@@ -1456,8 +1466,9 @@ the identical 5000ms interval).
   reason a network-interface change (e.g. Ethernet unplugged, Wi-Fi took over)
   shouldn't diff two byte counters that belong to two different interfaces.
 - **Rate history for the dropdown's graph**: `network_client.c` keeps a ring
-  buffer of the last `NETWORK_HISTORY_LEN` (60) rx/tx rates, one per 5s
-  poll, so 5 minutes. It's recorded *always*, not only while the dropdown is
+  buffer of the last `NETWORK_HISTORY_LEN` (120) rx/tx rates, one per 5s
+  poll, so 10 minutes (the graph shows as much as fits its card -- see
+  "Graph width" under the memory dropdown). It's recorded *always*, not only while the dropdown is
   open, so the graph is full the moment it opens; it costs one store per
   poll on a timer that runs anyway. Cleared when the default-route interface
   changes or disappears (same rule as the rate reset).
@@ -1504,9 +1515,9 @@ the identical 5000ms interval).
   - **Graph card** (`base` with a `surface1` border, like the calendar's
     month cards): current `↓` rate + `peak` over the history, the download
     half rising to a centre line, the upload half hanging below it, then the
-    `↑` rate + peak; a `5 min ago … now` axis underneath. Drawn by
+    `↑` rate + peak; an `N min ago … now` axis underneath. Drawn by
     `render/braille_graph.c`: btop's braille look (2×4 dots per cell, one
-    sample per dot column, 30 cells for 60 samples, newest at the right),
+    sample per dot column, newest at the right),
     dots coloured by height — teal → green → yellow for download, mauve →
     pink → red for upload. Each half scales to its own peak (upload is
     usually far smaller), with a 10 KB/s floor so an idle trickle stays a

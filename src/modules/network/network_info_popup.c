@@ -23,7 +23,7 @@
 #define GRAPH_LABEL_GAP 3.0
 #define GRAPH_CENTER_GAP 5.0 // between the download and upload halves; the
                              // centre line runs through the middle of it
-#define GRAPH_CELLS_W (NETWORK_HISTORY_LEN / 2) // one sample per dot column
+#define GRAPH_MIN_CELLS_W 30 // 5 minutes of 5s samples, one per dot column
 #define GRAPH_CELLS_H 4                         // per half
 #define AXIS_H 12.0
 #define GRID_ROW_H 17.0
@@ -178,16 +178,25 @@ static double grid_label_col_w(void) {
 
 // Highest rate in the history -- shown as the "peak" label, and the graph
 // half's scale (above GRAPH_MIN_SCALE), so the tallest column reaches the top.
-static double history_peak(bool rx) {
+// Peak over the samples from `first` on (the ones the graph shows).
+static double history_peak(bool rx, int first) {
     double peak = 0.0;
     int n = network_history_len();
-    for (int i = 0; i < n; i++) {
+    for (int i = first; i < n; i++) {
         double v = rx ? network_rx_history(i) : network_tx_history(i);
         if (v > peak) {
             peak = v;
         }
     }
     return peak;
+}
+
+// The graph fills its card: as many cells as fit (one 5s sample per dot
+// column), up to the whole history. GRAPH_MIN_CELLS_W (5 minutes) only sets
+// the card's minimum width; a wider card shows a longer stretch of history.
+static int graph_cells(double w) {
+    int cells = braille_graph_cells_for_width(w - CARD_PAD * 2.0);
+    return cells < NETWORK_HISTORY_LEN / 2 ? cells : NETWORK_HISTORY_LEN / 2;
 }
 
 static void draw_rate_label_row(cairo_t *cr, double x, double y, double w, bool rx, double peak) {
@@ -204,7 +213,8 @@ static void draw_rate_label_row(cairo_t *cr, double x, double y, double w, bool 
 // Graph card: download label, download dots rising toward the centre line,
 // the centre line, upload dots hanging below it, upload label.
 static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
-    double graph_w = braille_graph_width(GRAPH_CELLS_W);
+    int cells = graph_cells(w);
+    double graph_w = braille_graph_width(cells);
     double half_h = braille_graph_height(GRAPH_CELLS_H);
     double h = CARD_PAD * 2.0 + GRAPH_LABEL_H * 2.0 + GRAPH_LABEL_GAP * 2.0 + half_h * 2.0 + GRAPH_CENTER_GAP;
     if (!cr) {
@@ -214,12 +224,17 @@ static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
     module_box_draw_rect(cr, x, y, w, h, COLORS.base, COLORS.surface1, 1.0);
 
     double rx_samples[NETWORK_HISTORY_LEN], tx_samples[NETWORK_HISTORY_LEN];
-    int n = network_history_len();
-    for (int i = 0; i < n; i++) {
-        rx_samples[i] = network_rx_history(i);
-        tx_samples[i] = network_tx_history(i);
+    // Only the samples the graph has room for (and so the peaks over them).
+    int first = network_history_len() - cells * 2;
+    if (first < 0) {
+        first = 0;
     }
-    double rx_peak = history_peak(true), tx_peak = history_peak(false);
+    int n = network_history_len() - first;
+    for (int i = 0; i < n; i++) {
+        rx_samples[i] = network_rx_history(first + i);
+        tx_samples[i] = network_tx_history(first + i);
+    }
+    double rx_peak = history_peak(true, first), tx_peak = history_peak(false, first);
     double rx_scale = rx_peak > GRAPH_MIN_SCALE ? rx_peak : GRAPH_MIN_SCALE;
     double tx_scale = tx_peak > GRAPH_MIN_SCALE ? tx_peak : GRAPH_MIN_SCALE;
 
@@ -234,7 +249,7 @@ static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
     // yellow near its peak, upload in mauve warming to red.
     const Color rx_gradient[3] = {COLORS.teal, COLORS.green, COLORS.yellow};
     const Color tx_gradient[3] = {COLORS.mauve, COLORS.pink, COLORS.red};
-    braille_graph_draw(cr, graph_x, cy, GRAPH_CELLS_W, GRAPH_CELLS_H, rx_samples, n, rx_scale, true, rx_gradient);
+    braille_graph_draw(cr, graph_x, cy, cells, GRAPH_CELLS_H, rx_samples, n, rx_scale, true, rx_gradient);
     cy += half_h;
 
     cairo_save(cr);
@@ -244,7 +259,7 @@ static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
     cairo_restore(cr);
     cy += GRAPH_CENTER_GAP;
 
-    braille_graph_draw(cr, graph_x, cy, GRAPH_CELLS_W, GRAPH_CELLS_H, tx_samples, n, tx_scale, false, tx_gradient);
+    braille_graph_draw(cr, graph_x, cy, cells, GRAPH_CELLS_H, tx_samples, n, tx_scale, false, tx_gradient);
     cy += half_h + GRAPH_LABEL_GAP;
 
     draw_rate_label_row(cr, inner_x, cy, inner_w, false, tx_peak);
@@ -337,7 +352,9 @@ static double paint_content(cairo_t *cr, double w) {
         y += SECTION_GAP;
         y += paint_graph_card(cr, x, y, w);
         if (cr) {
-            module_box_draw_text_left(cr, x, y + 2.0, AXIS_H, "5 min ago", FONT.xs, false, COLORS.overlay0);
+            char span[24];
+            braille_graph_span_label(span, sizeof(span), graph_cells(w), 5.0);
+            module_box_draw_text_left(cr, x, y + 2.0, AXIS_H, span, FONT.xs, false, COLORS.overlay0);
             draw_text_right(cr, x + w, y + 2.0, AXIS_H, "now", FONT.xs, false, COLORS.overlay0);
         }
         y += AXIS_H + 2.0 + SECTION_GAP;
@@ -349,7 +366,7 @@ static double paint_content(cairo_t *cr, double w) {
 // Content width: the graph card's natural width, widened if the header or
 // a details row needs more.
 static double content_width(void) {
-    double w = braille_graph_width(GRAPH_CELLS_W) + CARD_PAD * 2.0;
+    double w = braille_graph_width(GRAPH_MIN_CELLS_W) + CARD_PAD * 2.0;
 
     char icon[5];
     glyph_utf8(status_icon_glyph(), icon);

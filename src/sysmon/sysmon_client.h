@@ -45,9 +45,9 @@ double sysmon_cpu_max_ghz(void);
 bool sysmon_cpu_hybrid(void);
 bool sysmon_cpu_core_is_efficient(int index);
 
-// Usage % / temperature °C of the last SYSMON_CPU_HISTORY_LEN 5s polls (5
+// Usage % / temperature °C of the last SYSMON_CPU_HISTORY_LEN 5s polls (10
 // minutes), for the dropdown's graphs. Index 0 is the oldest.
-#define SYSMON_CPU_HISTORY_LEN 60
+#define SYSMON_CPU_HISTORY_LEN 120
 int sysmon_cpu_history_len(void);
 double sysmon_cpu_util_history(int index);
 double sysmon_cpu_temp_history(int index);
@@ -115,9 +115,9 @@ double sysmon_gpu_power_limit_w(void);
 int sysmon_gpu_clock_max_mhz(void);
 int sysmon_gpu_mem_clock_max_mhz(void);
 
-// Usage % / temperature °C of the last SYSMON_GPU_HISTORY_LEN 5s polls (5
+// Usage % / temperature °C of the last SYSMON_GPU_HISTORY_LEN 5s polls (10
 // minutes), for the dropdown's graphs. Index 0 is the oldest.
-#define SYSMON_GPU_HISTORY_LEN 60
+#define SYSMON_GPU_HISTORY_LEN 120
 int sysmon_gpu_history_len(void);
 double sysmon_gpu_util_history(int index);
 double sysmon_gpu_temp_history(int index);
@@ -135,9 +135,9 @@ double sysmon_swap_used_gb(void);
 double sysmon_swap_total_gb(void);
 int sysmon_swap_percent(void);
 
-// Used % / swap % of the last SYSMON_MEM_HISTORY_LEN 5s polls (5 minutes).
+// Used % / swap % of the last SYSMON_MEM_HISTORY_LEN 5s polls (10 minutes).
 // Index 0 is the oldest.
-#define SYSMON_MEM_HISTORY_LEN 60
+#define SYSMON_MEM_HISTORY_LEN 120
 int sysmon_mem_history_len(void);
 double sysmon_mem_used_history(int index);
 double sysmon_mem_swap_history(int index);

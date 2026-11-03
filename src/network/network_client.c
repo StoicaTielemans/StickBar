@@ -29,7 +29,7 @@ static double g_prev_rx = -1.0, g_prev_tx = -1.0;
 static double g_prev_sample_time = -1.0;
 
 // Rate history for the dropdown's graph: a ring buffer of the last
-// NETWORK_HISTORY_LEN rx/tx rates, one per poll (so 5 minutes at the 5s
+// NETWORK_HISTORY_LEN rx/tx rates, one per poll (so 10 minutes at the 5s
 // poll). Recorded always, not only while the dropdown is open, so the graph
 // is already full the moment it opens -- it costs one store per poll on a
 // timer that runs anyway. g_hist_head is the slot the *next* sample goes in.

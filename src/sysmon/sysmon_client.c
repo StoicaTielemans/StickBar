@@ -101,8 +101,9 @@ static GpuProcess g_gpu_procs[SYSMON_GPU_MAX_PROCS];
 static int g_gpu_proc_count = 0;
 
 // Usage/temperature history for the dropdown's graphs: one sample per 5s
-// poll, so SYSMON_GPU_HISTORY_LEN covers 5 minutes. Recorded always (these
-// two reads happen every poll anyway, for the bar box), so the graph is full
+// poll, so SYSMON_GPU_HISTORY_LEN covers 10 minutes (the graph shows as much
+// as fits its card). Recorded always (these two reads happen every poll
+// anyway, for the bar box), so the graph is full
 // the moment the dropdown opens -- same shape as network_client.c's history.
 static double g_gpu_util_hist[SYSMON_GPU_HISTORY_LEN], g_gpu_temp_hist[SYSMON_GPU_HISTORY_LEN];
 static int g_gpu_hist_head = 0, g_gpu_hist_len = 0;

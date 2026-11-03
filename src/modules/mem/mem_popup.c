@@ -29,7 +29,7 @@
 #define GRAPH_LABEL_H 14.0
 #define GRAPH_LABEL_GAP 3.0
 #define GRAPH_SPLIT_GAP 8.0
-#define GRAPH_CELLS_W (SYSMON_MEM_HISTORY_LEN / 2) // one sample per dot column
+#define GRAPH_MIN_CELLS_W 30 // 5 minutes of 5s samples, one per dot column
 #define USED_CELLS_H 4
 #define SWAP_CELLS_H 2
 #define AXIS_H 12.0
@@ -69,6 +69,14 @@ static double text_width(const char *text, int size, bool bold) {
 static void draw_text_right(cairo_t *cr, double right_x, double y, double h, const char *text, int size, bool bold,
                             Color color) {
     module_box_draw_text_left(cr, right_x - text_width(text, size, bold), y, h, text, size, bold, color);
+}
+
+// The graph fills its card: as many cells as fit (one 5s sample per dot
+// column), up to the whole history. GRAPH_MIN_CELLS_W (5 minutes) only sets
+// the card's minimum width; a wider card shows a longer stretch of history.
+static int graph_cells(double w) {
+    int cells = braille_graph_cells_for_width(w - CARD_PAD * 2.0);
+    return cells < SYSMON_MEM_HISTORY_LEN / 2 ? cells : SYSMON_MEM_HISTORY_LEN / 2;
 }
 
 // Yellow (the module's accent) -> peach -> red as memory fills; a function
@@ -144,7 +152,8 @@ static void graph_label_row(cairo_t *cr, double x, double y, double w, const cha
 }
 
 static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
-    double graph_w = braille_graph_width(GRAPH_CELLS_W);
+    int cells = graph_cells(w);
+    double graph_w = braille_graph_width(cells);
     double used_h = braille_graph_height(USED_CELLS_H);
     double swap_h = braille_graph_height(SWAP_CELLS_H);
     double h = CARD_PAD * 2.0 + (GRAPH_LABEL_H + GRAPH_LABEL_GAP) * 2.0 + used_h + GRAPH_SPLIT_GAP + swap_h;
@@ -153,15 +162,20 @@ static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
     }
     module_box_draw_rect(cr, x, y, w, h, COLORS.base, COLORS.surface1, 1.0);
 
-    int n = sysmon_mem_history_len();
+    // Only the samples the graph has room for (and so the peaks over them).
+    int first = sysmon_mem_history_len() - cells * 2;
+    if (first < 0) {
+        first = 0;
+    }
+    int n = sysmon_mem_history_len() - first;
     double used[SYSMON_MEM_HISTORY_LEN], swap[SYSMON_MEM_HISTORY_LEN];
     // The labels show the fresh figures from sysmon_mem_refresh_details(),
     // which can be newer than the last history sample -- so the peak starts
     // at them, never reading lower than the value beside it.
     double used_peak = sysmon_mem_percent(), swap_peak = sysmon_swap_percent();
     for (int i = 0; i < n; i++) {
-        used[i] = sysmon_mem_used_history(i);
-        swap[i] = sysmon_mem_swap_history(i);
+        used[i] = sysmon_mem_used_history(first + i);
+        swap[i] = sysmon_mem_swap_history(first + i);
         if (used[i] > used_peak) {
             used_peak = used[i];
         }
@@ -181,7 +195,7 @@ static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
     snprintf(right, sizeof(right), "peak %.0f%%", used_peak);
     graph_label_row(cr, inner_x, cy, inner_w, left, right);
     cy += GRAPH_LABEL_H + GRAPH_LABEL_GAP;
-    braille_graph_draw(cr, graph_x, cy, GRAPH_CELLS_W, USED_CELLS_H, used, n, 100.0, true, gradient);
+    braille_graph_draw(cr, graph_x, cy, cells, USED_CELLS_H, used, n, 100.0, true, gradient);
     cy += used_h + GRAPH_SPLIT_GAP;
 
     snprintf(left, sizeof(left), "swap %d%%", sysmon_swap_percent());
@@ -189,7 +203,7 @@ static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
     graph_label_row(cr, inner_x, cy, inner_w, left, right);
     cy += GRAPH_LABEL_H + GRAPH_LABEL_GAP;
     const Color swap_gradient[3] = {COLORS.peach, COLORS.maroon, COLORS.red};
-    braille_graph_draw(cr, graph_x, cy, GRAPH_CELLS_W, SWAP_CELLS_H, swap, n, 100.0, true, swap_gradient);
+    braille_graph_draw(cr, graph_x, cy, cells, SWAP_CELLS_H, swap, n, 100.0, true, swap_gradient);
     return h;
 }
 
@@ -370,7 +384,9 @@ static double paint_content(cairo_t *cr, double w) {
     y += SECTION_GAP;
     y += paint_graph_card(cr, x, y, w);
     if (cr) {
-        module_box_draw_text_left(cr, x, y + 2.0, AXIS_H, "5 min ago", FONT.xs, false, COLORS.overlay0);
+        char span[24];
+        braille_graph_span_label(span, sizeof(span), graph_cells(w), 5.0);
+        module_box_draw_text_left(cr, x, y + 2.0, AXIS_H, span, FONT.xs, false, COLORS.overlay0);
         draw_text_right(cr, x + w, y + 2.0, AXIS_H, "now", FONT.xs, false, COLORS.overlay0);
     }
     y += AXIS_H + 2.0 + SECTION_GAP;
@@ -383,7 +399,7 @@ static double paint_content(cairo_t *cr, double w) {
 }
 
 static double content_width(void) {
-    double w = braille_graph_width(GRAPH_CELLS_W) + CARD_PAD * 2.0;
+    double w = braille_graph_width(GRAPH_MIN_CELLS_W) + CARD_PAD * 2.0;
 
     char icon[5], rest[96];
     glyph_utf8(GLYPH_ICON_MEM, icon);

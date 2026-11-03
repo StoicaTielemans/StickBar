@@ -3,19 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 
-#include "mpris/mpris_art.h"
 #include "wayland/output.h"
-
-// Album art is decoded/scaled once per track change (mpris_art_load(), see
-// parse_metadata() below) to this fixed square size, then drawn scaled into
-// whatever thumbnail slot the popup actually renders -- a generic size
-// decided here rather than importing modules/media/media_popup.c's own
-// THUMB_SIZE UI constant, keeping this data-layer file free of any
-// popup-specific knowledge (same "no D-Bus types in this file" kind of
-// domain boundary dbus/sni_icon.c already draws, just for a different pair
-// of domains).
-#define MPRIS_ART_SIZE 64
 
 // Every MPRIS player lives at this same fixed object path, per spec --
 // unlike SNI (dbus/sni_registry.c), there's no per-item path to discover.
@@ -43,8 +33,7 @@ struct MprisPlayer {
     bool can_go_next, can_go_previous;
     int64_t length_us;   // 0 if unreported
     int64_t position_us; // last value from mpris_player_refresh_position(), 0 if never polled
-    char art_url[512];   // last-seen mpris:artUrl, "" if none -- used only to detect a real change
-    cairo_surface_t *art_surface; // NULL if no usable art
+    pid_t pid;           // process owning bus_name, 0 if unknown -- see is_shadowed()
     sd_bus_slot *signal_slot;
 };
 
@@ -69,10 +58,58 @@ static MprisPlayer *find_free_slot(void) {
     return NULL;
 }
 
+// True for browser-engine per-process MPRIS names ("...chromium.instance57585",
+// "...firefox.instance_1_23") as opposed to an app's own name ("...spotify").
+static bool is_instance_name(const char *bus_name) {
+    return strstr(bus_name, ".instance") != NULL;
+}
+
+/*
+ * One process can own more than one MPRIS name, and when it does they're the
+ * same playback reported twice. Seen live with Spotify (an Electron/Chromium
+ * app): PID 57585 owned both org.mpris.MediaPlayer2.spotify and
+ * org.mpris.MediaPlayer2.chromium.instance57585 -- identical length and
+ * position, but the Chromium mirror's metadata was *stale* (an earlier track's
+ * title while Spotify's own name reported the real one). Tracking both showed
+ * Spotify twice in the dropdown, and the bar widget showed the wrong song
+ * whenever the stale twin happened to come first.
+ *
+ * So per process only one player is visible: an app's own name beats a
+ * ".instance" browser-engine mirror, otherwise the lower slot wins. A real
+ * standalone browser still shows up -- nothing else shares its PID. Players
+ * whose PID couldn't be read (0) are never hidden. Computed on demand rather
+ * than cached, so it fixes itself as names come and go (if Spotify's own name
+ * disappears, its mirror becomes visible again).
+ */
+static bool is_shadowed(const MprisPlayer *p) {
+    if (p->pid <= 0) {
+        return false;
+    }
+    bool p_instance = is_instance_name(p->bus_name);
+    for (int i = 0; i < MAX_MPRIS_PLAYERS; i++) {
+        const MprisPlayer *o = &g_players[i];
+        if (o == p || !o->in_use || o->pid != p->pid) {
+            continue;
+        }
+        bool o_instance = is_instance_name(o->bus_name);
+        if (p_instance && !o_instance) {
+            return true; // the app's own name wins over its engine mirror
+        }
+        if (p_instance == o_instance && o < p) {
+            return true; // same kind -- lower slot wins
+        }
+    }
+    return false;
+}
+
+static bool is_visible(const MprisPlayer *p) {
+    return p->in_use && !is_shadowed(p);
+}
+
 int mpris_player_count(void) {
     int count = 0;
     for (int i = 0; i < MAX_MPRIS_PLAYERS; i++) {
-        if (g_players[i].in_use) {
+        if (is_visible(&g_players[i])) {
             count++;
         }
     }
@@ -82,7 +119,7 @@ int mpris_player_count(void) {
 MprisPlayer *mpris_player_get(int index) {
     int seen = 0;
     for (int i = 0; i < MAX_MPRIS_PLAYERS; i++) {
-        if (g_players[i].in_use) {
+        if (is_visible(&g_players[i])) {
             if (seen == index) {
                 return &g_players[i];
             }
@@ -95,7 +132,7 @@ MprisPlayer *mpris_player_get(int index) {
 MprisPlayer *mpris_active_player(void) {
     MprisPlayer *first = NULL;
     for (int i = 0; i < MAX_MPRIS_PLAYERS; i++) {
-        if (!g_players[i].in_use) {
+        if (!is_visible(&g_players[i])) {
             continue;
         }
         if (!first) {
@@ -111,12 +148,28 @@ MprisPlayer *mpris_active_player(void) {
 const char *mpris_player_title(MprisPlayer *player) { return player->title; }
 const char *mpris_player_artist(MprisPlayer *player) { return player->artist; }
 const char *mpris_player_identity(MprisPlayer *player) { return player->identity; }
+
+void mpris_player_app_name(MprisPlayer *player, char *out, size_t out_size) {
+    if (player->identity[0]) {
+        snprintf(out, out_size, "%s", player->identity);
+        return;
+    }
+    // No Identity reported -- fall back to the bus name's own suffix
+    // ("org.mpris.MediaPlayer2.vlc" -> "vlc"), minus any ".instance..." tail.
+    const char *name = player->bus_name;
+    size_t prefix_len = strlen(MPRIS_NAME_PREFIX);
+    if (strncmp(name, MPRIS_NAME_PREFIX, prefix_len) == 0) {
+        name += prefix_len;
+    }
+    const char *instance = strstr(name, ".instance");
+    int len = instance ? (int)(instance - name) : (int)strlen(name);
+    snprintf(out, out_size, "%.*s", len, name);
+}
 bool mpris_player_is_playing(MprisPlayer *player) { return strcmp(player->status, "Playing") == 0; }
 bool mpris_player_can_go_next(MprisPlayer *player) { return player->can_go_next; }
 bool mpris_player_can_go_previous(MprisPlayer *player) { return player->can_go_previous; }
 int64_t mpris_player_length_us(MprisPlayer *player) { return player->length_us; }
 int64_t mpris_player_position_us(MprisPlayer *player) { return player->position_us; }
-cairo_surface_t *mpris_player_art_surface(MprisPlayer *player) { return player->art_surface; }
 
 void mpris_player_refresh_position(MprisPlayer *player) {
     if (!player || !player->bus) {
@@ -179,8 +232,6 @@ static void parse_metadata(sd_bus_message *m, MprisPlayer *item) {
     item->title[0] = '\0';
     item->artist[0] = '\0';
     item->length_us = 0;
-    char new_art_url[sizeof(item->art_url)];
-    new_art_url[0] = '\0';
 
     if (sd_bus_message_enter_container(m, SD_BUS_TYPE_ARRAY, "{sv}") <= 0) {
         return;
@@ -219,12 +270,13 @@ static void parse_metadata(sd_bus_message *m, MprisPlayer *item) {
                 int64_t len = 0;
                 sd_bus_message_read_basic(m, SD_BUS_TYPE_INT64, &len);
                 item->length_us = len;
-            } else if (key && strcmp(key, "mpris:artUrl") == 0 && strcmp(contents, "s") == 0) {
-                const char *url = NULL;
-                sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &url);
-                if (url) {
-                    snprintf(new_art_url, sizeof(new_art_url), "%s", url);
-                }
+            } else if (key && strcmp(key, "mpris:length") == 0 && strcmp(contents, "t") == 0) {
+                // The spec says int64 ("x"), but Spotify sends uint64 ("t") --
+                // checked live with busctl. Accepting only "x" left Spotify's
+                // length at 0, so its dropdown timeline never showed.
+                uint64_t len = 0;
+                sd_bus_message_read_basic(m, SD_BUS_TYPE_UINT64, &len);
+                item->length_us = len > (uint64_t)INT64_MAX ? INT64_MAX : (int64_t)len;
             } else {
                 sd_bus_message_skip(m, contents);
             }
@@ -233,21 +285,6 @@ static void parse_metadata(sd_bus_message *m, MprisPlayer *item) {
         sd_bus_message_exit_container(m); // dict entry
     }
     sd_bus_message_exit_container(m); // array
-
-    // Only re-decode art when the URL string actually changed (a real track
-    // change), not on every Metadata refetch -- PropertiesChanged also fires
-    // for e.g. a play/pause toggle, which re-sends the same Metadata and
-    // would otherwise mean decoding the same image again for no reason.
-    if (strcmp(new_art_url, item->art_url) != 0) {
-        snprintf(item->art_url, sizeof(item->art_url), "%s", new_art_url);
-        if (item->art_surface) {
-            cairo_surface_destroy(item->art_surface);
-            item->art_surface = NULL;
-        }
-        if (item->art_url[0]) {
-            item->art_surface = mpris_art_load(item->art_url, MPRIS_ART_SIZE);
-        }
-    }
 }
 
 // Re-fetches every Player-interface property this module cares about (a full
@@ -369,6 +406,17 @@ static void add_player(sd_bus *bus, const char *bus_name) {
     item->bus = bus;
     snprintf(item->bus_name, sizeof(item->bus_name), "%s", bus_name);
 
+    // Owning process, for is_shadowed()'s same-process dedup. Best-effort: if
+    // the bus won't say, pid stays 0 and the player is simply never hidden.
+    sd_bus_creds *creds = NULL;
+    if (sd_bus_get_name_creds(bus, bus_name, SD_BUS_CREDS_PID, &creds) >= 0) {
+        pid_t pid = 0;
+        if (sd_bus_creds_get_pid(creds, &pid) >= 0) {
+            item->pid = pid;
+        }
+        sd_bus_creds_unref(creds);
+    }
+
     fetch_player_properties(item);
 
     // member=NULL subscribes to every signal from the Properties interface at
@@ -393,9 +441,6 @@ static void remove_player(const char *bus_name) {
     }
     if (item->signal_slot) {
         sd_bus_slot_unref(item->signal_slot);
-    }
-    if (item->art_surface) {
-        cairo_surface_destroy(item->art_surface);
     }
     memset(item, 0, sizeof(*item)); // in_use = false
     if (g_app) {

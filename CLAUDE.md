@@ -234,15 +234,12 @@ stickBar/
     │                             mpris-domain twin of dbus/'s SNI plumbing, reusing
     │                             that same shared sd_bus session-bus connection
     │                             rather than opening a second one
-    │   ├── mpris_client.c        tracked-player table (fixed-array, like
-    │   │                         sni_registry.c's), GetAll property fetch per
-    │   │                         player, PropertiesChanged + NameOwnerChanged
-    │   │                         subscriptions, fire-and-forget PlayPause/Next/
-    │   │                         Previous calls, on-demand Position polling
-    │   └── mpris_art.c           pure mpris:artUrl -> cairo_surface_t* conversion
-    │                             via gdk-pixbuf (no D-Bus types in this file,
-    │                             deliberately -- same convention dbus/sni_icon.c
-    │                             already documents for its own pure-conversion role)
+    │   └── mpris_client.c        tracked-player table (fixed-array, like
+    │                             sni_registry.c's), GetAll property fetch per
+    │                             player, PropertiesChanged + NameOwnerChanged
+    │                             subscriptions, fire-and-forget PlayPause/Next/
+    │                             Previous calls, on-demand Position polling,
+    │                             same-process duplicate hiding (is_shadowed())
     ├── network/                  /proc + /sys + getifaddrs() plumbing for the
     │                             network module (see "Network / Wi-Fi" below) --
     │                             structurally the network-domain twin of sysmon/,
@@ -293,7 +290,7 @@ stickBar/
         │   │                     module above) + hit-rect + click(play-pause)/
         │   │                     right-click-opens-dropdown handling
         │   └── media_popup.c     dropdown listing every tracked player (not just
-        │                         the active one), each row a thumbnail +
+        │                         the active one), each row an app-name label +
         │                         prev/play-pause/next controls + a read-only
         │                         position/duration timeline -- structurally the
         │                         media-domain twin of device_popup.c
@@ -1094,6 +1091,25 @@ userdata pointer, `in_use`-gated iteration, `_count()`/`_get(index)` accessors).
   bus name, matching `MediaPlayer.qml`'s own filter — it's a shadow/mirror service
   that duplicates whatever's actually playing under its own MPRIS name, so including
   it would show every real player twice.
+- **One visible player per process** (`is_shadowed()` in `mpris_client.c`).
+  Some apps own *two* MPRIS names: seen live with Spotify (Electron/Chromium),
+  where PID 57585 owned both `org.mpris.MediaPlayer2.spotify` and
+  `org.mpris.MediaPlayer2.chromium.instance57585` (checked with `busctl --user
+  call org.freedesktop.DBus ... GetConnectionUnixProcessID`). The two reported
+  identical length and position, but the Chromium mirror's *title was stale*
+  (an earlier track) — so the dropdown listed Spotify twice and the bar widget
+  sometimes showed the wrong song. Each player's owner PID is read once in
+  `add_player()` via `sd_bus_get_name_creds(SD_BUS_CREDS_PID)`; among players
+  sharing a PID, an app's own name beats a `.instance` browser-engine name,
+  otherwise the lower slot wins. `mpris_player_count()`/`_get()`/
+  `mpris_active_player()` only see visible players, so the bar widget and the
+  popup needed no changes. Computed on demand, so if the preferred name goes
+  away the other one reappears; a standalone browser (nothing else on its PID)
+  is never hidden, and an unreadable PID (0) never hides anything.
+- **`mpris:length` is accepted as `t` (uint64) as well as `x`** — the spec says
+  int64, but Spotify sends uint64 (confirmed with `busctl`), so its length used
+  to stay 0 and its dropdown timeline never appeared. `Position` is `x` for
+  every player checked (Spotify, Chromium), so only length needed this.
 - **Every MPRIS player lives at the same fixed object path**
   (`/org/mpris/MediaPlayer2`), unlike SNI items (which each declare their own path) —
   no per-item path discovery is needed here at all.
@@ -1165,26 +1181,20 @@ userdata pointer, `in_use`-gated iteration, `_count()`/`_get(index)` accessors).
     rightward from the trigger's left edge was judged the more reasonable default.
     No overflow-past-either-edge clamping is added, same documented limitation as
     every other popup in this bar.
-- **Each dropdown row also shows a thumbnail and a read-only position/duration
-  timeline**, matching the reference `MediaPopup.qml`'s own layout fairly closely
-  (a left-hand `Image` beside a title + timeline + controls stack) rather than the
-  bar-widget-derived text-only row this section originally shipped with.
-  - **Thumbnail (`mpris/mpris_art.c`)**: MPRIS's `mpris:artUrl` is only fetched for
-    `file://` URIs, decoded via `gdk-pixbuf-2.0` (a new dependency, added
-    specifically for this — cairo alone only decodes PNG natively, which would miss
-    most real-world, commonly-JPEG cover art) and converted to a premultiplied
-    `CAIRO_FORMAT_ARGB32` surface by hand, the same "no toolkit's own
-    cairo-integration helper, do the pixel conversion directly" approach
-    `dbus/sni_icon.c` already takes for SNI `IconPixmap` bytes. `http(s)://` and
-    other schemes are skipped entirely (returns `NULL`, drawn as a plain
-    placeholder square) — this project has no HTTP client, so a streaming
-    service's own CDN-hosted art (Spotify's own cover-art URLs, most in-browser
-    media) never gets fetched; only locally-cached art (mpv, VLC, Firefox's own
-    cached media thumbnails) shows up. Decoding happens once per real track
-    change (`mpris/mpris_client.c`'s `parse_metadata()` diffs the new `artUrl`
-    string against the cached one before reloading), not on every property
-    refresh, so a play/pause toggle (which re-sends the same `Metadata`) doesn't
-    re-decode the same image.
+- **Each dropdown row shows an app-name label, the controls + track text, and a
+  read-only position/duration timeline**, stacked in that order. The label
+  (`mpris_player_app_name()`: the player's MPRIS `Identity`, e.g. "Spotify",
+  or the bus-name suffix minus any `.instance…` tail if that's empty) was added
+  because with several players open, the track text alone doesn't say which
+  app a row is.
+  - **No thumbnails (removed per explicit user request).** There used to be a
+    40px cover-art column (`mpris/mpris_art.c`, decoding `file://` art via
+    gdk-pixbuf), but Spotify's and most browsers' `mpris:artUrl` is an
+    `https://` CDN link and this project has no HTTP client, so in practice it
+    always showed a placeholder square. Downloading art (libcurl in a
+    background thread + a disk cache) was offered and declined, so
+    `mpris_art.c` and the gdk-pixbuf dependency were deleted, and the art URL
+    is no longer parsed at all.
   - **Position/duration timeline**: MPRIS's `Position` property isn't
     push-notified via `PropertiesChanged` per spec (unlike everything else this
     popup shows), so it needs actual polling while something's watching it, same
@@ -1506,8 +1516,7 @@ this bar has (the button, and the keybind below) always wants toggle semantics.
   scratch" call should always do.
 - **Buttons are 150×150, not the reference's own 180×180** — matches this
   project's established "everywhere else runs a bit more compact than the
-  reference's Qt-driven sizing" precedent (see `modules/media/media_popup.c`'s
-  own thumbnail scale-down for the same reasoning), even though a full-screen
+  reference's Qt-driven sizing" precedent, even though a full-screen
   overlay has plenty of room to spare. `FONT.display` (a new size tier, 32px —
   the reference's own `config.js` uses 40) was added to `config.h`'s
   `FontConfig` specifically for the button icons, matching the reference's own
@@ -1775,10 +1784,7 @@ this module never opens the DAC's HID device.
 - **Media: no click-to-seek on the timeline, no per-player volume/mute
   control** — both deliberately out of scope for this pass; see "Media
   (MPRIS)" above for the specific reasoning behind each.
-- **Media: thumbnails only load for `file://` art URLs** — `http(s)://` art
-  (Spotify's own cover-art CDN, most in-browser media) always falls back to
-  the placeholder square, since this project has no HTTP client; see "Media
-  (MPRIS)" above.
+- **Media: no album art** — removed on purpose; see "Media (MPRIS)" above.
 - **Media: playback position is only ever polled while the dropdown is open**
   (once a second, piggybacked on the existing clock timer) — the bar widget
   itself shows no position/duration at all, only the dropdown does; this

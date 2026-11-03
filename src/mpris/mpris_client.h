@@ -1,7 +1,7 @@
 #ifndef CUSTOMBAR_MPRIS_MPRIS_CLIENT_H
 #define CUSTOMBAR_MPRIS_MPRIS_CLIENT_H
 
-#include <cairo.h>
+#include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <systemd/sd-bus.h>
@@ -27,6 +27,11 @@ void mpris_client_init(sd_bus *bus, AppContext *app);
 // The "active" player, matching MediaPlayer.qml's pickActive(): the first
 // currently-Playing tracked player, or the first tracked player at all if
 // none are playing, or NULL if there are none.
+//
+// This and mpris_player_count()/_get() only ever see *visible* players: when
+// one process owns several MPRIS names (Spotify also exposes a stale
+// chromium.instanceN mirror of itself), only one of them is visible -- see
+// is_shadowed() in mpris_client.c.
 MprisPlayer *mpris_active_player(void);
 
 int mpris_player_count(void);
@@ -34,6 +39,11 @@ MprisPlayer *mpris_player_get(int index); // 0 <= index < mpris_player_count()
 
 const char *mpris_player_title(MprisPlayer *player);    // "" if unreported
 const char *mpris_player_artist(MprisPlayer *player);   // "" if unreported
+
+// Name of the app behind `player`, for labeling it: its MPRIS Identity
+// ("Spotify", "Mozilla Firefox"), or if that's empty, the bus-name suffix
+// ("org.mpris.MediaPlayer2.vlc" -> "vlc", any ".instance..." tail dropped).
+void mpris_player_app_name(MprisPlayer *player, char *out, size_t out_size);
 const char *mpris_player_identity(MprisPlayer *player); // app-provided display name, used as a title fallback
 bool mpris_player_is_playing(MprisPlayer *player);
 bool mpris_player_can_go_next(MprisPlayer *player);
@@ -60,14 +70,6 @@ int64_t mpris_player_position_us(MprisPlayer *player);
 // MediaPopup.qml's own `Timer { running: root.visible }` re-triggering
 // positionChanged() -- see CLAUDE.md's "Media (MPRIS)" section.
 void mpris_player_refresh_position(MprisPlayer *player);
-
-// Album art for the currently-cached track, already decoded and scaled to a
-// fixed thumbnail size at fetch time (mpris/mpris_art.c) -- NULL if the
-// player reported no mpris:artUrl, the URL uses an unsupported scheme
-// (anything other than file://), or decoding failed. Re-decoded only when
-// Metadata's own artUrl string actually changes (i.e. on a real track
-// change), not on every property refresh.
-cairo_surface_t *mpris_player_art_surface(MprisPlayer *player);
 
 // Fire-and-forget MPRIS method calls -- same sd_bus_send()-not-
 // sd_bus_call_method() reasoning as dbus/sni_registry.c's

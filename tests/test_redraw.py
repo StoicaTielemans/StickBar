@@ -4,8 +4,13 @@
 Checks the redraw path in bar/bar_surface.c from the outside, via WAYLAND_DEBUG:
 
 1. Clock-only ticks damage a small rectangle (the changed digits), not the
-   whole 1920x20 surface. At least half of all post-startup commits must
-   damage under SMALL_DAMAGE_PX (the rest are 5s polls and other real changes).
+   whole 1920x20 surface. At least MIN_SMALL commits, and at least a quarter
+   of all post-startup commits, must damage under SMALL_DAMAGE_PX. The rest
+   are 5s polls and other real changes (a playing Spotify adds its own), so
+   this deliberately isn't "most commits": a first version required half and
+   failed intermittently while music was playing. The regression it guards
+   against is unambiguous anyway -- the old full-redraw build had *zero*
+   small commits.
 2. Events that change nothing visible produce no commits: fires a burst of
    `pactl` calls setting the default sink's volume/mute to their *current*
    values (each one is a real PulseAudio change event the bar receives) and
@@ -27,6 +32,7 @@ import common  # noqa: E402
 
 WARMUP_S = 3
 SMALL_DAMAGE_PX = 2000
+MIN_SMALL = 3
 NOOP_CALLS = 20
 NOOP_WINDOW_S = 2.0
 
@@ -83,7 +89,7 @@ def main():
     if not damages:
         common.fail("no damage_buffer requests after warmup")
     small = sum(1 for a in damages if a < SMALL_DAMAGE_PX)
-    if small * 2 < len(damages):
+    if small < MIN_SMALL or small * 4 < len(damages):
         common.fail(f"only {small}/{len(damages)} commits had small damage (< {SMALL_DAMAGE_PX}px); "
                     f"largest areas: {sorted(damages)[-5:]}")
     msg = f"{small}/{len(damages)} commits damaged < {SMALL_DAMAGE_PX}px (median {sorted(damages)[len(damages)//2]}px)"

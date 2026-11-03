@@ -26,12 +26,6 @@
 #define TRACK_BUF_SIZE 300
 #define TIME_BUF_SIZE 16
 
-// Thumbnail slot -- deliberately smaller than the reference MediaPopup.qml's
-// own 56x56 (`Image { Layout.preferredWidth: 56 }`), since this bar's own
-// module boxes/popups everywhere else run noticeably more compact than the
-// reference's Qt-driven sizing.
-#define THUMB_SIZE 40.0
-
 // Timeline (progress bar) geometry, read-only -- no click-to-seek in this
 // pass, see media_popup_handle_click()'s own doc comment for why.
 #define TIMELINE_W 160.0
@@ -46,6 +40,7 @@
 
 typedef struct {
     double y, h; // whole card: y relative to popup top, h = full card height (x is always OUTER_MARGIN)
+    double app_y, app_h;           // small app-name header line ("Spotify") at the card's top
 
     double controls_y, controls_h; // prev/playpause/next + track-text sub-row
 
@@ -64,6 +59,7 @@ typedef struct {
     MprisPlayer *players[MAX_MEDIA_ROWS];
     RowLayout rows[MAX_MEDIA_ROWS];
     char track_text[MAX_MEDIA_ROWS][TRACK_BUF_SIZE]; // pre-truncated, computed at layout time
+    char app_name[MAX_MEDIA_ROWS][TRACK_BUF_SIZE];   // pre-truncated app label, computed at layout time
     int row_count;
     int hovered_index;
 
@@ -139,10 +135,8 @@ static void format_time(int64_t us, char *out, size_t out_size) {
 
 // Every row shares the same column x-positions (the widest glyph/text across
 // all rows decides each column's width -- see compute_layout()), so these
-// are plain functions of shared state rather than per-row fields. The
-// thumbnail column is reserved at a fixed offset regardless of whether any
-// given row actually has usable art, so columns stay aligned across rows.
-static double content_x(void) { return OUTER_MARGIN + THUMB_SIZE + ROW_INNER_SPACING; }
+// are plain functions of shared state rather than per-row fields.
+static double content_x(void) { return OUTER_MARGIN; }
 static double control_prev_x(void) { return content_x(); }
 static double control_playpause_x(void) { return control_prev_x() + g_popup.prev_col_w + ROW_INNER_SPACING; }
 static double control_next_x(void) { return control_playpause_x() + g_popup.playpause_col_w + ROW_INNER_SPACING; }
@@ -202,6 +196,15 @@ static void compute_layout(void) {
         MprisPlayer *player = mpris_player_get(i);
         g_popup.players[i] = player;
 
+        // Which app this row belongs to -- with several players open, the
+        // track text alone doesn't say whether it's Spotify or a browser tab.
+        char app_full[TRACK_BUF_SIZE];
+        mpris_player_app_name(player, app_full, sizeof(app_full));
+        truncate_to_width(app_full, TRACK_TEXT_MAX_W, FONT.sm, false, g_popup.app_name[i], TRACK_BUF_SIZE);
+        double app_w, app_h;
+        module_box_measure_text(g_popup.app_name[i], FONT.sm, false, &app_w, &app_h);
+        g_popup.rows[i].app_h = app_h;
+
         char full_text[TRACK_BUF_SIZE];
         media_build_track_text(player, full_text, sizeof(full_text));
         truncate_to_width(full_text, TRACK_TEXT_MAX_W, FONT.label, false, g_popup.track_text[i], TRACK_BUF_SIZE);
@@ -235,35 +238,32 @@ static void compute_layout(void) {
         g_popup.rows[i].time_h = time_row_h;
 
         double row_content_w = controls_row_w > time_row_w ? controls_row_w : time_row_w;
+        if (app_w > row_content_w) {
+            row_content_w = app_w;
+        }
         if (row_content_w > max_content_w) {
             max_content_w = row_content_w;
         }
 
-        double card_h = controls_row_h;
+        double card_h = app_h + TIME_ROW_GAP + controls_row_h;
         if (has_time) {
             card_h += TIME_ROW_GAP + time_row_h;
-        }
-        if (card_h < THUMB_SIZE) {
-            card_h = THUMB_SIZE; // thumbnail column reserves at least THUMB_SIZE of vertical room
         }
         card_heights[i] = card_h;
         g_popup.rows[i].h = card_h;
     }
 
-    g_popup.content_width = THUMB_SIZE + ROW_INNER_SPACING + max_content_w;
+    g_popup.content_width = max_content_w;
     g_popup.popup_width = g_popup.content_width + OUTER_MARGIN * 2.0;
 
     double y = OUTER_MARGIN;
     for (int i = 0; i < count; i++) {
         g_popup.rows[i].y = y;
-        // Both text sub-rows top-align at the card's own top -- if the
-        // thumbnail is taller than the controls+time stack, there's just
-        // extra blank space below the text, which is close enough to the
-        // reference's own uneven-per-card layout for this popup's purposes
-        // without replicating Qt's row-height negotiation.
-        g_popup.rows[i].controls_y = y;
+        // Stacked top to bottom: app name, controls + track text, timeline.
+        g_popup.rows[i].app_y = y;
+        g_popup.rows[i].controls_y = y + g_popup.rows[i].app_h + TIME_ROW_GAP;
         if (g_popup.rows[i].has_time) {
-            g_popup.rows[i].time_y = y + g_popup.rows[i].controls_h + TIME_ROW_GAP;
+            g_popup.rows[i].time_y = g_popup.rows[i].controls_y + g_popup.rows[i].controls_h + TIME_ROW_GAP;
         }
         y += card_heights[i];
         if (i < count - 1) {
@@ -282,36 +282,6 @@ static void draw_transparent(cairo_t *cr, void *user_data) {
     cairo_restore(cr);
 }
 
-static void draw_thumbnail(cairo_t *cr, MprisPlayer *player, RowLayout *row) {
-    double thumb_x = OUTER_MARGIN;
-    double thumb_y = row->y + (row->h - THUMB_SIZE) / 2.0;
-
-    cairo_surface_t *art = mpris_player_art_surface(player);
-    if (!art) {
-        // No usable art (no mpris:artUrl reported, an unsupported URL
-        // scheme, or decoding failed) -- an explicit placeholder square
-        // rather than leaving a blank gap, same "explicit unavailable
-        // state" instinct this project's other modules already use for
-        // missing data (e.g. the GPU module's "--" when no NVIDIA GPU is
-        // present).
-        module_box_draw_rect(cr, thumb_x, thumb_y, THUMB_SIZE, THUMB_SIZE, COLORS.surface0, COLORS.overlay0, 1.0);
-        return;
-    }
-
-    int art_w = cairo_image_surface_get_width(art);
-    int art_h = cairo_image_surface_get_height(art);
-    cairo_save(cr);
-    cairo_rectangle(cr, thumb_x, thumb_y, THUMB_SIZE, THUMB_SIZE);
-    cairo_clip(cr);
-    cairo_translate(cr, thumb_x, thumb_y);
-    if (art_w > 0 && art_h > 0) {
-        cairo_scale(cr, THUMB_SIZE / (double)art_w, THUMB_SIZE / (double)art_h);
-    }
-    cairo_set_source_surface(cr, art, 0, 0);
-    cairo_paint(cr);
-    cairo_restore(cr);
-}
-
 static void draw_row(cairo_t *cr, int i) {
     MprisPlayer *player = g_popup.players[i];
     RowLayout *row = &g_popup.rows[i];
@@ -321,7 +291,8 @@ static void draw_row(cairo_t *cr, int i) {
                               COLORS.surface1, (Color){ 0, 0, 0, 0 }, 0.0);
     }
 
-    draw_thumbnail(cr, player, row);
+    module_box_draw_text_left(cr, content_x(), row->app_y, row->app_h, g_popup.app_name[i], FONT.sm, false,
+                               COLORS.subtext0);
 
     char glyph_buf[5];
 
@@ -539,7 +510,7 @@ void media_popup_handle_click(double x, double y) {
 
     RowLayout *row = &g_popup.rows[idx];
     // Only the controls sub-row (prev/playpause/next) is interactive --
-    // landing on the thumbnail or the time/progress row is a no-op. No
+    // landing on the app-name line or the time/progress row is a no-op. No
     // click-to-seek on the progress bar in this pass: MPRIS's SetPosition()
     // needs the track's own mpris:trackid object path, which isn't cached
     // anywhere yet (only the fields this popup actually displays are), and
@@ -553,7 +524,7 @@ void media_popup_handle_click(double x, double y) {
     MprisPlayer *player = g_popup.players[idx];
 
     if (x < content_x()) {
-        return; // landed on the thumbnail column
+        return; // left margin, before the prev button
     } else if (x < control_playpause_x()) {
         mpris_player_previous(player);
     } else if (x < control_next_x()) {

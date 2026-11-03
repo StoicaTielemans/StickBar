@@ -9,7 +9,7 @@
 /*
  * Pure cairo drawing of eq/eq_state.c's current EQ curve -- no inotify, file,
  * or process handling in this file, deliberately (same split as
- * dbus/sni_icon.c / mpris/mpris_art.c: plumbing in one file, pure rendering in
+ * dbus/sni_icon.c: plumbing in one file, pure rendering in
  * another). Shared by the bar box (modules/eq/eq.c, a ~14px-tall sparkline)
  * and the dropdown (modules/eq/eq_popup.c, a full graph), which differ only
  * in size, scale and whether a grid is drawn.

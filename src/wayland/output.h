@@ -20,4 +20,9 @@ void output_remove(AppContext *app, uint32_t name);
 // this event rate to just redraw everything.
 void output_mark_all_dirty(AppContext *app);
 
+// Same, but only the clock box needs repainting -- used by the 1-second clock
+// tick so it doesn't re-render every other module each second
+// (see bar_surface_mark_clock_dirty()).
+void output_mark_all_clock_dirty(AppContext *app);
+
 #endif

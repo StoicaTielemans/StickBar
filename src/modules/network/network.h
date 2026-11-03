@@ -10,7 +10,7 @@
 // right edge sits at `right_edge_x`, vertically spanning
 // box_top..box_top+box_height -- same shape as modules/volume/volume.c's
 // volume_render(), since this lives in the bar's right region between
-// Volume and Clock (matching the reference Bar.qml's own rightLayout order:
+// the EQ module and Clock (otherwise matching the reference Bar.qml's own rightLayout order:
 // Mic, Volume, Network, Clock, Tray). Records the box's screen-space rect
 // for later network_handle_click(). Returns the box's own left edge minus
 // BAR.item_spacing, for the next (further left) right-region module to

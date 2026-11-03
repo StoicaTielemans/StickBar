@@ -1,6 +1,8 @@
 #include "wayland/event_loop.h"
 
+#include <errno.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/epoll.h>
 #include <unistd.h>
 
@@ -44,26 +46,48 @@ bool event_loop_add_fd(int epoll_fd, int fd, uint32_t events) {
  *     the connection wedged for the next iteration.
  */
 
-void wayland_dispatch_prepare(struct wl_display *display) {
-    while (wl_display_prepare_read(display) != 0) {
-        wl_display_dispatch_pending(display);
-    }
-    // Flush anything queued by the dispatch_pending calls above (or by earlier
-    // request-sending code this iteration) so outgoing requests don't sit in our
-    // local buffer indefinitely waiting for someone else to flush them.
-    wl_display_flush(display);
+// Logs why the connection died. wl_display_get_error() returns the errno libwayland
+// recorded when it marked the display as broken (EPIPE/ECONNRESET for a vanished
+// compositor, EPROTO for a protocol error it already printed details about).
+static void log_connection_lost(struct wl_display *display) {
+    int err = wl_display_get_error(display);
+    fprintf(stderr, "stickBar: Wayland connection lost (%s) -- exiting\n",
+            strerror(err ? err : errno));
 }
 
-void wayland_dispatch_read(struct wl_display *display) {
-    if (wl_display_read_events(display) == -1) {
-        // The connection is broken (compositor died, etc.) -- there's nothing
-        // meaningful to recover here; the next wl_display_* call elsewhere will
-        // surface the same error and the process should exit.
-        return;
+/*
+ * Every failure path below returns false instead of carrying on, and main.c treats
+ * that as "stop the loop". This matters more than it looks: once the compositor
+ * hangs up, the display fd stays permanently readable (EPOLLHUP), so epoll_wait()
+ * returns immediately on every iteration. If a failed read were just ignored, the
+ * loop would spin at 100% CPU forever with nothing on screen, instead of exiting.
+ * Likewise, wl_display_dispatch_pending() returning -1 inside prepare's retry loop
+ * would otherwise never let prepare_read succeed, hanging right here instead.
+ */
+
+bool wayland_dispatch_prepare(struct wl_display *display) {
+    while (wl_display_prepare_read(display) != 0) {
+        if (wl_display_dispatch_pending(display) == -1) {
+            log_connection_lost(display);
+            return false;
+        }
     }
-    // read_events() only moves raw data into the queue; dispatch_pending() is what
-    // actually invokes our listener callbacks for it.
-    wl_display_dispatch_pending(display);
+    // EAGAIN just means the socket buffer is full right now; the rest goes out on
+    // a later flush. Any other error means the connection is gone.
+    if (wl_display_flush(display) == -1 && errno != EAGAIN) {
+        wl_display_cancel_read(display);
+        log_connection_lost(display);
+        return false;
+    }
+    return true;
+}
+
+bool wayland_dispatch_read(struct wl_display *display) {
+    if (wl_display_read_events(display) == -1 || wl_display_dispatch_pending(display) == -1) {
+        log_connection_lost(display);
+        return false;
+    }
+    return true;
 }
 
 void wayland_dispatch_cancel(struct wl_display *display) {

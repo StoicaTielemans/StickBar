@@ -1,5 +1,6 @@
 #include "sysmon/sysmon_client.h"
 
+#include <dlfcn.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,9 +46,12 @@ static double g_swap_used_gb = 0.0;
 static double g_swap_total_gb = 0.0;
 static int g_swap_percent = 0;
 
+static void nvml_init(void);
+
 void sysmon_client_init(void) {
     memset(&g_prev_total, 0, sizeof(g_prev_total));
     memset(g_prev_cores, 0, sizeof(g_prev_cores));
+    nvml_init();
 }
 
 static void poll_cpu(void) {
@@ -185,54 +189,140 @@ static void poll_mem(void) {
     }
 }
 
-// Synchronous (popen()/pclose() block until nvidia-smi exits) -- see
-// CLAUDE.md's "System monitor (CPU/GPU/memory)" section for the measured
-// latency (~15-45ms on this machine) and why that's an acceptable window for
-// a call made once per 5-second poll tick, not per frame or per click.
+/*
+ * GPU stats come from NVML (libnvidia-ml), the library nvidia-smi itself is a
+ * thin CLI over -- calling it directly replaces a fork+exec of nvidia-smi every
+ * 5 seconds (~15-45ms of blocked event loop each time) with a handful of
+ * in-process calls taking microseconds.
+ *
+ * Loaded with dlopen() at runtime rather than linked:
+ *   - nvml.h only ships with the CUDA toolkit (/opt/cuda here), not with the
+ *     driver, so linking would add CUDA as a build dependency just for nine
+ *     function prototypes;
+ *   - linking against libnvidia-ml.so would make stickBar fail to *start* on a
+ *     machine without the NVIDIA driver, instead of just showing "--" in the
+ *     GPU box like it always has.
+ * The library itself comes from nvidia-utils -- the same package that ships
+ * nvidia-smi -- so "is GPU monitoring available" hasn't changed at all.
+ *
+ * The few types/prototypes needed are declared locally below, copied from
+ * nvml.h. NVML keeps these versioned entry points ABI-stable (that's exactly
+ * what the _v2 suffixes are for), so this doesn't drift with driver updates.
+ */
+typedef int nvmlReturn_t; // NVML_SUCCESS == 0, anything else is an error
+typedef void *nvmlDevice_t; // opaque handle
+typedef struct {
+    unsigned int gpu;    // % of the last sample period a kernel was running
+    unsigned int memory; // % of the last sample period memory was read/written
+} nvmlUtilization_t;
+// The _v2 memory query, not the original: v1's `used` also counts memory the
+// driver/firmware reserves for itself (~300 MiB more on this machine), while
+// nvidia-smi's own memory.used -- and therefore what this box always showed --
+// is v2's, which excludes it. Confirmed side by side against nvidia-smi.
+typedef struct {
+    unsigned int version; // must be set to NVML_MEMORY_V2 before the call
+    unsigned long long total, reserved, free, used; // bytes
+} nvmlMemory_v2_t;
+#define NVML_MEMORY_V2 ((unsigned int)(sizeof(nvmlMemory_v2_t) | (2u << 24)))
+#define NVML_TEMPERATURE_GPU 0
+
+static struct {
+    void *lib; // dlopen() handle, NULL if NVML isn't usable this run
+    nvmlDevice_t device;
+    nvmlReturn_t (*shutdown)(void);
+    nvmlReturn_t (*get_utilization)(nvmlDevice_t, nvmlUtilization_t *);
+    nvmlReturn_t (*get_temperature)(nvmlDevice_t, int, unsigned int *);
+    nvmlReturn_t (*get_memory)(nvmlDevice_t, nvmlMemory_v2_t *);
+    nvmlReturn_t (*get_fan)(nvmlDevice_t, unsigned int *);
+    nvmlReturn_t (*get_power)(nvmlDevice_t, unsigned int *);   // milliwatts
+    nvmlReturn_t (*get_pstate)(nvmlDevice_t, int *);           // 0..15 => "P0".."P15"
+} g_nvml;
+
+static void gpu_warn_once(const char *why) {
+    if (!g_gpu_warned) {
+        fprintf(stderr, "stickBar: %s -- GPU module will show \"unavailable\" for this run\n", why);
+        g_gpu_warned = true;
+    }
+}
+
+// One-time setup: load the library, init NVML, resolve every function, and
+// grab GPU 0's handle (same "first GPU only" scope nvidia-smi's own single
+// CSV line had here). Any failure leaves g_nvml.lib NULL, which poll_gpu()
+// treats as "no GPU" -- identical to the old missing-nvidia-smi behavior.
+static void nvml_init(void) {
+    void *lib = dlopen("libnvidia-ml.so.1", RTLD_NOW | RTLD_LOCAL);
+    if (!lib) {
+        gpu_warn_once("NVIDIA's libnvidia-ml.so.1 not found (no NVIDIA driver?)");
+        return;
+    }
+
+    nvmlReturn_t (*init)(void) = (nvmlReturn_t (*)(void))dlsym(lib, "nvmlInit_v2");
+    nvmlReturn_t (*get_handle)(unsigned int, nvmlDevice_t *) =
+        (nvmlReturn_t (*)(unsigned int, nvmlDevice_t *))dlsym(lib, "nvmlDeviceGetHandleByIndex_v2");
+    g_nvml.shutdown = (nvmlReturn_t (*)(void))dlsym(lib, "nvmlShutdown");
+    g_nvml.get_utilization = (nvmlReturn_t (*)(nvmlDevice_t, nvmlUtilization_t *))dlsym(lib, "nvmlDeviceGetUtilizationRates");
+    g_nvml.get_temperature = (nvmlReturn_t (*)(nvmlDevice_t, int, unsigned int *))dlsym(lib, "nvmlDeviceGetTemperature");
+    g_nvml.get_memory = (nvmlReturn_t (*)(nvmlDevice_t, nvmlMemory_v2_t *))dlsym(lib, "nvmlDeviceGetMemoryInfo_v2");
+    g_nvml.get_fan = (nvmlReturn_t (*)(nvmlDevice_t, unsigned int *))dlsym(lib, "nvmlDeviceGetFanSpeed");
+    g_nvml.get_power = (nvmlReturn_t (*)(nvmlDevice_t, unsigned int *))dlsym(lib, "nvmlDeviceGetPowerUsage");
+    g_nvml.get_pstate = (nvmlReturn_t (*)(nvmlDevice_t, int *))dlsym(lib, "nvmlDeviceGetPerformanceState");
+
+    if (!init || !get_handle || !g_nvml.shutdown || !g_nvml.get_utilization || !g_nvml.get_temperature ||
+        !g_nvml.get_memory || !g_nvml.get_fan || !g_nvml.get_power || !g_nvml.get_pstate) {
+        gpu_warn_once("libnvidia-ml.so.1 is missing an expected NVML function");
+        dlclose(lib);
+        return;
+    }
+    if (init() != 0) {
+        gpu_warn_once("nvmlInit failed (NVIDIA driver not loaded?)");
+        dlclose(lib);
+        return;
+    }
+    if (get_handle(0, &g_nvml.device) != 0) {
+        gpu_warn_once("NVML found no GPU at index 0");
+        g_nvml.shutdown();
+        dlclose(lib);
+        return;
+    }
+    g_nvml.lib = lib;
+}
+
 static void poll_gpu(void) {
-    FILE *p = popen("nvidia-smi --query-gpu=utilization.gpu,utilization.memory,temperature.gpu,"
-                     "memory.used,memory.total,fan.speed,power.draw,pstate "
-                     "--format=csv,noheader,nounits 2>/dev/null",
-                     "r");
-    if (!p) {
-        if (!g_gpu_warned) {
-            fprintf(stderr, "stickBar: failed to spawn nvidia-smi -- GPU module will show "
-                             "\"unavailable\" for this run\n");
-            g_gpu_warned = true;
-        }
+    if (!g_nvml.lib) {
         return;
     }
 
-    char line[256] = "";
-    bool got_line = fgets(line, sizeof(line), p) != NULL;
-    int rc = pclose(p);
-
-    if (!got_line || rc != 0) {
-        if (!g_gpu_warned) {
-            fprintf(stderr, "stickBar: nvidia-smi query failed -- is an NVIDIA GPU/driver "
-                             "present? GPU module will show \"unavailable\" for this run\n");
-            g_gpu_warned = true;
-        }
+    // Utilization is the one field the GPU box can't do without -- if even that
+    // fails (e.g. the GPU fell off the bus), keep the previous values, the same
+    // "leave old values in place" behavior a malformed nvidia-smi line had.
+    nvmlUtilization_t util;
+    if (g_nvml.get_utilization(g_nvml.device, &util) != 0) {
         return;
     }
+    g_gpu_percent = (int)util.gpu;
+    g_gpu_mem_percent = (int)util.memory;
 
-    int util = 0, mem_util = 0, temp = 0, mem_used = 0, mem_total = 0, fan = 0;
-    double power = 0.0;
-    char pstate[16] = "";
-    int n = sscanf(line, "%d, %d, %d, %d, %d, %d, %lf, %15s", &util, &mem_util, &temp, &mem_used,
-                    &mem_total, &fan, &power, pstate);
-    if (n < 8) {
-        return; // unexpected output shape -- leave the previous (or default) values in place
+    // Everything else is best-effort per field: a card without a fan (or a
+    // driver refusing one query) shouldn't blank the whole module.
+    unsigned int value = 0;
+    g_gpu_temp_c = g_nvml.get_temperature(g_nvml.device, NVML_TEMPERATURE_GPU, &value) == 0 ? (int)value : 0;
+    g_gpu_fan_percent = g_nvml.get_fan(g_nvml.device, &value) == 0 ? (int)value : 0;
+    g_gpu_power_w = g_nvml.get_power(g_nvml.device, &value) == 0 ? value / 1000.0 : 0.0;
+
+    nvmlMemory_v2_t mem = { .version = NVML_MEMORY_V2 };
+    if (g_nvml.get_memory(g_nvml.device, &mem) == 0) {
+        // MiB, matching nvidia-smi's memory.used/memory.total units.
+        g_gpu_mem_used_mb = (int)(mem.used / (1024 * 1024));
+        g_gpu_mem_total_mb = (int)(mem.total / (1024 * 1024));
     }
 
-    g_gpu_percent = util;
-    g_gpu_mem_percent = mem_util;
-    g_gpu_temp_c = temp;
-    g_gpu_mem_used_mb = mem_used;
-    g_gpu_mem_total_mb = mem_total;
-    g_gpu_fan_percent = fan;
-    g_gpu_power_w = power;
-    snprintf(g_gpu_pstate, sizeof(g_gpu_pstate), "%s", pstate);
+    int pstate = 0;
+    if (g_nvml.get_pstate(g_nvml.device, &pstate) == 0 && pstate >= 0 && pstate <= 15) {
+        snprintf(g_gpu_pstate, sizeof(g_gpu_pstate), "P%d", pstate);
+    } else {
+        g_gpu_pstate[0] = '\0';
+    }
+
     g_gpu_available = true;
 }
 
@@ -240,6 +330,14 @@ void sysmon_client_poll(void) {
     poll_cpu();
     poll_mem();
     poll_gpu();
+}
+
+void sysmon_client_shutdown(void) {
+    if (g_nvml.lib) {
+        g_nvml.shutdown();
+        dlclose(g_nvml.lib);
+        g_nvml.lib = NULL;
+    }
 }
 
 double sysmon_cpu_percent(void) { return g_cpu_percent; }

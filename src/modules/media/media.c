@@ -112,7 +112,8 @@ static void truncate_track_text(const char *text, double max_w, int font_px, boo
     snprintf(out, out_size, "%.*s...", (int)offsets[lo], text);
 }
 
-void media_render(cairo_t *cr, Output *output, double bar_width, double box_top, double box_height) {
+void media_render(cairo_t *cr, Output *output, double bar_width, double left_limit, double right_limit,
+                  double box_top, double box_height) {
     MprisPlayer *player = mpris_active_player();
     OutputBoxRect *rect = rect_for_output(output);
 
@@ -131,10 +132,41 @@ void media_render(cairo_t *cr, Output *output, double bar_width, double box_top,
     char icon_buf[5];
     glyph_utf8(mpris_player_is_playing(player) ? GLYPH_ICON_MEDIA_PAUSE : GLYPH_ICON_MEDIA_PLAY, icon_buf);
 
+    // Width actually free around the bar's center: the box stays centered, so
+    // it can only be twice as wide as the *nearer* of the two side regions
+    // allows. Without this, a long title on a narrow output (or a busy bar)
+    // drew straight over the GPU/mem/privacy or mic/EQ boxes.
+    double center_x = bar_width / 2.0;
+    double free_half = center_x - left_limit;
+    if (right_limit - center_x < free_half) {
+        free_half = right_limit - center_x;
+    }
+    double max_box_w = 2.0 * free_half;
+
+    // Text budget = box budget minus the 12px box padding and the
+    // "<icon>  " prefix, still capped at the reference's own 300px.
+    char prefix[16];
+    snprintf(prefix, sizeof(prefix), "%s  ", icon_buf);
+    double prefix_w, prefix_h, ellipsis_w;
+    module_box_measure_text(prefix, FONT.label, true, &prefix_w, &prefix_h);
+    module_box_measure_text("...", FONT.label, true, &ellipsis_w, &prefix_h);
+    double max_text_w = max_box_w - 12.0 - prefix_w;
+    if (max_text_w > TRACK_TEXT_MAX_W) {
+        max_text_w = TRACK_TEXT_MAX_W;
+    }
+    if (max_text_w < ellipsis_w) {
+        // Not even "..." fits -- collapse exactly like the no-player case.
+        if (rect) {
+            rect->w = 0;
+            rect->h = 0;
+        }
+        return;
+    }
+
     char track_text[512];
     media_build_track_text(player, track_text, sizeof(track_text));
     char truncated[512];
-    truncate_track_text(track_text, TRACK_TEXT_MAX_W, FONT.label, true, truncated, sizeof(truncated));
+    truncate_track_text(track_text, max_text_w, FONT.label, true, truncated, sizeof(truncated));
 
     char label[600];
     snprintf(label, sizeof(label), "%s  %s", icon_buf, truncated);

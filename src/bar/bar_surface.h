@@ -21,6 +21,14 @@ void bar_surface_destroy(BarSurface *surf);
 // pending, this renders+commits immediately and requests a new callback; otherwise
 // the flag is picked up when the pending callback's `done` fires, so redraws never
 // happen faster than the compositor is asking for.
+//
+// Whether the frame actually reaches the compositor depends on whether it differs
+// from the last one committed -- an unchanged frame is dropped (see do_render()).
 void bar_surface_mark_dirty(BarSurface *surf);
+
+// Like bar_surface_mark_dirty(), but only the clock box needs repainting (its
+// once-a-second tick). Everything else is reused from the last committed frame;
+// falls back to a full redraw on its own if that isn't possible.
+void bar_surface_mark_clock_dirty(BarSurface *surf);
 
 #endif

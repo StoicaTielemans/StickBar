@@ -26,7 +26,14 @@ void media_build_track_text(MprisPlayer *player, char *out, size_t out_size);
 // `visible: player !== null` collapsing it to zero width rather than showing
 // an empty box. Records the box's screen-space rect for later
 // media_handle_click().
-void media_render(cairo_t *cr, Output *output, double bar_width, double box_top, double box_height);
+//
+// `left_limit`/`right_limit` are where the left region's modules end and the
+// right region's begin (spacing already included). The box stays centered but
+// its track text is truncated further so the box never crosses either limit;
+// if not even the icon plus "..." fits, nothing is drawn (same zero-size
+// hit-rect as the no-player case), so it can't steal a neighbor's clicks.
+void media_render(cairo_t *cr, Output *output, double bar_width, double left_limit, double right_limit,
+                  double box_top, double box_height);
 
 // Hit-tests (x, y) against `output`'s most recently rendered box. Left-click
 // toggles play/pause on the active player, matching the reference's own

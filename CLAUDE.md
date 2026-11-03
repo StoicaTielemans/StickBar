@@ -53,9 +53,10 @@ protocol errors or Hyprland IPC failures.
   bar picks it up via its PipeWire subscription without needing to click
   anything (this is how the subscribe → cache → redraw path was verified
   during development).
-- `free -h` / `top` / `nvidia-smi` (same query used internally --
-  `nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total
-  --format=csv,noheader`) are the cross-reference for the CPU/GPU/memory
+- `free -h` / `top` / `nvidia-smi` (e.g. `nvidia-smi
+  --query-gpu=utilization.gpu,temperature.gpu,memory.used,memory.total,fan.speed,power.draw,pstate
+  --format=csv,noheader` -- the bar reads the same values in-process via
+  NVML, the library nvidia-smi itself wraps) are the cross-reference for the CPU/GPU/memory
   modules; `awk '/MemTotal/{t=$2} /MemAvailable/{a=$2} END{printf "%.0f\n",
   100*(t-a)/t}' /proc/meminfo` reproduces the memory module's own percent
   calculation exactly, useful for confirming an off-by-something isn't hiding
@@ -190,14 +191,14 @@ stickBar/
     │   └── mixer_popup.c         per-app volume mixer (middle-click on the volume
     │                             box): one row per PA sink input, with a
     │                             click/drag/scroll slider + mute toggle
-    ├── sysmon/                   /proc + nvidia-smi plumbing for CPU/GPU/memory
+    ├── sysmon/                   /proc + NVML plumbing for CPU/GPU/memory
     │                             (see "System monitor (CPU/GPU/memory)" below) --
     │                             structurally the sysmon-domain twin of dbus/ and
     │                             audio/, but polled on a plain timerfd rather than
     │                             driven by any async connection of its own
     │   ├── sysmon_client.c       /proc/stat, /proc/meminfo, thermal_zone1, cpuinfo,
-    │   │                         loadavg, and a synchronous nvidia-smi popen() call,
-    │   │                         all re-read on every 5s poll; plain synchronous
+    │   │                         loadavg, and NVML (dlopen'd libnvidia-ml) for the
+    │   │                         GPU, all re-read on every 5s poll; plain synchronous
     │   │                         accessors, no locking (single-threaded polling,
     │   │                         unlike pulse_client.c)
     │   └── sysmon_info_popup.c   shared *read-only* CPU/GPU/memory info dropdown
@@ -284,8 +285,8 @@ stickBar/
         │                         sysmon_info_popup.c, but right-anchored since
         │                         this module lives in the bar's right region
         ├── eq/
-        │   ├── eq.c              mini-curve + profile-name box (between mic and
-        │   │                     volume) + hit-rect; left- or right-click opens
+        │   ├── eq.c              mini-curve + profile-name box (between volume
+        │   │                     and network) + hit-rect; left- or right-click opens
         │   │                     the dropdown
         │   └── eq_popup.c        header + full EQ graph + clickable profile rows
         │                         (zero2 / dt990 / dt990-loud); stays open while
@@ -360,6 +361,63 @@ stickBar/
   to the `Output`-keyed path — a popup/catcher surface never matches an
   `Output`, so checking the popup kinds first is required, not just tidier.
 
+### Redraw path (`bar/bar_surface.c`)
+
+Every `output_mark_all_dirty()` call still means "something may have changed,"
+but a frame only reaches the compositor if it actually differs:
+
+- **Two private CPU-side frames per bar surface (`prev`/`next`)**, besides the
+  two shm buffers. `prev` is exactly what was last committed; the shm buffers
+  can't serve that role because they ping-pong with the compositor, so the
+  one you get back holds a frame from *two* commits ago.
+- **Skip if identical**: each redraw draws into `next` and compares it to
+  `prev`. No difference → no attach/commit/frame callback at all. This is
+  the one check that covers every redraw source (Hyprland events that don't
+  change a pill, PipeWire graph churn, 5s polls landing on the same numbers,
+  `pactl` setting a volume to its current value — the last one confirmed: 40
+  such calls produced zero extra commits).
+- **Damage is the bounding box of changed pixels**, not the whole surface —
+  a clock tick damages 8x10 px (the seconds digit), a volume change ~32x11.
+  Confirmed via `WAYLAND_DEBUG=1` (`grep damage_buffer`).
+- **The 1s clock tick is clock-only**: `output_mark_all_clock_dirty()` →
+  `render_output_clock_only()` copies `prev` into `next` and repaints only the
+  clock's box (clipped, at its last recorded rect from `clock_last_rect()`).
+  It falls back to a full `render_output()` if a full redraw is also pending,
+  there's no previous frame, or the clock box came out a different width (the
+  boxes to its left would need to move). Any full redraw request wins over a
+  clock-only one.
+
+### Performance (measured)
+
+Measured on this machine (2x 1920x1080 outputs) with fresh instances of the
+build before and after NVML + the redraw path above, run side by side:
+
+| | before | after |
+|---|---|---|
+| CPU, incl. spawned children | ~1.2% | ~0.3% |
+| `nvidia-smi` processes per minute | 12 | 0 |
+| Event-loop block from GPU polling | 15-45ms / 5s | ~1.5ms / 5s |
+| Private memory (`Private_Dirty`) | ~6 MB | ~26 MB |
+| RSS at startup | ~29 MB | ~55 MB |
+| Commits/min (both outputs) | ~160 | ~155 |
+| Pixels damaged/min | ~6.2M | ~0.5M |
+
+- **GPU**: the bar itself does no GPU work (cairo draws on the CPU into
+  `wl_shm`; Hyprland composites), and NVML only reads stats -- `stickBar`
+  never appears in `nvidia-smi`'s process list and holds no VRAM.
+- **Almost all of the memory increase is NVML** (see "System monitor" below);
+  the redraw path's `prev`/`next` frames add ~0.6 MB for two outputs.
+- Commits barely drop because the clock really does change every second on
+  both outputs; the win is that each commit damages a few dozen pixels
+  instead of the whole bar.
+- How these were measured, to redo it: CPU from `/proc/<pid>/stat`
+  utime+stime **plus cutime+cstime** (the old build's `nvidia-smi` CPU only
+  shows up in the latter -- leaving it out made the old build look ~3x
+  cheaper than it was); memory from `/proc/<pid>/smaps_rollup`; commits and
+  damage by counting `wl_surface#N.commit` / `damage_buffer(...)` lines under
+  `WAYLAND_DEBUG=1`. RSS of a long-running instance drifts down over hours as
+  untouched pages get reclaimed, so compare fresh starts against fresh starts.
+
 ### Wayland plumbing gotchas (hit and fixed during initial implementation)
 
 These aren't hypothetical — both actually broke the first build/run and are worth
@@ -396,6 +454,22 @@ knowing before touching this code:
   Hyprland event socket fd. `wl_display_dispatch()` alone always performs a
   blocking read if nothing's queued, which isn't safe to call just because
   `epoll_wait()` said *some* fd was ready.
+- **A dead Wayland connection must stop the main loop, not be ignored.** Once
+  the compositor goes away, the display fd is permanently readable (EPOLLHUP),
+  so `epoll_wait()` returns instantly forever. `wayland_dispatch_read()` used to
+  ignore `wl_display_read_events()` returning -1, which turned a compositor
+  crash/restart into a silent 100%-CPU spin with nothing on screen. Now
+  `wayland_dispatch_prepare()`/`_read()` return `false` on any fatal error
+  (`read_events`/`dispatch_pending` returning -1, or a non-`EAGAIN` flush
+  failure), log `Wayland connection lost (...)`, and `main.c` breaks out, runs
+  the normal teardown, and exits with status 1. Verified by running a bar
+  through a small Python Unix-socket proxy to the real `wayland-1` (forwarding
+  SCM_RIGHTS fds so shm still works) and killing the proxy: the old build kept
+  spinning a core, the new one exited within 2s. No nested compositor was
+  installed to test this the more obvious way. The proxy socket has to live
+  directly in `$XDG_RUNTIME_DIR` -- libwayland joins it with
+  `WAYLAND_DISPLAY`, and a longer directory overflows the 108-byte
+  `sun_path` limit.
 
 ## Hyprland IPC
 
@@ -823,26 +897,34 @@ dropdown, rather than one shared tooltip for all three.
   background thread of any kind; every poll just re-reads `/proc/stat`,
   `/proc/meminfo`, `/sys/class/thermal/thermal_zone1/temp`, `/proc/cpuinfo`,
   and `/proc/loadavg` from scratch (all cheap: small pseudo-files, no syscalls
-  beyond open/read/close) plus one `nvidia-smi` subprocess call (see below).
-  No locking anywhere in this file, unlike `pulse_client.c` — everything runs
-  on the main thread, so there's no concurrent writer to guard against.
-- **`nvidia-smi` is invoked synchronously via `popen()`/`pclose()`, blocking
-  the whole event loop for its duration** — a deliberate, measured tradeoff,
-  not an oversight. Timed directly on this machine: ~15-45ms per call. Once
-  every 5 seconds, that's roughly a 0.3-0.9% duty cycle of blocked time, and
-  it only delays *this* poll tick's redraw plus any input events that happen
-  to arrive in that exact window — not a per-frame or per-click cost. The
-  alternative (spawning it as a genuinely async subprocess with its stdout
-  pipe registered on `main.c`'s epoll, reaped via a `SIGCHLD` handler or a
-  `waitpid(WNOHANG)` poll) would need a new "transient fd added and removed
-  every poll cycle" pattern nothing else in this codebase has, for a benefit
-  (avoiding a sub-50ms block once per 5s) judged not worth that added
-  complexity here. If `nvidia-smi` is missing or fails (no NVIDIA GPU, driver
-  not loaded), `sysmon_gpu_available()` stays false, the GPU module shows
-  `--` instead of a percent, and its dropdown shows an explicit "No NVIDIA GPU
-  detected" message instead of stale/zero-looking numbers — the same
-  "explicit unavailable state, not a misleading zero" instinct behind
-  `pulse_client.c`'s accessors returning safe defaults when disconnected.
+  beyond open/read/close) plus a handful of in-process NVML calls for the GPU
+  (see below). No locking anywhere in this file, unlike `pulse_client.c` —
+  everything runs on the main thread, so there's no concurrent writer to
+  guard against. (NVML starts two idle threads of its own inside the
+  library; nothing here touches them.)
+- **GPU stats come from NVML (`libnvidia-ml.so.1`), loaded with `dlopen()`
+  at startup** — the library `nvidia-smi` is itself a CLI over. This
+  replaced an earlier `popen("nvidia-smi ...")` every 5 seconds, which
+  blocked the event loop ~15-45ms per call and (measured over 90s, counting
+  the child processes' own CPU time) cost ~1.2% CPU against ~0.3% now; the
+  six NVML queries take ~1.5ms combined, mostly the fan-speed one.
+  - **`dlopen`, not linking**: `nvml.h` only ships with the CUDA toolkit
+    (`/opt/cuda`), and linking would make stickBar fail to start without the
+    NVIDIA driver. The handful of types/prototypes needed are declared
+    locally in `sysmon_client.c`, using NVML's ABI-stable versioned symbols.
+  - **Memory used is `nvmlDeviceGetMemoryInfo_v2`, not the v1 call**: v1's
+    `used` includes driver/firmware-reserved memory (~300 MiB more here);
+    v2's matches `nvidia-smi`'s own `memory.used` — confirmed side by side.
+  - **Tradeoff: ~25 MB more resident memory.** NVML pulls in `libcuda` and
+    allocates its own buffers (fresh-start RSS ~29 MB → ~55 MB, measured by
+    building the same tree with NVML disabled). Judged worth it for the CPU
+    and latency win; if memory ever matters more, this is where it went.
+  - If the library or driver is missing, `sysmon_gpu_available()` stays false,
+    the GPU module shows `--` instead of a percent, and its dropdown shows an
+    explicit "No NVIDIA GPU detected" message instead of stale/zero-looking
+    numbers — the same "explicit unavailable state, not a misleading zero"
+    instinct behind `pulse_client.c`'s accessors returning safe defaults when
+    disconnected.
 - **CPU-jiffies delta computation matches the reference's own
   `percentFromJiffies()` exactly**: `/proc/stat`'s `cpuN` lines are parsed
   every poll, and each line's `(idle, total)` pair is diffed against the
@@ -1017,6 +1099,12 @@ userdata pointer, `in_use`-gated iteration, `_count()`/`_get(index)` accessors).
   (`mpris_active_player()`: first currently-`Playing` tracked player, or the first
   tracked player at all, or nothing) and collapses to zero width when there's no
   player at all, matching `MediaWidget.qml`'s own `visible: player !== null`.
+  It's drawn *after* both side regions and is clamped between them
+  (`render.c` passes the end of the left region and the start of the right one):
+  the box stays centered, the title truncates further if the narrower side
+  doesn't leave room, and if not even the icon plus `...` fits it collapses
+  like the no-player case -- otherwise a long title on a narrow output drew
+  over (and stole clicks from) its neighbors.
 - **Left-click toggles play/pause; right-click opens a dropdown** listing every
   tracked player (not just the active one), each row with prev/play-pause/next
   controls — this project's now-established right-click-opens-dropdown convention
@@ -1165,7 +1253,7 @@ the identical 5000ms interval).
   5-second poll tick anyway, so there's no equivalent of `device_popup.c`'s
   live-while-open refresh to bother with) — but anchored **TOP+RIGHT**, unlike
   `sysmon_info_popup.c`'s TOP+LEFT, since the network widget lives in the bar's
-  *right* region (between Volume and Clock, matching the reference `Bar.qml`'s
+  *right* region (between the EQ module and Clock -- otherwise matching the reference `Bar.qml`'s
   own `rightLayout` order) rather than the left like CPU/GPU/memory. Body text
   mirrors `NetworkTooltip.qml`'s own `NetworkMonitor.tooltip` → `buildTooltip()`
   exactly, including omitting the `LINK SPEED`/`duplex` line entirely for Wi-Fi
@@ -1611,16 +1699,12 @@ this module never opens the DAC's HID device.
   slider click/drag, scroll, and mute toggle were **not** exercised with a
   real pointer (no `/dev/uinput` access in the dev environment this pass) —
   the drag path is reasoned from the implicit-grab semantics.
-- **CPU/GPU/memory: GPU stats are NVIDIA-only, via `nvidia-smi`** — no AMD
+- **CPU/GPU/memory: GPU stats are NVIDIA-only, via NVML** — no AMD
   (`radeontop`/`rocm-smi`) or Intel (`intel_gpu_top`) equivalent. On a
   machine with a non-NVIDIA GPU, `sysmon_gpu_available()` stays permanently
   false and the GPU module always shows `--` — not a crash, matches the
-  reference `SystemMonitor.qml`'s own NVIDIA-only `Process` command.
-- **CPU/GPU/memory: `nvidia-smi` runs synchronously, blocking the whole event
-  loop for ~15-45ms once per 5-second poll** — a deliberate, measured
-  tradeoff (see "System monitor (CPU/GPU/memory)" above for the reasoning and
-  measurement), not something to "fix" reflexively by making it async without
-  weighing that tradeoff again first.
+  reference `SystemMonitor.qml`'s own NVIDIA-only `Process` command. Only
+  GPU index 0 is read.
 - **CPU/GPU/memory: none of the three popups coordinate with the tray's
   context menu or the audio device popup** — same undefended, rare v1 edge
   case as volume/mic's own equivalent limitation above; opening a sysmon

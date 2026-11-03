@@ -17,8 +17,12 @@ bool event_loop_add_fd(int epoll_fd, int fd, uint32_t events);
 // immediately before every epoll_wait(), then call exactly one of
 // wayland_dispatch_read() (if the display fd came back readable) or
 // wayland_dispatch_cancel() (if it didn't) before the next loop iteration.
-void wayland_dispatch_prepare(struct wl_display *display);
-void wayland_dispatch_read(struct wl_display *display);
+//
+// prepare/read return false once the Wayland connection is dead (compositor gone,
+// or a fatal protocol error) -- the caller must stop its loop then. After a false
+// from prepare, no read is pending, so don't call _read()/_cancel() for it.
+bool wayland_dispatch_prepare(struct wl_display *display);
+bool wayland_dispatch_read(struct wl_display *display);
 void wayland_dispatch_cancel(struct wl_display *display);
 
 #endif

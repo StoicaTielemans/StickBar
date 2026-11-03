@@ -2,6 +2,7 @@
 #define CUSTOMBAR_MODULES_CLOCK_CLOCK_H
 
 #include <cairo.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "wayland/context.h"
@@ -20,6 +21,11 @@ void clock_tick(void);
 // tray_render()'s identical convention, and workspaces_render()'s equivalent
 // for the left region).
 double clock_render(cairo_t *cr, Output *output, double right_edge_x, double box_top, double box_height);
+
+// The clock box's rect as last drawn on `output` (the same rect clicks are
+// hit-tested against). Returns false if it hasn't been drawn there yet. Used by
+// render_output_clock_only() to repaint just this box on a clock tick.
+bool clock_last_rect(Output *output, double *x, double *y, double *w, double *h);
 
 // Hit-tests (x, y) against `output`'s most recently rendered box. Right-click
 // toggles the year-calendar dropdown (modules/clock/clock_calendar_popup.c);

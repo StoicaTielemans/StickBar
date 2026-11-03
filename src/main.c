@@ -302,11 +302,18 @@ int main(void) {
 
     struct epoll_event events[10];
 
+    // Set when the compositor connection dies, so main() exits non-zero after the
+    // normal teardown below instead of pretending this was a clean shutdown.
+    bool wayland_lost = false;
+
     while (!g_should_exit) {
         // Must be called immediately before epoll_wait() on every iteration -- see
         // wayland/event_loop.c for why a plain wl_display_dispatch() can't be used
-        // here instead.
-        wayland_dispatch_prepare(app.display);
+        // here instead. A false return means the connection is already dead.
+        if (!wayland_dispatch_prepare(app.display)) {
+            wayland_lost = true;
+            break;
+        }
 
         int n = epoll_wait(epoll_fd, events, 10, -1);
         if (n < 0) {
@@ -338,15 +345,13 @@ int main(void) {
                 // doc comment for why MPRIS position needs polling at all.
                 // A no-op unless the media popup is actually open.
                 media_popup_tick();
-                output_mark_all_dirty(&app);
+                // Only the clock changed -- repaint just its box, not the whole
+                // bar (see bar_surface_mark_clock_dirty()).
+                output_mark_all_clock_dirty(&app);
             } else if (fd == sysmon_timer_fd) {
                 uint64_t expirations;
                 (void)!read(sysmon_timer_fd, &expirations, sizeof(expirations));
-                // Includes a synchronous nvidia-smi subprocess call -- see
-                // sysmon_client_poll()'s own doc comment and CLAUDE.md's
-                // "System monitor (CPU/GPU/memory)" section for why that's an
-                // acceptable blocking window here (bounded, ~15-45ms, once
-                // per 5 seconds, not per-frame or per-click).
+                // All in-process reads (/proc, /sys, NVML) -- no subprocess.
                 sysmon_client_poll();
                 // Piggybacks on this same 5-second timer rather than adding
                 // a second poll source -- matches the reference
@@ -411,7 +416,10 @@ int main(void) {
         }
 
         if (wayland_ready) {
-            wayland_dispatch_read(app.display);
+            if (!wayland_dispatch_read(app.display)) {
+                wayland_lost = true;
+                break;
+            }
         } else {
             wayland_dispatch_cancel(app.display);
         }
@@ -441,6 +449,7 @@ int main(void) {
     if (eq_fd >= 0) {
         eq_state_shutdown();
     }
+    sysmon_client_shutdown();
     if (dbus_timeout_fd >= 0) {
         close(dbus_timeout_fd);
     }
@@ -471,5 +480,5 @@ int main(void) {
     }
     wl_display_disconnect(app.display);
 
-    return 0;
+    return wayland_lost ? 1 : 0;
 }

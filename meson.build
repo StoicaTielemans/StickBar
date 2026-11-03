@@ -133,8 +133,13 @@ sources = files(
   'src/modules/eq/eq_popup.c',
 )
 
+# dlopen()/dlsym() for loading NVIDIA's NVML at runtime (sysmon/sysmon_client.c).
+# On glibc >= 2.34 these live in libc itself and libdl is an empty stub, so this
+# is optional and usually resolves to nothing at all.
+libdl = meson.get_compiler('c').find_library('dl', required: false)
+
 executable('stickBar',
   sources + generated_sources + generated_headers,
-  dependencies: [wayland_client, cairo, pangocairo, cjson, libsystemd, libpulse, gdk_pixbuf, libpipewire],
+  dependencies: [wayland_client, cairo, pangocairo, cjson, libsystemd, libpulse, gdk_pixbuf, libpipewire, libdl],
   include_directories: include_directories('src'),
 )

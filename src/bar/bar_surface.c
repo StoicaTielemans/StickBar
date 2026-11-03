@@ -6,6 +6,7 @@
 
 #include "config/config.h"
 #include "render/render.h"
+#include "testing/test_control.h"
 #include "wayland/shm_buffer.h"
 
 // Full per-output bar surface state. Opaque outside this file (see bar_surface.h) --
@@ -236,6 +237,7 @@ BarSurface *bar_surface_create(AppContext *app, Output *output) {
     surf->output = output;
 
     surf->wl_surface = wl_compositor_create_surface(app->compositor);
+    test_control_isolate_surface(app, surf->wl_surface); // no-op outside tests
     // Lets wayland/pointer.c match a wl_pointer.enter's surface back to this Output
     // by plain pointer comparison, without needing a separate lookup structure.
     output->wl_surface = surf->wl_surface;

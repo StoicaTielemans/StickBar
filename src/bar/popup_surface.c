@@ -2,7 +2,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
+#include "testing/test_control.h"
 #include "wayland/shm_buffer.h"
 
 struct PopupSurface {
@@ -31,7 +33,35 @@ struct PopupSurface {
     void (*pending_draw)(cairo_t *cr, void *user_data);
     void *pending_user_data;
     bool has_pending_draw;
+
+    int width, height; // as requested at create (0 for catchers: compositor-sized)
+    bool is_catcher;
 };
+
+// Every live popup surface, oldest first -- only so the test-control channel
+// (testing/test_control.c) can find "the open dropdown" and its catchers
+// without every popup module exporting its own getter. Popups are few and
+// short-lived, so a small fixed array is plenty; one that doesn't fit is
+// simply not listed (it still works normally).
+#define MAX_LIVE_POPUPS 32
+static PopupSurface *g_live[MAX_LIVE_POPUPS];
+static int g_live_count = 0;
+
+static void live_add(PopupSurface *surf) {
+    if (g_live_count < MAX_LIVE_POPUPS) {
+        g_live[g_live_count++] = surf;
+    }
+}
+
+static void live_remove(PopupSurface *surf) {
+    for (int i = 0; i < g_live_count; i++) {
+        if (g_live[i] == surf) {
+            memmove(&g_live[i], &g_live[i + 1], (size_t)(g_live_count - i - 1) * sizeof(g_live[0]));
+            g_live_count--;
+            return;
+        }
+    }
+}
 
 static void do_render(PopupSurface *surf) {
     uint8_t *pixels = NULL;
@@ -125,8 +155,11 @@ PopupSurface *popup_surface_create(AppContext *app, Output *output, int width, i
         return NULL;
     }
     surf->app = app;
+    surf->width = width;
+    surf->height = height;
 
     surf->wl_surface = wl_compositor_create_surface(app->compositor);
+    test_control_isolate_surface(app, surf->wl_surface); // no-op outside tests
     surf->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
         app->layer_shell, surf->wl_surface, output->wl_output, layer, "custombar-popup");
 
@@ -144,6 +177,7 @@ PopupSurface *popup_surface_create(AppContext *app, Output *output, int width, i
     // `configure` (attaching a buffer any earlier is a protocol violation).
     wl_surface_commit(surf->wl_surface);
 
+    live_add(surf);
     return surf;
 }
 
@@ -167,6 +201,7 @@ PopupSurface *popup_surface_create_catcher(AppContext *app, Output *output) {
     if (!surf) {
         return NULL;
     }
+    surf->is_catcher = true;
     // Safe to attach the viewport now: no configure can have been processed
     // yet (that only happens back in main.c's event loop), so the first
     // configure already sees it and sizes the buffer to 1x1.
@@ -194,10 +229,58 @@ struct wl_surface *popup_surface_wl_surface(PopupSurface *surf) {
     return surf->wl_surface;
 }
 
+PopupSurface *popup_surface_latest_menu(void) {
+    for (int i = g_live_count - 1; i >= 0; i--) {
+        if (!g_live[i]->is_catcher) {
+            return g_live[i];
+        }
+    }
+    return NULL;
+}
+
+PopupSurface *popup_surface_first_catcher(void) {
+    for (int i = 0; i < g_live_count; i++) {
+        if (g_live[i]->is_catcher) {
+            return g_live[i];
+        }
+    }
+    return NULL;
+}
+
+int popup_surface_catcher_count(void) {
+    int n = 0;
+    for (int i = 0; i < g_live_count; i++) {
+        n += g_live[i]->is_catcher ? 1 : 0;
+    }
+    return n;
+}
+
+void popup_surface_size(PopupSurface *surf, int *width, int *height) {
+    *width = surf->width;
+    *height = surf->height;
+}
+
+bool popup_surface_snapshot_png(PopupSurface *surf, const char *path) {
+    if (!surf->has_pending_draw || surf->width <= 0 || surf->height <= 0) {
+        return false;
+    }
+    // Runs the same cached draw callback the real buffer was painted with, into
+    // a private image surface of the requested size -- so a test sees exactly
+    // what the compositor was given, without capturing the screen.
+    cairo_surface_t *csurf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, surf->width, surf->height);
+    cairo_t *cr = cairo_create(csurf);
+    surf->pending_draw(cr, surf->pending_user_data);
+    cairo_destroy(cr);
+    bool ok = cairo_surface_write_to_png(csurf, path) == CAIRO_STATUS_SUCCESS;
+    cairo_surface_destroy(csurf);
+    return ok;
+}
+
 void popup_surface_destroy(PopupSurface *surf) {
     if (!surf) {
         return;
     }
+    live_remove(surf);
     shm_buffers_destroy(&surf->buffers);
     if (surf->viewport) {
         wp_viewport_destroy(surf->viewport);

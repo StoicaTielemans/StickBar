@@ -48,4 +48,16 @@ struct wl_surface *popup_surface_wl_surface(PopupSurface *surf);
 
 void popup_surface_destroy(PopupSurface *surf);
 
+// --- Introspection for the test-control channel (testing/test_control.c) ---
+// The most recently created live non-catcher popup (the open dropdown), or
+// NULL; the oldest live catcher, or NULL; how many catchers are live.
+PopupSurface *popup_surface_latest_menu(void);
+PopupSurface *popup_surface_first_catcher(void);
+int popup_surface_catcher_count(void);
+// Size as requested at create (0x0 for catchers, which the compositor sizes).
+void popup_surface_size(PopupSurface *surf, int *width, int *height);
+// Re-runs the surface's last draw callback into an image of its size and
+// writes it as a PNG. False if it has nothing drawn yet or writing failed.
+bool popup_surface_snapshot_png(PopupSurface *surf, const char *path);
+
 #endif

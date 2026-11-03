@@ -51,4 +51,10 @@ void media_popup_refresh_if_open(void);
 // than adding a new poll source just for this.
 void media_popup_tick(void);
 
+// Test-control hooks (testing/test_control.c): cards shown (-1 if closed),
+// and the popup-local centre of a player's "prev" / "play" / "next" chip,
+// matched by mpris_player_app_name(). Not used by the bar itself.
+int media_popup_test_card_count(void);
+bool media_popup_test_target(const char *app_name, const char *button, double *x, double *y);
+
 #endif

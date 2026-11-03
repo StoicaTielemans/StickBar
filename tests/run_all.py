@@ -5,7 +5,7 @@
 
 Each test starts its own short-lived second bar instance next to the one
 you're running, so expect extra bars to flash at the top of the screen
-for the ~40s this takes. Exit status is non-zero if any test failed
+for the ~2 minutes this takes. Exit status is non-zero if any test failed
 (skips don't count as failures).
 """
 

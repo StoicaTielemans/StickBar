@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "bar/bar_surface.h"
 
@@ -41,11 +42,13 @@ static void handle_scale(void *data, struct wl_output *wl_output, int32_t factor
 }
 
 static void handle_name(void *data, struct wl_output *wl_output, const char *name) {
-    // wl_output version 4+ adds `name`/`description` events (e.g. "DP-2"); not
-    // needed since this bar identifies outputs by binding-order index, not name --
-    // present only because wl_output_listener requires every callback to be set,
-    // and we bind at version 4 to also get `scale` (see OUTPUT_MAX_VERSION).
-    (void)data; (void)wl_output; (void)name;
+    // wl_output version 4+ adds `name`/`description` events (e.g. "DP-2"). The
+    // bar itself identifies outputs by binding-order index, not name; the name
+    // is kept only for STICKBAR_TEST_OUTPUT (see handle_done()) and the
+    // test-control channel's output selection.
+    (void)wl_output;
+    Output *output = data;
+    snprintf(output->name, sizeof(output->name), "%s", name ? name : "");
 }
 
 static void handle_description(void *data, struct wl_output *wl_output, const char *description) {
@@ -67,6 +70,17 @@ static void handle_done(void *data, struct wl_output *wl_output) {
     }
 
     output->done_received = true;
+
+    // Test-only: STICKBAR_TEST_OUTPUT=<name> keeps a test instance off every
+    // other monitor -- no bar surface there, and the Output is dropped from
+    // the list entirely, so no popup puts a click-catcher there either (one
+    // would sit over whatever the user is doing on that monitor, e.g. a
+    // fullscreen game, and swallow their clicks). Unset in normal use.
+    const char *only = getenv("STICKBAR_TEST_OUTPUT");
+    if (only && only[0] && strcmp(only, output->name) != 0) {
+        output_remove(output->app, output->registry_name);
+        return;
+    }
     output->bar_surface = bar_surface_create(output->app, output);
 }
 

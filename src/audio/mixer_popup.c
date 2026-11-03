@@ -534,3 +534,28 @@ void mixer_popup_handle_scroll(double x, double y, int direction) {
     pulse_stream_adjust_volume(g_mixer.streams[idx],
                                direction > 0 ? PULSE_VOLUME_STEP_PERCENT : -PULSE_VOLUME_STEP_PERCENT);
 }
+
+// ---- Test-control hooks (testing/test_control.c) ---------------------------------
+
+int mixer_popup_test_row_count(void) { return g_mixer.open ? g_mixer.row_count : -1; }
+
+bool mixer_popup_test_target(const char *stream_name, const char *part, double frac, double *x, double *y) {
+    if (!g_mixer.open) {
+        return false;
+    }
+    for (int i = 0; i < g_mixer.row_count; i++) {
+        if (strcmp(pulse_stream_name(g_mixer.streams[i]), stream_name) != 0) {
+            continue;
+        }
+        RowLayout *row = &g_mixer.rows[i];
+        if (strcmp(part, "mute") == 0) {
+            *x = mute_x() + CHIP_W / 2.0;
+            *y = row->y + CARD_PAD + CHIP_H / 2.0;
+        } else { // "slider"
+            *x = slider_x() + frac * slider_w();
+            *y = slider_row_y(row) + SLIDER_ROW_H / 2.0;
+        }
+        return true;
+    }
+    return false;
+}

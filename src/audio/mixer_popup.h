@@ -42,4 +42,10 @@ void mixer_popup_handle_motion(double x, double y);
 void mixer_popup_handle_release(void);
 void mixer_popup_handle_scroll(double x, double y, int direction);
 
+// Test-control hooks (testing/test_control.c): rows shown (-1 if closed), and
+// the popup-local point of a named stream's "mute" chip or "slider" at
+// `frac` (0..1). Not used by the bar itself.
+int mixer_popup_test_row_count(void);
+bool mixer_popup_test_target(const char *stream_name, const char *part, double frac, double *x, double *y);
+
 #endif

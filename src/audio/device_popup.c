@@ -590,3 +590,32 @@ void device_popup_handle_scroll(double x, double y, int direction) {
     pulse_node_adjust_volume(g_popup.cards[idx].node,
                              direction > 0 ? PULSE_VOLUME_STEP_PERCENT : -PULSE_VOLUME_STEP_PERCENT);
 }
+
+// ---- Test-control hooks (testing/test_control.c) ---------------------------------
+
+int device_popup_test_card_count(void) { return g_popup.open ? g_popup.card_count : -1; }
+
+bool device_popup_test_target(const char *description, const char *part, double frac, double *x, double *y) {
+    if (!g_popup.open) {
+        return false;
+    }
+    for (int i = 0; i < g_popup.card_count; i++) {
+        CardLayout *card = &g_popup.cards[i];
+        if (strcmp(pulse_node_description(card->node), description) != 0) {
+            continue;
+        }
+        double cy = controls_y(card) + CHIP_H / 2.0;
+        if (strcmp(part, "meter") == 0) {
+            *x = meter_x() + frac * meter_w();
+            *y = cy;
+        } else if (strcmp(part, "mute") == 0) {
+            *x = mute_x() + CHIP_W / 2.0;
+            *y = cy;
+        } else { // "body": the name line
+            *x = inner_x() + 20.0;
+            *y = card->y + CARD_PAD + NAME_H / 2.0;
+        }
+        return true;
+    }
+    return false;
+}

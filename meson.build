@@ -128,6 +128,7 @@ sources = files(
   'src/modules/privacy/privacy_info_popup.c',
   'src/eq/eq_state.c',
   'src/eq/eq_curve.c',
+  'src/testing/test_control.c',
   'src/modules/eq/eq.c',
   'src/modules/eq/eq_popup.c',
 )

@@ -2,6 +2,7 @@
 #define CUSTOMBAR_MODULES_MEDIA_MEDIA_H
 
 #include <cairo.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -32,6 +33,10 @@ void media_build_track_text(MprisPlayer *player, char *out, size_t out_size);
 // its track text is truncated further so the box never crosses either limit;
 // if not even the icon plus "..." fits, nothing is drawn (same zero-size
 // hit-rect as the no-player case), so it can't steal a neighbor's clicks.
+// The box's rect as last drawn on `output`; false if nothing was drawn there
+// (no player, or collapsed for lack of room). Same shape as clock_last_rect().
+bool media_last_rect(Output *output, double *x, double *y, double *w, double *h);
+
 void media_render(cairo_t *cr, Output *output, double bar_width, double left_limit, double right_limit,
                   double box_top, double box_height);
 

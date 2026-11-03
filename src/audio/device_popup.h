@@ -63,4 +63,10 @@ void device_popup_handle_release(void);
 // PULSE_VOLUME_STEP_PERCENT (direction > 0 = up/louder).
 void device_popup_handle_scroll(double x, double y, int direction);
 
+// Test-control hooks (testing/test_control.c): the number of cards shown (-1
+// if closed), and the popup-local point of a named device's part -- "body",
+// "mute", or "meter" at `frac` (0..1) of its width. Not used by the bar itself.
+int device_popup_test_card_count(void);
+bool device_popup_test_target(const char *description, const char *part, double frac, double *x, double *y);
+
 #endif

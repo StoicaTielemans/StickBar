@@ -40,6 +40,7 @@ typedef struct Output {
                                 // the workspace module uses to assign its 5-wide id
                                 // range per output (see modules/workspaces)
     bool done_received;
+    char name[32];             // wl_output.name (v4+), e.g. "DP-2"; "" if not sent
 
     BarSurface *bar_surface;  // NULL until done_received flips this on
 

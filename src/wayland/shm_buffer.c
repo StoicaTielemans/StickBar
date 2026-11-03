@@ -32,11 +32,16 @@ static void destroy_buffers_only(ShmBuffers *sb) {
             sb->buffer[i] = NULL;
         }
     }
+    // The fd is only valid while the pool is mapped -- it's set together with
+    // `data` in shm_buffers_resize(). Checking `fd >= 0` instead (as this used
+    // to) is wrong for a zeroed struct: every ShmBuffers starts out calloc'd or
+    // memset, i.e. fd == 0, so the first resize of every surface closed fd 0 --
+    // stdin, or by then whatever else had been handed fd 0 (another surface's
+    // memfd, once stdin was gone). Found when the test-control channel's stdin
+    // turned out to be a shm memfd.
     if (sb->data) {
         munmap(sb->data, (size_t)sb->stride * (size_t)sb->height * 2);
         sb->data = NULL;
-    }
-    if (sb->fd >= 0) {
         close(sb->fd);
         sb->fd = -1;
     }

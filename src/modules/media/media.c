@@ -192,6 +192,19 @@ void media_render(cairo_t *cr, Output *output, double bar_width, double left_lim
     }
 }
 
+bool media_last_rect(Output *output, double *x, double *y, double *w, double *h) {
+    for (int i = 0; i < MAX_TRACKED_OUTPUTS; i++) {
+        if (g_rects[i].output == output && g_rects[i].w > 0) {
+            *x = g_rects[i].x;
+            *y = g_rects[i].y;
+            *w = g_rects[i].w;
+            *h = g_rects[i].h;
+            return true;
+        }
+    }
+    return false;
+}
+
 void media_handle_click(Output *output, double x, double y, uint32_t button) {
     OutputBoxRect *rect = NULL;
     for (int i = 0; i < MAX_TRACKED_OUTPUTS; i++) {

@@ -1,5 +1,7 @@
 #include "render/render.h"
 
+#include <string.h>
+
 #include "config/config.h"
 #include "modules/clock/clock.h"
 #include "modules/cpu/cpu.h"
@@ -15,7 +17,86 @@
 #include "modules/volume/volume.h"
 #include "modules/workspaces/workspaces.h"
 
+// Module box rects per output, for render_module_rect(). Sized like every
+// other per-output table in this project (MAX_TRACKED_OUTPUTS = 8).
+#define MAX_RECT_OUTPUTS 8
+#define MAX_RECT_MODULES 16
+typedef struct {
+    const char *module; // static string, NULL = unused slot
+    double x, w;        // y/h are always the whole bar height
+} ModuleRect;
+typedef struct {
+    Output *output;
+    int height;
+    ModuleRect rects[MAX_RECT_MODULES];
+    int count;
+} OutputRects;
+static OutputRects g_rects[MAX_RECT_OUTPUTS];
+
+static OutputRects *rects_for(Output *output) {
+    OutputRects *free_slot = NULL;
+    for (int i = 0; i < MAX_RECT_OUTPUTS; i++) {
+        if (g_rects[i].output == output) {
+            return &g_rects[i];
+        }
+        if (!free_slot && !g_rects[i].output) {
+            free_slot = &g_rects[i];
+        }
+    }
+    if (free_slot) {
+        free_slot->output = output;
+    }
+    return free_slot;
+}
+
+static void record(OutputRects *r, const char *module, double x, double w) {
+    if (r && r->count < MAX_RECT_MODULES && w > 0.0) {
+        r->rects[r->count++] = (ModuleRect){ module, x, w };
+    }
+}
+
+// Every left-region render function takes its box's left x and returns the
+// next module's start (its own right edge + BAR.item_spacing); right-region
+// ones take their box's right x and return the next module's right edge
+// (their own left edge - BAR.item_spacing). These two turn that back into a
+// box. A collapsed module returns its input unchanged -> zero width -> not
+// recorded.
+static void record_left(OutputRects *r, const char *module, double x_in, double x_out) {
+    record(r, module, x_in, x_out - BAR.item_spacing - x_in);
+}
+static void record_right(OutputRects *r, const char *module, double x_in, double x_out) {
+    double left = x_out + BAR.item_spacing;
+    record(r, module, left, x_in - left);
+}
+
+bool render_module_rect(Output *output, const char *module, double *x, double *y, double *w, double *h) {
+    if (strcmp(module, "media") == 0) {
+        return media_last_rect(output, x, y, w, h);
+    }
+    for (int i = 0; i < MAX_RECT_OUTPUTS; i++) {
+        if (g_rects[i].output != output) {
+            continue;
+        }
+        for (int j = 0; j < g_rects[i].count; j++) {
+            if (strcmp(g_rects[i].rects[j].module, module) == 0) {
+                *x = g_rects[i].rects[j].x;
+                *w = g_rects[i].rects[j].w;
+                *y = 0.0;
+                *h = g_rects[i].height;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void render_output(cairo_t *cr, Output *output, int width, int height) {
+    OutputRects *rects = rects_for(output);
+    if (rects) {
+        rects->count = 0;
+        rects->height = height;
+    }
+
     // Background fill. This also implicitly erases everything from the previous
     // frame (e.g. a workspace pill that's since stopped being occupied), so no
     // separate clear/memset step is needed anywhere else in the render path.
@@ -33,6 +114,12 @@ void render_output(cairo_t *cr, Output *output, int width, int height) {
     double gpu_right_x = gpu_render(cr, output, cpu_right_x, 0.0, (double)height);
     double mem_right_x = mem_render(cr, output, gpu_right_x, 0.0, (double)height);
     double left_region_end_x = privacy_render(cr, output, mem_right_x, 0.0, (double)height);
+    record_left(rects, "arch", 0.0, arch_logo_right_x);
+    record_left(rects, "workspaces", arch_logo_right_x, workspaces_right_x);
+    record_left(rects, "cpu", workspaces_right_x, cpu_right_x);
+    record_left(rects, "gpu", cpu_right_x, gpu_right_x);
+    record_left(rects, "mem", gpu_right_x, mem_right_x);
+    record_left(rects, "privacy", mem_right_x, left_region_end_x);
 
     // Right region: matches the reference Bar.qml's actual rightLayout order,
     // Mic, Volume, Network, Clock, Tray -- Tray is rightmost, drawn first
@@ -45,6 +132,12 @@ void render_output(cairo_t *cr, Output *output, int width, int height) {
     double eq_left_x = eq_render(cr, output, network_left_x, 0.0, (double)height);
     double volume_left_x = volume_render(cr, output, eq_left_x, 0.0, (double)height);
     double right_region_start_x = mic_render(cr, output, volume_left_x, 0.0, (double)height);
+    record_right(rects, "tray", (double)width, tray_left_x);
+    record_right(rects, "clock", tray_left_x, clock_left_x);
+    record_right(rects, "network", clock_left_x, network_left_x);
+    record_right(rects, "eq", network_left_x, eq_left_x);
+    record_right(rects, "volume", eq_left_x, volume_left_x);
+    record_right(rects, "mic", volume_left_x, right_region_start_x);
 
     // Center region: matches the reference bar's own centerLayout, which
     // holds only the media widget, horizontally centered

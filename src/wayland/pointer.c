@@ -75,7 +75,10 @@ static void pointer_motion(void *data, struct wl_pointer *pointer, uint32_t time
     AppContext *app = data;
     app->pointer_x = wl_fixed_to_double(sx);
     app->pointer_y = wl_fixed_to_double(sy);
+    pointer_dispatch_motion(app);
+}
 
+void pointer_dispatch_motion(AppContext *app) {
     if (tray_context_menu_is_menu_surface(app->pointer_over_surface)) {
         tray_context_menu_handle_motion(app->pointer_x, app->pointer_y);
     } else if (device_popup_is_menu_surface(app->pointer_over_surface)) {
@@ -99,8 +102,11 @@ static void pointer_motion(void *data, struct wl_pointer *pointer, uint32_t time
 static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t serial,
                             uint32_t time, uint32_t button, uint32_t state) {
     (void)pointer; (void)serial; (void)time;
-    AppContext *app = data;
-    if (state == WL_POINTER_BUTTON_STATE_RELEASED) {
+    pointer_dispatch_button(data, button, state == WL_POINTER_BUTTON_STATE_PRESSED);
+}
+
+void pointer_dispatch_button(AppContext *app, uint32_t button, bool pressed) {
+    if (!pressed) {
         // Releases only matter for ending a volume drag (the mixer's sliders
         // and the device dropdown's meters) -- every other handler here acts
         // on press alone. Unconditional (not gated on which surface it landed
@@ -316,8 +322,10 @@ static void pointer_axis_discrete(void *data, struct wl_pointer *p, uint32_t axi
     if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL || discrete == 0) {
         return;
     }
-    AppContext *app = data;
-    int direction = discrete < 0 ? 1 : -1; // see comment above
+    pointer_dispatch_scroll(data, discrete < 0 ? 1 : -1); // see comment above
+}
+
+void pointer_dispatch_scroll(AppContext *app, int direction) {
     if (mixer_popup_is_menu_surface(app->pointer_over_surface)) {
         mixer_popup_handle_scroll(app->pointer_x, app->pointer_y, direction);
         return;

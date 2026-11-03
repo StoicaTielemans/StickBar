@@ -575,3 +575,25 @@ void media_popup_handle_click(double x, double y) {
     // Deliberately doesn't close the popup, matching audio/device_popup.c's
     // device_popup_handle_press()'s identical "stay open" choice.
 }
+
+// ---- Test-control hooks (testing/test_control.c) ---------------------------------
+
+int media_popup_test_card_count(void) { return g_popup.open ? g_popup.card_count : -1; }
+
+bool media_popup_test_target(const char *app_name, const char *button, double *x, double *y) {
+    if (!g_popup.open) {
+        return false;
+    }
+    int b = strcmp(button, "prev") == 0 ? BUTTON_PREV : strcmp(button, "next") == 0 ? BUTTON_NEXT : BUTTON_PLAYPAUSE;
+    for (int i = 0; i < g_popup.card_count; i++) {
+        char name[TEXT_BUF_SIZE];
+        mpris_player_app_name(g_popup.cards[i].player, name, sizeof(name));
+        if (strcmp(name, app_name) != 0) {
+            continue;
+        }
+        *x = button_x(b) + BUTTON_W / 2.0;
+        *y = g_popup.cards[i].buttons_y + BUTTON_H / 2.0;
+        return true;
+    }
+    return false;
+}

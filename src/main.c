@@ -32,6 +32,7 @@
 #include "modules/network/network_info_popup.h"
 #include "pipewire/pipewire_client.h"
 #include "sysmon/sysmon_client.h"
+#include "testing/test_control.h"
 #include "wayland/context.h"
 #include "wayland/event_loop.h"
 #include "wayland/output.h"
@@ -330,6 +331,14 @@ int main(void) {
         }
     }
 
+    // Test-only: STICKBAR_TEST_CONTROL=1 makes stdin a command channel for
+    // tests/ (see testing/test_control.h). -1 -- and stdin never touched --
+    // in normal use.
+    int test_fd = test_control_init(&app);
+    if (test_fd >= 0 && !event_loop_add_fd(epoll_fd, test_fd, EPOLLIN)) {
+        test_fd = -1;
+    }
+
     struct epoll_event events[10];
 
     // Set when the compositor connection dies, so main() exits non-zero after the
@@ -455,6 +464,12 @@ int main(void) {
                     eq_popup_refresh_if_open();
                     output_mark_all_dirty(&app);
                 }
+            } else if (test_fd >= 0 && fd == test_fd) {
+                if (!test_control_pump()) {
+                    epoll_ctl(epoll_fd, EPOLL_CTL_DEL, test_fd, NULL);
+                    test_fd = -1;
+                }
+                output_mark_all_dirty(&app);
             }
         }
 

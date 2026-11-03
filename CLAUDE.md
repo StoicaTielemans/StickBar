@@ -33,16 +33,38 @@ test the exact binary that ships. Needs a running Wayland session; stdlib-only
 Python. See `tests/README.md` for what each one checks.
 
 ```sh
-meson compile -C build && python3 tests/run_all.py   # ~40s, extra bars flash briefly
+meson compile -C build && python3 tests/run_all.py   # ~2 min, extra bars flash briefly
 python3 tests/perf_compare.py --against HEAD~1        # CPU/memory/compositor table vs. a ref
 ```
 
 Each test was confirmed to *fail* against the build from before the fix it
-guards (commit `1814d4e`), not just to pass now. Beyond that, validate changes
+guards (commit `1814d4e` for the original five; for the dropdown tests, by
+putting each bug back into the current source -- see tests/README.md), not
+just to pass now. Beyond that, validate changes
 by running the bar and observing it (it's fine to run alongside the existing
 Quickshell bar; see below), plus watching stderr for Wayland protocol errors or
 Hyprland IPC failures.
 
+- **Test-control channel (`src/testing/test_control.c`) -- prefer it over
+  ydotool for anything popup-related.** `STICKBAR_TEST_CONTROL=1` makes stdin
+  a command channel (one JSON reply per line on stdout): `rects <output>`
+  (module boxes, recorded by `render.c` on each full frame), `click <output>
+  <x> <y> <button>`, `menu` (open popup size, catcher count, device/mixer/
+  media card counts), `menu-press/-click/-motion/-scroll/-release`,
+  `catcher-click`, `target device|mixer|media ...` (where a named control
+  is, from small hooks in those popups), `snapshot <png>` (re-runs the open
+  popup's draw callback into an image -- exactly what was painted, no screen
+  capture), `refresh <mem|cpu|cpu-reset|gpu|poll>` and `dump
+  <mem|cpu|gpu|net|audio|media>`. Injected input goes through
+  `pointer_dispatch_button()`/`_motion()`/`_scroll()` -- the same routing
+  the wl_pointer listener uses -- so only the compositor's "which surface is
+  under the cursor" step is skipped. `STICKBAR_TEST_OUTPUT=<name>` drops
+  every other output at its `done` event (no bar, no catchers there), and
+  in test mode every surface gets an empty input region, so the user's real
+  clicks pass through: **ydotool testing moved the user's real cursor and
+  their clicks kept closing test popups -- once while they were in a
+  fullscreen game.** All off (and stdin never read) without the env var.
+  `tests/lib/common.py`'s `ControlledBar` is the Python side.
 - **`WAYLAND_DEBUG` timestamps are UTC wall-clock** (`[HH:MM:SS.micro]`, from
   `CLOCK_REALTIME`), not local time and not monotonic. The sub-second part is
   what makes `test_clock_alignment.py` possible without instrumenting the bar;
@@ -159,6 +181,10 @@ stickBar/
     │   │                         description handling, per-output index assignment
     │   ├── pointer.c             wl_seat -> wl_pointer, enter/motion/button routing
     │   └── shm_buffer.c          memfd-backed double-buffered wl_shm pool
+    ├── testing/
+    │   └── test_control.c        STICKBAR_TEST_CONTROL=1 stdin command channel
+    │                             for tests/ (injected clicks, data dumps, popup
+    │                             PNG snapshots); inert otherwise
     ├── bar/
     │   ├── bar_surface.c         per-output zwlr_layer_surface_v1 lifecycle +
     │   │                         frame-callback-throttled redraw (lives forever,
@@ -498,6 +524,15 @@ knowing before touching this code:
   Hyprland event socket fd. `wl_display_dispatch()` alone always performs a
   blocking read if nothing's queued, which isn't safe to call just because
   `epoll_wait()` said *some* fd was ready.
+- **`ShmBuffers.fd` is only valid while `data` is mapped -- never test it
+  with `fd >= 0`.** Every `ShmBuffers` starts out calloc'd/memset (so
+  `fd == 0`), and `destroy_buffers_only()` used to `close(sb->fd)` whenever
+  it was `>= 0`: the first resize of every surface closed fd 0 -- stdin,
+  then whatever had been handed fd 0 next (another surface's memfd, which a
+  later resize then closed again). Harmless-looking for months because the
+  bar never read stdin; found when the test-control channel's stdin turned
+  out to be `/memfd:stickBar-shm`. The close is now tied to `data`;
+  `tests/test_stdin_intact.py` guards it.
 - **A dead Wayland connection must stop the main loop, not be ignored.** Once
   the compositor goes away, the display fd is permanently readable (EPOLLHUP),
   so `epoll_wait()` returns instantly forever. `wayland_dispatch_read()` used to
@@ -914,10 +949,13 @@ PulseAudio (on PipeWire 1.6.8)`) — via **libpulse**, not raw `libpipewire`.
   - Mixer: header `Mixer · N apps · <default sink>` + the same pill; one
     card per stream (name, percent, mute chip, full-width segmented slider).
     Drag/scroll/resize logic unchanged, just re-targeted to the cards.
-  - **Not verified with real input yet**: the user was in a fullscreen game
-    during implementation, so no `ydotool` clicks were sent (they'd have
-    gone into the game). Built cleanly and the test suite passes; the
-    rendering and the drag/scroll paths still need a live check.
+  - Verified by `tests/test_audio.py` through the test-control channel (the
+    user was in a fullscreen game, so no ydotool): on a throwaway null sink,
+    meter press/drag/scroll and the mute chip; the mic list without
+    monitors; the mixer growing/shrinking with a `paplay` stream and its
+    slider/mute chip. The device cards were also checked in a `snapshot`
+    PNG. Setting a default by clicking a card isn't exercised (it would
+    reroute the user's audio).
 - **Middle-click on the volume box opens a per-application mixer**
   (`audio/mixer_popup.c`, no reference-bar equivalent — added per explicit
   user request). `pulse_client.c` additionally tracks PA *sink inputs* (one

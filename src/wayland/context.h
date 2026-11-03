@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <wayland-client.h>
 
+#include "viewporter-client-protocol.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 
 // Opaque forward declaration only. Output owns a pointer to a BarSurface (the real
@@ -53,6 +54,7 @@ struct AppContext {
     struct wl_shm *shm;
     struct wl_seat *seat;
     struct zwlr_layer_shell_v1 *layer_shell;
+    struct wp_viewporter *viewporter; // optional: NULL if the compositor lacks it
 
     struct wl_pointer *pointer;
 

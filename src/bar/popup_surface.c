@@ -12,6 +12,13 @@ struct PopupSurface {
     ShmBuffers buffers;
     bool configured; // true once the compositor's first `configure` has been acked
 
+    // Set for popup_surface_create_catcher() surfaces when the compositor has
+    // wp_viewporter: the surface is then backed by a 1x1 buffer that this
+    // viewport stretches to the configured (full-output) size. NULL for every
+    // ordinary popup, and for catchers on a compositor without viewporter
+    // (they fall back to a full-size transparent buffer).
+    struct wp_viewport *viewport;
+
     // The most recently requested draw callback, cached rather than only ever
     // used immediately -- popup_surface_render_now() is typically called
     // synchronously right after popup_surface_create() (e.g. from a click
@@ -61,7 +68,20 @@ static void layer_surface_configure(void *data, struct zwlr_layer_surface_v1 *la
     // so the compositor's echoed width/height should normally match it exactly
     // -- but honor whatever it actually reports rather than assuming, same as
     // bar_surface.c's own configure handler does.
-    if (first_configure || (int)width != surf->buffers.width || (int)height != surf->buffers.height) {
+    if (surf->viewport) {
+        // Catcher: the surface's size comes from the viewport destination,
+        // not the buffer, so a single transparent pixel is enough -- a full
+        // 1920x1080 ARGB buffer is ~8.3 MB per output (16.6 MB with both shm
+        // slots mapped), all to hold nothing but zeroes. The destination is
+        // double-buffered state, applied by do_render()'s commit below.
+        if (width > 0 && height > 0) {
+            wp_viewport_set_destination(surf->viewport, (int32_t)width, (int32_t)height);
+        }
+        if (first_configure && !shm_buffers_resize(&surf->buffers, surf->app->shm, 1, 1)) {
+            fprintf(stderr, "stickBar: failed to allocate a 1x1 shm buffer for a catcher surface\n");
+            return;
+        }
+    } else if (first_configure || (int)width != surf->buffers.width || (int)height != surf->buffers.height) {
         if (!shm_buffers_resize(&surf->buffers, surf->app->shm, (int)width, (int)height)) {
             fprintf(stderr, "stickBar: failed to allocate shm buffers for a %ux%u popup surface\n", width, height);
             return;
@@ -127,6 +147,36 @@ PopupSurface *popup_surface_create(AppContext *app, Output *output, int width, i
     return surf;
 }
 
+static void draw_transparent(cairo_t *cr, void *user_data) {
+    (void)user_data;
+    // CAIRO_OPERATOR_SOURCE writes exactly transparent rather than blending,
+    // so the result doesn't depend on the shm buffer's starting contents.
+    cairo_save(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+    cairo_set_source_rgba(cr, 0, 0, 0, 0);
+    cairo_paint(cr);
+    cairo_restore(cr);
+}
+
+PopupSurface *popup_surface_create_catcher(AppContext *app, Output *output) {
+    PopupSurface *surf = popup_surface_create(
+        app, output, 0, 0, 0, 0, 0, 0,
+        ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
+        ZWLR_LAYER_SHELL_V1_LAYER_TOP);
+    if (!surf) {
+        return NULL;
+    }
+    // Safe to attach the viewport now: no configure can have been processed
+    // yet (that only happens back in main.c's event loop), so the first
+    // configure already sees it and sizes the buffer to 1x1.
+    if (app->viewporter) {
+        surf->viewport = wp_viewporter_get_viewport(app->viewporter, surf->wl_surface);
+    }
+    popup_surface_render_now(surf, draw_transparent, NULL);
+    return surf;
+}
+
 void popup_surface_render_now(PopupSurface *surf, void (*draw)(cairo_t *cr, void *user_data), void *user_data) {
     surf->pending_draw = draw;
     surf->pending_user_data = user_data;
@@ -149,6 +199,9 @@ void popup_surface_destroy(PopupSurface *surf) {
         return;
     }
     shm_buffers_destroy(&surf->buffers);
+    if (surf->viewport) {
+        wp_viewport_destroy(surf->viewport);
+    }
     if (surf->layer_surface) {
         zwlr_layer_surface_v1_destroy(surf->layer_surface);
     }

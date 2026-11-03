@@ -56,19 +56,6 @@ typedef struct {
 
 static MenuState g_menu = { .hovered_index = -1 };
 
-static void draw_transparent(cairo_t *cr, void *user_data) {
-    (void)user_data;
-    // CAIRO_OPERATOR_SOURCE forces the destination to exactly this fully
-    // transparent color rather than blending -- not strictly necessary for a
-    // freshly-allocated (typically zeroed) shm buffer, but makes the intent
-    // explicit rather than relying on that incidental starting state.
-    cairo_save(cr);
-    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
-    cairo_set_source_rgba(cr, 0, 0, 0, 0);
-    cairo_paint(cr);
-    cairo_restore(cr);
-}
-
 static void draw_menu(cairo_t *cr, void *user_data) {
     (void)user_data;
 
@@ -141,15 +128,10 @@ static void compute_layout(void) {
 static void create_catchers(AppContext *app) {
     g_menu.catcher_count = 0;
     for (Output *o = app->outputs; o && g_menu.catcher_count < MAX_TRACKED_OUTPUTS; o = o->next) {
-        PopupSurface *catcher = popup_surface_create(
-            app, o, 0, 0, 0, 0, 0, 0,
-            ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
-                ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
-            ZWLR_LAYER_SHELL_V1_LAYER_TOP);
+        PopupSurface *catcher = popup_surface_create_catcher(app, o);
         if (!catcher) {
             continue;
         }
-        popup_surface_render_now(catcher, draw_transparent, NULL);
         g_menu.catchers[g_menu.catcher_count] = catcher;
         g_menu.catcher_surfaces[g_menu.catcher_count] = popup_surface_wl_surface(catcher);
         g_menu.catcher_count++;

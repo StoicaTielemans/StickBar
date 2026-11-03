@@ -145,15 +145,6 @@ static bool rect_contains(Rect r, double x, double y) {
     return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
 }
 
-static void draw_transparent(cairo_t *cr, void *user_data) {
-    (void)user_data;
-    cairo_save(cr);
-    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
-    cairo_set_source_rgba(cr, 0, 0, 0, 0);
-    cairo_paint(cr);
-    cairo_restore(cr);
-}
-
 // Text shown after the year: today's date when looking at this year, or a
 // "back to <year>" hint when looking at another one (clicking it goes back).
 static void header_date_text(char *out, size_t out_size) {
@@ -321,15 +312,10 @@ static void rerender(void) {
 static void create_catchers(AppContext *app) {
     g_popup.catcher_count = 0;
     for (Output *o = app->outputs; o && g_popup.catcher_count < MAX_TRACKED_OUTPUTS; o = o->next) {
-        PopupSurface *catcher = popup_surface_create(
-            app, o, 0, 0, 0, 0, 0, 0,
-            ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
-                ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
-            ZWLR_LAYER_SHELL_V1_LAYER_TOP);
+        PopupSurface *catcher = popup_surface_create_catcher(app, o);
         if (!catcher) {
             continue;
         }
-        popup_surface_render_now(catcher, draw_transparent, NULL);
         g_popup.catchers[g_popup.catcher_count] = catcher;
         g_popup.catcher_surfaces[g_popup.catcher_count] = popup_surface_wl_surface(catcher);
         g_popup.catcher_count++;

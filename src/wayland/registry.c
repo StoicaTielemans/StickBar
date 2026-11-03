@@ -15,6 +15,7 @@
 #define SHM_VERSION 1
 #define SEAT_VERSION 7
 #define LAYER_SHELL_VERSION 4
+#define VIEWPORTER_VERSION 1
 
 static void handle_global(void *data, struct wl_registry *registry, uint32_t name,
                            const char *interface, uint32_t version) {
@@ -29,6 +30,8 @@ static void handle_global(void *data, struct wl_registry *registry, uint32_t nam
         wl_seat_add_listener(app->seat, &seat_listener, app);
     } else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
         app->layer_shell = wl_registry_bind(registry, name, &zwlr_layer_shell_v1_interface, LAYER_SHELL_VERSION);
+    } else if (strcmp(interface, wp_viewporter_interface.name) == 0) {
+        app->viewporter = wl_registry_bind(registry, name, &wp_viewporter_interface, VIEWPORTER_VERSION);
     } else if (strcmp(interface, wl_output_interface.name) == 0) {
         output_add(app, name, version);
     }

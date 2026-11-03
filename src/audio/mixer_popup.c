@@ -191,15 +191,6 @@ static void compute_layout(void) {
     g_mixer.popup_height = y + OUTER_MARGIN;
 }
 
-static void draw_transparent(cairo_t *cr, void *user_data) {
-    (void)user_data;
-    cairo_save(cr);
-    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
-    cairo_set_source_rgba(cr, 0, 0, 0, 0);
-    cairo_paint(cr);
-    cairo_restore(cr);
-}
-
 static void draw_slider(cairo_t *cr, double y, double h, int percent, bool muted) {
     double frac = (double)percent / SLIDER_MAX_PERCENT;
     if (frac < 0) frac = 0;
@@ -311,15 +302,10 @@ void mixer_popup_refresh_if_open(void) {
 static void create_catchers(AppContext *app) {
     g_mixer.catcher_count = 0;
     for (Output *o = app->outputs; o && g_mixer.catcher_count < MAX_TRACKED_OUTPUTS; o = o->next) {
-        PopupSurface *catcher = popup_surface_create(
-            app, o, 0, 0, 0, 0, 0, 0,
-            ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
-                ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
-            ZWLR_LAYER_SHELL_V1_LAYER_TOP);
+        PopupSurface *catcher = popup_surface_create_catcher(app, o);
         if (!catcher) {
             continue;
         }
-        popup_surface_render_now(catcher, draw_transparent, NULL);
         g_mixer.catchers[g_mixer.catcher_count] = catcher;
         g_mixer.catcher_surfaces[g_mixer.catcher_count] = popup_surface_wl_surface(catcher);
         g_mixer.catcher_count++;

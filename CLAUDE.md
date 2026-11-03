@@ -735,6 +735,19 @@ clear that way.
   is created on `LAYER_OVERLAY` (strictly above the catchers' `LAYER_TOP`) so it
   reliably receives its own clicks first, without depending on same-layer
   creation-order stacking assumptions.
+- **Catchers are backed by a 1x1 buffer stretched with `wp_viewporter`**
+  (`popup_surface_create_catcher()` in `bar/popup_surface.c`, used by every
+  popup). They used to get a real full-output transparent buffer: ~8.3 MB per
+  1920x1080 output, so opening any dropdown on this 2-monitor machine added
+  ~19 MB of RSS (shm) until it closed -- the user noticed the bar jump from
+  ~56 MB to ~76 MB. Now the surface size comes from
+  `wp_viewport_set_destination()` (set from each `configure`), and the input
+  region still covers the whole output. Measured with the network dropdown
+  open: RSS 72 -> 56 MB, shm 16 -> 1 MB. `hyprctl layers -j` still reports
+  the catchers as 1920x1040, and a real click on one closed the popup
+  (seen in `WAYLAND_DEBUG`: `wl_pointer.button` on the catcher surface, then
+  every popup surface destroyed). Falls back to the old full-size buffer if
+  the compositor has no `wp_viewporter` (bound optionally in `registry.c`).
 
 ## PulseAudio / volume & mic
 

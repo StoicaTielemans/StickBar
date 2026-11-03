@@ -63,8 +63,12 @@ wl_scanner_private_code = generator(wayland_scanner,
 # alongside wayland-protocols.
 wayland_protocols_dep = dependency('wayland-protocols')
 xdg_shell_xml = wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir') / 'stable/xdg-shell/xdg-shell.xml'
+# wp_viewporter (stable) lets a popup's full-screen click-catcher surfaces be
+# backed by a 1x1 buffer stretched to the output size instead of a full-size
+# transparent one -- see bar/popup_surface.c's popup_surface_create_catcher().
+viewporter_xml = wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir') / 'stable/viewporter/viewporter.xml'
 
-protocol_xmls = files('protocols/wlr-layer-shell-unstable-v1.xml') + files(xdg_shell_xml)
+protocol_xmls = files('protocols/wlr-layer-shell-unstable-v1.xml') + files(xdg_shell_xml) + files(viewporter_xml)
 
 generated_headers = wl_scanner_client_header.process(protocol_xmls)
 generated_sources = wl_scanner_private_code.process(protocol_xmls)

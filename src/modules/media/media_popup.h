@@ -32,7 +32,7 @@ void media_popup_handle_motion(double x, double y);
 // Landing on a row's prev/play-pause/next icon dispatches the matching MPRIS
 // call for that row's own player; landing on the row's track text is a
 // no-op. Deliberately doesn't close the popup afterward, matching
-// audio/device_popup.c's own device_popup_handle_click()'s "stay open" choice
+// audio/device_popup.c's own device_popup_handle_press()'s "stay open" choice
 // -- a control click here isn't a selection that should dismiss the menu.
 void media_popup_handle_click(double x, double y);
 

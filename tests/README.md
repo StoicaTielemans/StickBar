@@ -22,7 +22,7 @@ pass, 1 is fail, 77 is skipped (for example, no NVIDIA driver).
 | `test_clock_alignment.py` | The first commit of every second lands within 50ms of the second boundary (measured: under 1ms). | Clock seconds lagging real time by up to 1s. |
 | `test_no_subprocess.py` | The bar spawns no child processes over 12s. It samples `/proc` every 3ms, which covers two 5s polls. | Running `nvidia-smi` every 5s again. |
 | `test_redraw.py` | At least a quarter of commits (and at least 3) damage less than 2000px. 40 PulseAudio events that set the volume and mute to their current values cause no extra commits. | Full-bar redraws on every clock tick, and commits for frames that didn't change. |
-| `test_nvml_vs_smi.py` | Makes the same NVML calls as `sysmon_client.c` and compares the results with `nvidia-smi`. | Wrong units, or memory read through the v1 call, which counts reserved memory. |
+| `test_nvml_vs_smi.py` | Makes the same NVML calls as `sysmon_client.c` and compares the results with `nvidia-smi`: usage, temperature, memory, fan, power and P-state, plus the GPU dropdown's name, driver, power limit, max clock and per-process VRAM list. | Wrong units, memory read through the v1 call (which counts reserved memory), or a wrong process-info struct layout. |
 
 The tests were checked in both directions. Against the build from before these
 fixes (commit `1814d4e`), every test except the NVML one **fails**, each for

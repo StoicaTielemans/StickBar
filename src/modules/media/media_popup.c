@@ -573,5 +573,5 @@ void media_popup_handle_click(double x, double y) {
         mpris_player_next(player);
     }
     // Deliberately doesn't close the popup, matching audio/device_popup.c's
-    // device_popup_handle_click()'s identical "stay open" choice.
+    // device_popup_handle_press()'s identical "stay open" choice.
 }

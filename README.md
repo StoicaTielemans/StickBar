@@ -30,18 +30,24 @@ cairo/pangocairo — no GTK, no other UI toolkit.
 - **System tray** — StatusNotifierItem icons with DBusMenu right-click menus
   (the usual system tray you'd see in any status bar).
 - **Volume / Mic** — default sink/source level, click to mute, scroll to
-  adjust, right-click for a device-picker dropdown (PipeWire/PulseAudio).
+  adjust, right-click for a device dropdown (PipeWire/PulseAudio): one card
+  per device with its details, a draggable volume meter, a mute toggle, and
+  click-to-make-default. Middle-click the volume box for a per-app mixer.
 - **CPU / GPU / Memory** — live usage percentages, right-click each for a
-  detailed dropdown (per-core usage, temperatures, VRAM, etc.). GPU stats are
-  NVIDIA-only (via `nvidia-smi`) — the module just shows "unavailable" without
-  one.
+  btop-style dropdown: braille history graphs of usage and temperature, plus
+  per-thread clocks (P-/E-cores), VRAM/power/fan meters, RAM/swap/zram and
+  memory pressure, and the top apps by CPU, VRAM or memory. GPU stats are
+  NVIDIA-only (read in-process through NVML, the library behind
+  `nvidia-smi`) — the module just shows `--` without one.
 - **Media player** — shows whatever's currently playing over MPRIS (Spotify,
   browsers, VLC, mpv, etc.), click to play/pause, right-click for a dropdown
-  listing every open player with per-player controls, a thumbnail, and a
-  playback-position timeline.
+  with a card per open player: title, artist, a playback timeline and
+  prev/play-pause/next buttons.
 - **Network / Wi-Fi** — the interface currently holding your default route,
-  live upload/download rate, right-click for a dropdown with IP/gateway/MAC/
-  DNS details.
+  live upload/download rate, right-click for a dropdown with a braille
+  download/upload graph and IP/gateway/MAC/DNS details.
+- **Privacy indicator** — appears only while an app is using the mic, webcam
+  or screen sharing (via PipeWire); right-click to see which app.
 - **Power menu** — click the Arch logo (the bar's own leftmost item) for a
   full-screen Logout/Restart/Shutdown overlay, or trigger it from a Hyprland
   keybind (see "Power menu keybind" below).
@@ -70,8 +76,9 @@ Quickshell bar — see [`CLAUDE.md`](./CLAUDE.md).
   [Ninja](https://ninja-build.org/) to build it.
 - Development libraries: `wayland-client`, `wayland-protocols`, `cairo`,
   `pangocairo`, `cjson`, `libsystemd` (for sd-bus), `libpulse`, and
-  `gdk-pixbuf-2.0`.
-- Optional, for full functionality: `nvidia-smi` (NVIDIA GPU stats) and a
+  `libpipewire-0.3`.
+- Optional, for full functionality: the NVIDIA driver's `libnvidia-ml` (GPU
+  stats; loaded at runtime, so the bar starts fine without it) and a
   running PipeWire/PulseAudio server (volume/mic — most desktops already have
   one via `pipewire-pulse`).
 
@@ -79,12 +86,12 @@ Quickshell bar — see [`CLAUDE.md`](./CLAUDE.md).
 
 ```sh
 sudo pacman -S --needed base-devel meson ninja wayland wayland-protocols \
-  cairo pango cjson systemd-libs libpulse gdk-pixbuf2 ttf-jetbrains-mono-nerd
+  cairo pango cjson systemd-libs libpulse libpipewire ttf-jetbrains-mono-nerd
 ```
 
 On other distros, install the equivalent `-dev`/`-devel` packages for the
 libraries above (e.g. `libwayland-dev`, `libcairo2-dev`, `libpango1.0-dev`,
-`libcjson-dev`, `libsystemd-dev`, `libpulse-dev`, `libgdk-pixbuf-2.0-dev` on
+`libcjson-dev`, `libsystemd-dev`, `libpulse-dev`, `libpipewire-0.3-dev` on
 Debian/Ubuntu) plus a Nerd Font of your choice from
 [nerdfonts.com](https://www.nerdfonts.com/font-downloads).
 

@@ -227,9 +227,9 @@ stickBar/
     │   │                         GPU, all re-read on every 5s poll; plain synchronous
     │   │                         accessors, no locking (single-threaded polling,
     │   │                         unlike pulse_client.c)
-    │   └── sysmon_info_popup.c   shared *read-only* CPU/memory info dropdown
-    │                             (used by modules/cpu and modules/mem; the GPU
-    │                             has its own, modules/gpu/gpu_popup.c) -- left-anchored, unlike
+    │   └── sysmon_info_popup.c   *read-only* text info dropdown, now only
+    │                             used by modules/mem (CPU and GPU have their
+    │                             own redesigned popups) -- left-anchored, unlike
     │                             tray_context_menu.c's and device_popup.c's own
     │                             right-anchored popups, since these three modules
     │                             live in the bar's left region
@@ -268,8 +268,11 @@ stickBar/
         │   └── workspaces.c      occupied/focused set computation, kanji pills,
         │                         hit-rect recording + click handling
         ├── cpu/
-        │   └── cpu.c             CPU %+°C module box render + hit-rect + right-
-        │                         click-opens-dropdown handling (no left-click)
+        │   ├── cpu.c             CPU %+°C module box render + hit-rect + right-
+        │   │                     click-opens-dropdown handling (no left-click)
+        │   └── cpu_popup.c       CPU dropdown: model/load-pill header, braille
+        │                         usage + temperature graphs, per-thread grid
+        │                         (P-/E-cores), load/clock/uptime, top processes
         ├── gpu/
         │   ├── gpu.c             GPU %+°C module box render (NVIDIA only) +
         │   │                     hit-rect + right-click-opens-dropdown handling
@@ -1016,6 +1019,53 @@ dropdown, rather than one shared tooltip for all three.
       popup surface recommitting every 5s while open.
       `tests/test_nvml_vs_smi.py` now also checks name, driver, power
       limit, max clock and the per-PID VRAM list.
+  - **Redesigned CPU dropdown (fourth in the restyling pass, built as the
+    GPU dropdown's twin)** — `modules/cpu/cpu_popup.c`. Same header / graph
+    card / rows / top-list rhythm and the same `braille_graph`/`meter_bar`
+    helpers. Opening any of the CPU, GPU and memory dropdowns closes the
+    other two (all three drop down from the same spot).
+    - **Header**: short model (`12th Gen Intel(R) Core(TM) ` stripped →
+      `i5-12600K`; AMD's ` N-Core Processor` tail dropped), cores/threads
+      from `/proc/cpuinfo` (`cpu cores`), and a load pill by overall usage
+      (`idle` <15% green, `active` <60% yellow, `busy` peach).
+    - **Per-thread grid**: meter + % + current clock (`cpufreq/
+      scaling_cur_freq`, dropdown only), column-major like btop. **Hybrid
+      Intel chips are split into P-CORES / E-CORES** using
+      `/sys/devices/cpu_core/cpus` and `/sys/devices/cpu_atom/cpus` (kernel
+      cpulist format, here `0-11` and `12-15`); without both files it's one
+      `CORES` group.
+    - **Rows**: load average + running/total tasks (4th `/proc/loadavg`
+      field), average/max clock (`cpuinfo_max_freq`), uptime.
+    - **Top processes** (`sample_cpu_processes()` in `sysmon_client.c`): one
+      pass over `/proc/[0-9]*/stat` (`comm` runs from the first `(` to the
+      *last* `)`, since names can contain either; utime+stime are fields
+      14-15), diffed per PID against the previous pass (two swapped
+      open-addressing tables keyed by PID, so exited PIDs drop out), divided
+      by elapsed × `_SC_CLK_TCK` × thread count = % of the *whole* CPU, and
+      **summed by name** so a browser's many processes are one line.
+      Measured: 4 busy loops on 16 threads showed `sh 24.9%` (exactly 4/16).
+      The scan runs only while the dropdown is open (~1-3 ms per refresh).
+    - **First figures within a second**: the open-time scan only primes the
+      table (reset first, so it never averages over however long the
+      dropdown was closed); `cpu_popup_tick()` on the 1s clock timer does
+      the second scan at the first tick ≥0.5s after opening (the clock fires
+      on whole seconds, so the very next tick can be milliseconds away --
+      seen live: a tick 0.3s after open was skipped, the next one filled it).
+      After that it follows the 5s poll via `cpu_popup_refresh_if_open()`.
+    - **History**: a 60-sample usage/temperature ring buffer pushed in
+      `sysmon_client_poll()`, same as the GPU's.
+    - **Left out**: package power (RAPL's `energy_uj` is root-only) and
+      per-core temperatures (coretemp reports per *physical* core; mapping
+      threads to them wasn't worth it).
+    - **Known quirk, pre-existing, not changed**: overall usage counts
+      iowait as busy (`idle` is only `/proc/stat`'s 4th field, matching the
+      reference's `percentFromJiffies()`), so during heavy disk I/O it reads
+      higher than `top`'s us+sy+ni -- seen during the load test: 62% vs ~28%
+      with `wa` at ~25%.
+    - Verified with real `ydotool` right-clicks on a second bar instance:
+      model/cores/threads vs `lscpu`, P/E split vs sysfs, uptime vs
+      `uptime -p`, clocks vs `/proc/cpuinfo`, and a 4-loop load; and the
+      `WAYLAND_DEBUG` commit timing above.
   - If the library or driver is missing, `sysmon_gpu_available()` stays false,
     the GPU module shows `--` instead of a percent, and its dropdown shows an
     explicit "No NVIDIA GPU detected" message instead of stale/zero-looking

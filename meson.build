@@ -113,6 +113,7 @@ sources = files(
   'src/modules/cpu/cpu.c',
   'src/modules/gpu/gpu.c',
   'src/modules/gpu/gpu_popup.c',
+  'src/modules/cpu/cpu_popup.c',
   'src/modules/mem/mem.c',
   'src/mpris/mpris_client.c',
   'src/modules/media/media.c',

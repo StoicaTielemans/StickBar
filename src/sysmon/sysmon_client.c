@@ -1,10 +1,13 @@
 #include "sysmon/sysmon_client.h"
 
+#include <dirent.h>
 #include <dlfcn.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 
 // Comfortably above any real machine's thread count (this development
 // machine has 16); matches this project's existing convention (sni_registry's
@@ -26,6 +29,45 @@ static double g_cpu_freq_ghz = 0.0;
 static char g_load_avg[64] = "0.00 0.00 0.00";
 static double g_core_percent[MAX_CPU_CORES];
 static int g_core_count = 0;
+
+// Static CPU facts for the dropdown, read once in sysmon_client_init().
+static char g_cpu_model[96] = "";
+static int g_cpu_physical_cores = 0;
+static double g_cpu_max_ghz = 0.0;
+// Hybrid Intel chips (12th gen+) list their P-core and E-core threads in
+// /sys/devices/cpu_core/cpus and /sys/devices/cpu_atom/cpus; neither exists
+// on AMD or older Intel, which then show one plain "CORES" group.
+static bool g_cpu_hybrid = false;
+static bool g_core_efficient[MAX_CPU_CORES];
+
+// Dropdown-only live values (sysmon_cpu_refresh_details()).
+static double g_core_ghz[MAX_CPU_CORES];
+static int g_tasks_running = 0, g_tasks_total = 0;
+static double g_uptime_s = 0.0;
+
+// Usage/temperature history, same shape as the GPU's below.
+static double g_cpu_util_hist[SYSMON_CPU_HISTORY_LEN], g_cpu_temp_hist[SYSMON_CPU_HISTORY_LEN];
+static int g_cpu_hist_head = 0, g_cpu_hist_len = 0;
+
+// Top-processes sample: per-PID utime+stime from the previous /proc scan,
+// in an open-addressing table keyed by PID (two tables swapped each scan, so
+// PIDs that exited simply drop out), and the resulting top few by name.
+#define PROC_TABLE_SIZE 4096 // power of two, well above a desktop's ~400-1500 PIDs
+typedef struct {
+    int pid; // 0 = empty slot
+    unsigned long long ticks;
+} ProcTicks;
+static ProcTicks g_proc_tables[2][PROC_TABLE_SIZE];
+static int g_proc_table_cur = 0;
+static bool g_proc_primed = false;     // a previous scan exists to diff against
+static bool g_proc_has_result = false; // g_cpu_procs holds a real measurement
+static double g_proc_sample_time = 0.0;
+typedef struct {
+    char name[32];
+    double percent;
+} CpuProcess;
+static CpuProcess g_cpu_procs[SYSMON_CPU_MAX_PROCS];
+static int g_cpu_proc_count = 0;
 
 static bool g_gpu_available = false;
 static bool g_gpu_warned = false;
@@ -75,9 +117,91 @@ static int g_swap_percent = 0;
 
 static void nvml_init(void);
 
+static double monotonic_seconds(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+// Marks every CPU in a kernel cpulist ("0-11", "12-15", "0,2,4-7") as
+// efficient (or not). Returns false if the file doesn't exist.
+static bool mark_cpulist(const char *path, bool efficient) {
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        return false;
+    }
+    char buf[256];
+    bool ok = fgets(buf, sizeof(buf), f) != NULL;
+    fclose(f);
+    if (!ok) {
+        return false;
+    }
+    char *p = buf;
+    while (*p && *p != '\n') {
+        char *end;
+        long lo = strtol(p, &end, 10);
+        if (end == p) {
+            break;
+        }
+        long hi = lo;
+        p = end;
+        if (*p == '-') {
+            hi = strtol(p + 1, &end, 10);
+            p = end;
+        }
+        for (long i = lo; i <= hi && i < MAX_CPU_CORES; i++) {
+            if (i >= 0) {
+                g_core_efficient[i] = efficient;
+            }
+        }
+        if (*p == ',') {
+            p++;
+        }
+    }
+    return true;
+}
+
+static void read_cpu_static_info(void) {
+    FILE *f = fopen("/proc/cpuinfo", "r");
+    if (f) {
+        char line[256];
+        while (fgets(line, sizeof(line), f) && (!g_cpu_model[0] || !g_cpu_physical_cores)) {
+            char *colon = strchr(line, ':');
+            if (!colon) {
+                continue;
+            }
+            char *value = colon + 1;
+            while (*value == ' ') {
+                value++;
+            }
+            value[strcspn(value, "\n")] = '\0';
+            if (!g_cpu_model[0] && strncmp(line, "model name", 10) == 0) {
+                snprintf(g_cpu_model, sizeof(g_cpu_model), "%s", value);
+            } else if (!g_cpu_physical_cores && strncmp(line, "cpu cores", 9) == 0) {
+                g_cpu_physical_cores = atoi(value);
+            }
+        }
+        fclose(f);
+    }
+
+    f = fopen("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq", "r");
+    if (f) {
+        long khz = 0;
+        if (fscanf(f, "%ld", &khz) == 1) {
+            g_cpu_max_ghz = khz / 1e6;
+        }
+        fclose(f);
+    }
+
+    bool has_p = mark_cpulist("/sys/devices/cpu_core/cpus", false);
+    bool has_e = mark_cpulist("/sys/devices/cpu_atom/cpus", true);
+    g_cpu_hybrid = has_p && has_e;
+}
+
 void sysmon_client_init(void) {
     memset(&g_prev_total, 0, sizeof(g_prev_total));
     memset(g_prev_cores, 0, sizeof(g_prev_cores));
+    read_cpu_static_info();
     nvml_init();
 }
 
@@ -510,10 +634,172 @@ void sysmon_gpu_refresh_details(void) {
     refresh_gpu_procs();
 }
 
+static ProcTicks *proc_slot(ProcTicks *table, int pid) {
+    unsigned int h = ((unsigned int)pid * 2654435761u) & (PROC_TABLE_SIZE - 1);
+    while (table[h].pid != 0 && table[h].pid != pid) {
+        h = (h + 1) & (PROC_TABLE_SIZE - 1);
+    }
+    return &table[h];
+}
+
+// One pass over /proc/[0-9]*/stat: records every process's utime+stime and,
+// if a previous pass exists, turns the per-PID differences into "% of the
+// whole CPU" summed by process name, keeping the top SYSMON_CPU_MAX_PROCS.
+// ~1-3ms for this desktop's ~400 processes; only the dropdown calls it.
+static void sample_cpu_processes(void) {
+    DIR *dir = opendir("/proc");
+    if (!dir) {
+        return;
+    }
+    double now = monotonic_seconds();
+    ProcTicks *prev = g_proc_tables[g_proc_table_cur];
+    ProcTicks *cur = g_proc_tables[1 - g_proc_table_cur];
+    memset(cur, 0, sizeof(g_proc_tables[0]));
+
+    // Grouped by name: a browser's renderer/GPU/utility processes add up to
+    // one line, which says more about "what's using my CPU" than 20 lines.
+    enum { MAX_NAMES = 512 };
+    static CpuProcess groups[MAX_NAMES];
+    int group_count = 0;
+    double denom = (now - g_proc_sample_time) * (double)sysconf(_SC_CLK_TCK) * (g_core_count > 0 ? g_core_count : 1);
+
+    struct dirent *ent;
+    int stored = 0;
+    while ((ent = readdir(dir)) != NULL) {
+        if (ent->d_name[0] < '0' || ent->d_name[0] > '9') {
+            continue;
+        }
+        int pid = atoi(ent->d_name);
+        char path[64], buf[512];
+        snprintf(path, sizeof(path), "/proc/%d/stat", pid);
+        FILE *f = fopen(path, "r");
+        if (!f) {
+            continue; // exited since readdir()
+        }
+        size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+        fclose(f);
+        buf[n] = '\0';
+
+        // "PID (comm) S ppid ...": comm may itself contain spaces or ')',
+        // so it runs from the first '(' to the *last* ')'.
+        char *open_paren = strchr(buf, '(');
+        char *close_paren = strrchr(buf, ')');
+        if (!open_paren || !close_paren || close_paren < open_paren) {
+            continue;
+        }
+        // After ") " come fields 3.. (state first); utime/stime are fields
+        // 14 and 15, i.e. the 12th and 13th after the state.
+        unsigned long long utime = 0, stime = 0;
+        if (sscanf(close_paren + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %llu %llu", &utime, &stime) != 2) {
+            continue;
+        }
+        unsigned long long ticks = utime + stime;
+        if (stored < PROC_TABLE_SIZE / 2) { // keep the table at most half full
+            ProcTicks *slot = proc_slot(cur, pid);
+            slot->pid = pid;
+            slot->ticks = ticks;
+            stored++;
+        }
+
+        if (!g_proc_primed || denom <= 0.0) {
+            continue;
+        }
+        ProcTicks *old = proc_slot(prev, pid);
+        if (old->pid != pid || ticks <= old->ticks) {
+            continue; // new since the last scan, or idle
+        }
+        char name[32];
+        size_t len = (size_t)(close_paren - open_paren - 1);
+        if (len >= sizeof(name)) {
+            len = sizeof(name) - 1;
+        }
+        memcpy(name, open_paren + 1, len);
+        name[len] = '\0';
+        double percent = (double)(ticks - old->ticks) * 100.0 / denom;
+        int g = 0;
+        while (g < group_count && strcmp(groups[g].name, name) != 0) {
+            g++;
+        }
+        if (g == group_count) {
+            if (group_count == MAX_NAMES) {
+                continue;
+            }
+            snprintf(groups[g].name, sizeof(groups[g].name), "%s", name);
+            groups[g].percent = 0.0;
+            group_count++;
+        }
+        groups[g].percent += percent;
+    }
+    closedir(dir);
+
+    if (g_proc_primed) {
+        g_cpu_proc_count = 0;
+        while (g_cpu_proc_count < SYSMON_CPU_MAX_PROCS) {
+            int best = -1;
+            for (int i = 0; i < group_count; i++) {
+                if (groups[i].percent > 0.0 && (best < 0 || groups[i].percent > groups[best].percent)) {
+                    best = i;
+                }
+            }
+            if (best < 0) {
+                break;
+            }
+            g_cpu_procs[g_cpu_proc_count++] = groups[best];
+            groups[best].percent = 0.0; // taken
+        }
+        g_proc_has_result = true;
+    }
+    g_proc_table_cur = 1 - g_proc_table_cur;
+    g_proc_sample_time = now;
+    g_proc_primed = true;
+}
+
+void sysmon_cpu_refresh_details(void) {
+    for (int i = 0; i < g_core_count; i++) {
+        char path[96];
+        snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", i);
+        FILE *f = fopen(path, "r");
+        long khz = 0;
+        g_core_ghz[i] = (f && fscanf(f, "%ld", &khz) == 1) ? khz / 1e6 : 0.0;
+        if (f) {
+            fclose(f);
+        }
+    }
+
+    // 4th field of /proc/loadavg is "running/total" scheduling entities.
+    FILE *f = fopen("/proc/loadavg", "r");
+    if (f) {
+        if (fscanf(f, "%*f %*f %*f %d/%d", &g_tasks_running, &g_tasks_total) != 2) {
+            g_tasks_running = g_tasks_total = 0;
+        }
+        fclose(f);
+    }
+    f = fopen("/proc/uptime", "r");
+    if (f) {
+        if (fscanf(f, "%lf", &g_uptime_s) != 1) {
+            g_uptime_s = 0.0;
+        }
+        fclose(f);
+    }
+    sample_cpu_processes();
+}
+
+void sysmon_cpu_reset_process_sample(void) {
+    g_proc_primed = false;
+    g_proc_has_result = false;
+    g_cpu_proc_count = 0;
+}
+
 void sysmon_client_poll(void) {
     poll_cpu();
     poll_mem();
     poll_gpu();
+    g_cpu_util_hist[g_cpu_hist_head] = g_cpu_percent;
+    g_cpu_temp_hist[g_cpu_hist_head] = g_cpu_temp_c;
+    g_cpu_hist_head = (g_cpu_hist_head + 1) % SYSMON_CPU_HISTORY_LEN;
+    if (g_cpu_hist_len < SYSMON_CPU_HISTORY_LEN) {
+        g_cpu_hist_len++;
+    }
     // Pushed here rather than inside poll_gpu(), which the dropdown's
     // refresh also calls -- so samples stay exactly one per 5s poll.
     if (g_gpu_available) {
@@ -536,6 +822,40 @@ const char *sysmon_cpu_load_avg(void) { return g_load_avg; }
 int sysmon_cpu_core_count(void) { return g_core_count; }
 double sysmon_cpu_core_percent(int index) {
     return (index >= 0 && index < g_core_count) ? g_core_percent[index] : 0.0;
+}
+
+const char *sysmon_cpu_model(void) { return g_cpu_model; }
+int sysmon_cpu_physical_cores(void) { return g_cpu_physical_cores; }
+double sysmon_cpu_max_ghz(void) { return g_cpu_max_ghz; }
+bool sysmon_cpu_hybrid(void) { return g_cpu_hybrid; }
+bool sysmon_cpu_core_is_efficient(int index) {
+    return index >= 0 && index < MAX_CPU_CORES && g_core_efficient[index];
+}
+double sysmon_cpu_core_ghz(int index) {
+    return (index >= 0 && index < g_core_count) ? g_core_ghz[index] : 0.0;
+}
+int sysmon_cpu_tasks_running(void) { return g_tasks_running; }
+int sysmon_cpu_tasks_total(void) { return g_tasks_total; }
+double sysmon_cpu_uptime_s(void) { return g_uptime_s; }
+int sysmon_cpu_history_len(void) { return g_cpu_hist_len; }
+static int cpu_history_slot(int index) {
+    int oldest = g_cpu_hist_len < SYSMON_CPU_HISTORY_LEN ? 0 : g_cpu_hist_head;
+    return (oldest + index) % SYSMON_CPU_HISTORY_LEN;
+}
+double sysmon_cpu_util_history(int index) {
+    return (index >= 0 && index < g_cpu_hist_len) ? g_cpu_util_hist[cpu_history_slot(index)] : 0.0;
+}
+double sysmon_cpu_temp_history(int index) {
+    return (index >= 0 && index < g_cpu_hist_len) ? g_cpu_temp_hist[cpu_history_slot(index)] : 0.0;
+}
+// Results need two scans (a difference); the first one after a reset only primes.
+bool sysmon_cpu_process_ready(void) { return g_proc_has_result; }
+int sysmon_cpu_process_count(void) { return g_cpu_proc_count; }
+const char *sysmon_cpu_process_name(int index) {
+    return (index >= 0 && index < g_cpu_proc_count) ? g_cpu_procs[index].name : "";
+}
+double sysmon_cpu_process_percent(int index) {
+    return (index >= 0 && index < g_cpu_proc_count) ? g_cpu_procs[index].percent : 0.0;
 }
 
 bool sysmon_gpu_available(void) { return g_gpu_available; }

@@ -36,6 +36,43 @@ const char *sysmon_cpu_load_avg(void); // "N.NN N.NN N.NN" (1/5/15 min), stable 
 int sysmon_cpu_core_count(void);
 double sysmon_cpu_core_percent(int index); // 0 <= index < sysmon_cpu_core_count()
 
+// Static, read once at init ("" / 0 if unknown).
+const char *sysmon_cpu_model(void); // e.g. "12th Gen Intel(R) Core(TM) i5-12600K"
+int sysmon_cpu_physical_cores(void);
+double sysmon_cpu_max_ghz(void);
+// True on hybrid Intel chips (P-cores + E-cores); then
+// sysmon_cpu_core_is_efficient() says which group a thread belongs to.
+bool sysmon_cpu_hybrid(void);
+bool sysmon_cpu_core_is_efficient(int index);
+
+// Usage % / temperature °C of the last SYSMON_CPU_HISTORY_LEN 5s polls (5
+// minutes), for the dropdown's graphs. Index 0 is the oldest.
+#define SYSMON_CPU_HISTORY_LEN 60
+int sysmon_cpu_history_len(void);
+double sysmon_cpu_util_history(int index);
+double sysmon_cpu_temp_history(int index);
+
+// Dropdown-only details: per-thread current clock, running/total tasks,
+// uptime, and one /proc process scan for the top-processes list (~1-3ms).
+// Never called by the 5s poll itself.
+void sysmon_cpu_refresh_details(void);
+double sysmon_cpu_core_ghz(int index);
+int sysmon_cpu_tasks_running(void);
+int sysmon_cpu_tasks_total(void);
+double sysmon_cpu_uptime_s(void);
+
+// Top CPU users, grouped by process name, as % of the whole CPU (all of
+// them together roughly add up to sysmon_cpu_percent()), measured between
+// the last two refresh_details() calls. Not ready until two scans since the
+// last reset -- call the reset when the dropdown opens, so the first figure
+// isn't averaged over however long it was closed.
+#define SYSMON_CPU_MAX_PROCS 5
+void sysmon_cpu_reset_process_sample(void);
+bool sysmon_cpu_process_ready(void);
+int sysmon_cpu_process_count(void);
+const char *sysmon_cpu_process_name(int index);
+double sysmon_cpu_process_percent(int index);
+
 // --- GPU (NVIDIA only, via NVML) ---
 // False until the first successful NVML query -- lets the GPU module
 // show an explicit "unavailable" state instead of a misleading 0%/N/A mix on

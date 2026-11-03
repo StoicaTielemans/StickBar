@@ -6,6 +6,7 @@
 
 #include "bar/popup_surface.h"
 #include "config/glyphs.h"
+#include "modules/cpu/cpu_popup.h"
 #include "render/braille_graph.h"
 #include "render/meter_bar.h"
 #include "render/module_box.h"
@@ -424,7 +425,8 @@ static void destroy_catchers(void) {
 void gpu_popup_open(Output *output, double box_x, double box_y, double box_w, double box_h) {
     (void)box_w; // left-anchored: only the box's left edge matters
     gpu_popup_close();
-    sysmon_info_popup_close(); // same drop-down spot as the CPU/memory popup
+    sysmon_info_popup_close(); // same drop-down spot as the CPU/memory popups
+    cpu_popup_close();
 
     // VRAM/fan/power/clocks/apps aren't polled in the background (see
     // sysmon_gpu_refresh_details()) -- fetch them now, before measuring.

@@ -8,7 +8,7 @@
 #include "config/glyphs.h"
 #include "render/module_box.h"
 #include "sysmon/sysmon_client.h"
-#include "sysmon/sysmon_info_popup.h"
+#include "modules/cpu/cpu_popup.h"
 
 // How many different Output pointers we keep the box's hit-rect for -- sized
 // generously (this machine has 2 monitors), matching the convention already
@@ -85,23 +85,5 @@ void cpu_handle_click(Output *output, double x, double y, uint32_t button) {
         return;
     }
 
-    // Mirrors the reference SystemMonitor.qml's buildTooltip()'s CPU section
-    // (frequency, temp, load average, then a 4-per-line core usage grid via
-    // formatCoreLines()).
-    char body[2048];
-    int len = snprintf(body, sizeof(body),
-                        "CPU: %.1f%% @ %.2fGHz (%d cores)\n"
-                        "TEMP: %d°C\n"
-                        "LOAD AVG: %s\n\n"
-                        "CORES:\n",
-                        sysmon_cpu_percent(), sysmon_cpu_freq_ghz(), sysmon_cpu_core_count(),
-                        sysmon_cpu_temp_c(), sysmon_cpu_load_avg());
-
-    for (int i = 0; i < sysmon_cpu_core_count() && len > 0 && (size_t)len < sizeof(body) - 32; i++) {
-        int written = snprintf(body + len, sizeof(body) - (size_t)len, "%d: %.1f%%%s", i,
-                                sysmon_cpu_core_percent(i), (i + 1) % 4 == 0 ? "\n" : "  ");
-        len += written;
-    }
-
-    sysmon_info_popup_open(output, COLORS.peach, body, rect->x, rect->y, rect->w, rect->h);
+    cpu_popup_open(output, rect->x, rect->y, rect->w, rect->h);
 }

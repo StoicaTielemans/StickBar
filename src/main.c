@@ -26,6 +26,7 @@
 #include "modules/workspaces/workspaces.h"
 #include "mpris/mpris_client.h"
 #include "network/network_client.h"
+#include "modules/cpu/cpu_popup.h"
 #include "modules/gpu/gpu_popup.h"
 #include "modules/network/network_info_popup.h"
 #include "pipewire/pipewire_client.h"
@@ -378,6 +379,8 @@ int main(void) {
                 // doc comment for why MPRIS position needs polling at all.
                 // A no-op unless the media popup is actually open.
                 media_popup_tick();
+                // Fills the CPU dropdown's process list ~1s after it opens.
+                cpu_popup_tick();
                 // Only the clock changed -- repaint just its box, not the whole
                 // bar (see bar_surface_mark_clock_dirty()).
                 output_mark_all_clock_dirty(&app);
@@ -388,6 +391,7 @@ int main(void) {
                 sysmon_client_poll();
                 // Moves the GPU dropdown's graphs along; no-op if closed.
                 gpu_popup_refresh_if_open();
+                cpu_popup_refresh_if_open();
                 // Piggybacks on this same 5-second timer rather than adding
                 // a second poll source -- matches the reference
                 // NetworkMonitor.qml's own identical 5000ms interval.

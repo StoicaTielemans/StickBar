@@ -26,6 +26,7 @@
 #include "modules/workspaces/workspaces.h"
 #include "mpris/mpris_client.h"
 #include "network/network_client.h"
+#include "modules/network/network_info_popup.h"
 #include "pipewire/pipewire_client.h"
 #include "sysmon/sysmon_client.h"
 #include "wayland/context.h"
@@ -388,6 +389,8 @@ int main(void) {
                 // a second poll source -- matches the reference
                 // NetworkMonitor.qml's own identical 5000ms interval.
                 network_client_poll();
+                // Moves the network dropdown's graph along; no-op if closed.
+                network_info_popup_refresh_if_open();
                 output_mark_all_dirty(&app);
             } else if (powermenu_signal_fd >= 0 && fd == powermenu_signal_fd) {
                 struct signalfd_siginfo info;

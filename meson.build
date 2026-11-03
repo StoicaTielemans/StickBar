@@ -81,6 +81,7 @@ sources = files(
   'src/bar/bar_surface.c',
   'src/render/render.c',
   'src/render/module_box.c',
+  'src/render/braille_graph.c',
   'src/hyprland/ipc_request.c',
   'src/hyprland/ipc_events.c',
   'src/hyprland/dispatch.c',

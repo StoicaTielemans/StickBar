@@ -28,6 +28,14 @@ static double g_rx_total = 0.0, g_tx_total = 0.0;
 static double g_prev_rx = -1.0, g_prev_tx = -1.0;
 static double g_prev_sample_time = -1.0;
 
+// Rate history for the dropdown's graph: a ring buffer of the last
+// NETWORK_HISTORY_LEN rx/tx rates, one per poll (so 5 minutes at the 5s
+// poll). Recorded always, not only while the dropdown is open, so the graph
+// is already full the moment it opens -- it costs one store per poll on a
+// timer that runs anyway. g_hist_head is the slot the *next* sample goes in.
+static double g_rx_hist[NETWORK_HISTORY_LEN], g_tx_hist[NETWORK_HISTORY_LEN];
+static int g_hist_head = 0, g_hist_len = 0;
+
 static char g_dns_servers[MAX_DNS_SERVERS][64];
 static int g_dns_count = 0;
 
@@ -35,6 +43,20 @@ static double monotonic_seconds(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+static void history_reset(void) {
+    g_hist_head = 0;
+    g_hist_len = 0;
+}
+
+static void history_push(double rx, double tx) {
+    g_rx_hist[g_hist_head] = rx;
+    g_tx_hist[g_hist_head] = tx;
+    g_hist_head = (g_hist_head + 1) % NETWORK_HISTORY_LEN;
+    if (g_hist_len < NETWORK_HISTORY_LEN) {
+        g_hist_len++;
+    }
 }
 
 // Reads a whole small text file into `out`, trimming trailing
@@ -204,6 +226,9 @@ void network_client_poll(void) {
         snprintf(g_interface_name, sizeof(g_interface_name), "%s", iface);
         g_prev_rx = -1.0;
         g_prev_tx = -1.0;
+        // Same reason as the rate reset: samples from the old interface
+        // don't belong on the new one's graph.
+        history_reset();
     }
 
     if (!has_route) {
@@ -213,6 +238,7 @@ void network_client_poll(void) {
         g_ip_address[0] = '\0';
         g_rx_rate = 0.0;
         g_tx_rate = 0.0;
+        history_reset();
         return;
     }
 
@@ -275,6 +301,7 @@ void network_client_poll(void) {
         g_prev_tx = tx;
     }
     g_prev_sample_time = now;
+    history_push(g_rx_rate, g_tx_rate);
 }
 
 bool network_connected(void) { return g_connected; }
@@ -290,6 +317,23 @@ double network_rx_rate_bytes_per_sec(void) { return g_rx_rate; }
 double network_tx_rate_bytes_per_sec(void) { return g_tx_rate; }
 double network_rx_total_bytes(void) { return g_rx_total; }
 double network_tx_total_bytes(void) { return g_tx_total; }
+int network_history_len(void) { return g_hist_len; }
+
+// Index 0 is the oldest sample still held: the oldest one sits at
+// g_hist_head once the buffer has wrapped, and at slot 0 before that.
+static int history_slot(int index) {
+    int oldest = g_hist_len < NETWORK_HISTORY_LEN ? 0 : g_hist_head;
+    return (oldest + index) % NETWORK_HISTORY_LEN;
+}
+
+double network_rx_history(int index) {
+    return (index >= 0 && index < g_hist_len) ? g_rx_hist[history_slot(index)] : 0.0;
+}
+
+double network_tx_history(int index) {
+    return (index >= 0 && index < g_hist_len) ? g_tx_hist[history_slot(index)] : 0.0;
+}
+
 int network_dns_count(void) { return g_dns_count; }
 const char *network_dns_get(int index) {
     return (index >= 0 && index < g_dns_count) ? g_dns_servers[index] : "";

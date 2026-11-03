@@ -171,9 +171,11 @@ stickBar/
     │                             generically so a future tooltip/popup can reuse it
     ├── render/
     │   ├── render.c              top-level per-output draw dispatch + background
-    │   └── module_box.c          shared cairo/pango helpers: bordered box chrome,
-    │                             centered text, left-aligned text (added for the
-    │                             tray's menu rows) -- used by every widget
+    │   ├── module_box.c          shared cairo/pango helpers: bordered box chrome,
+    │   │                         centered text, left-aligned text (added for the
+    │   │                         tray's menu rows) -- used by every widget
+    │   └── braille_graph.c       btop-style braille-dot history graph (pure
+    │                             cairo), first used by the network dropdown
     ├── hyprland/
     │   ├── ipc_request.c         request socket (.socket.sock): one connection per
     │                             command, cJSON parsing helper
@@ -298,11 +300,11 @@ stickBar/
         │   ├── network.c         default-route interface module box render + hit-
         │   │                     rect + right-click-opens-dropdown handling (no
         │   │                     left-click, same shape as cpu/gpu/mem)
-        │   └── network_info_popup.c  read-only interface-details dropdown
-        │                         (interface/IP/gateway/MAC/DNS/rx-tx) --
-        │                         structurally the network-domain twin of
-        │                         sysmon_info_popup.c, but right-anchored since
-        │                         this module lives in the bar's right region
+        │   └── network_info_popup.c  read-only dropdown: status header, braille
+        │                         rx/tx graph of the last 5 min, details grid,
+        │                         DNS tags; repainted every 5s poll while open
+        │                         -- right-anchored since this module lives in
+        │                         the bar's right region
         ├── eq/
         │   ├── eq.c              mini-curve + profile-name box (between volume
         │   │                     and network) + hit-rect; left- or right-click opens
@@ -1299,6 +1301,12 @@ the identical 5000ms interval).
   behavior `sysmon_client.c`'s own CPU-jiffies delta already has, and the same
   reason a network-interface change (e.g. Ethernet unplugged, Wi-Fi took over)
   shouldn't diff two byte counters that belong to two different interfaces.
+- **Rate history for the dropdown's graph**: `network_client.c` keeps a ring
+  buffer of the last `NETWORK_HISTORY_LEN` (60) rx/tx rates, one per 5s
+  poll, so 5 minutes. It's recorded *always*, not only while the dropdown is
+  open, so the graph is full the moment it opens; it costs one store per
+  poll on a timer that runs anyway. Cleared when the default-route interface
+  changes or disappears (same rule as the rate reset).
 - **DNS servers**: every `nameserver` line in `/etc/resolv.conf`, capped at 8
   entries (`MAX_DNS_SERVERS` in `network_client.c`) — comfortably above the 3
   glibc's own resolver actually honors, matching this project's usual bounded-
@@ -1328,17 +1336,44 @@ the identical 5000ms interval).
   makes that same swap: `wayland/pointer.c` has no hover-duration/timer
   infrastructure.
   `modules/network/network_info_popup.c` is structurally the network-domain twin
-  of `sysmon/sysmon_info_popup.c` (single read-only text block, snapshotted at
-  open time, not live-refreshed while open — this data only changes once every
-  5-second poll tick anyway, so there's no equivalent of `device_popup.c`'s
-  live-while-open refresh to bother with) — but anchored **TOP+RIGHT**, unlike
-  `sysmon_info_popup.c`'s TOP+LEFT, since the network widget lives in the bar's
-  *right* region (between the EQ module and Clock -- otherwise matching the reference `Bar.qml`'s
-  own `rightLayout` order) rather than the left like CPU/GPU/memory. Body text
-  mirrors `NetworkTooltip.qml`'s own `NetworkMonitor.tooltip` → `buildTooltip()`
-  exactly, including omitting the `LINK SPEED`/`duplex` line entirely for Wi-Fi
-  (those fields don't apply) and the blank-line section breaks between the
-  connection-details block, the rate/totals block, and the DNS list.
+  of `sysmon/sysmon_info_popup.c` (read-only, same catcher shape) — but
+  anchored **TOP+RIGHT**, unlike `sysmon_info_popup.c`'s TOP+LEFT, since the
+  network widget lives in the bar's *right* region (between the EQ module and
+  Clock -- otherwise matching the reference `Bar.qml`'s own `rightLayout`
+  order) rather than the left like CPU/GPU/memory.
+- **Redesigned dropdown (per explicit user request, the second popup in the
+  restyling pass after the calendar)** — it used to be one plain teal text
+  block mirroring `NetworkTooltip.qml`. Now, top to bottom:
+  - **Header**: status glyph, interface name (bold) + `· Ethernet`/`· Wi-Fi`,
+    and a filled pill — `connected` (teal) or `down` (red). With no default
+    route, only "No active connection" is shown.
+  - **Graph card** (`base` with a `surface1` border, like the calendar's
+    month cards): current `↓` rate + `peak` over the history, the download
+    half rising to a centre line, the upload half hanging below it, then the
+    `↑` rate + peak; a `5 min ago … now` axis underneath. Drawn by
+    `render/braille_graph.c`: btop's braille look (2×4 dots per cell, one
+    sample per dot column, 30 cells for 60 samples, newest at the right),
+    dots coloured by height — teal → green → yellow for download, mauve →
+    pink → red for upload. Each half scales to its own peak (upload is
+    usually far smaller), with a 10 KB/s floor so an idle trickle stays a
+    row of single dots instead of filling the graph; any non-zero sample
+    lights at least one dot, which gives idle stretches a dotted baseline.
+    **The dots are cairo circles, not braille characters**: the Nerd Font
+    has all of U+2800..28FF (checked), but drawing them gives crisp, even
+    dots and a colour per dot row without one pango layout per cell.
+  - **Details grid**: dim `FONT.xs` labels, `text` values — IP, gateway,
+    MAC, MTU, link (Ethernet only, the same Wi-Fi omission
+    `buildTooltip()` makes), `SINCE BOOT` totals (interface counters, not
+    per-session), and DNS servers as small `surface0` tags that wrap.
+  - **Live while open**: `network_info_popup_refresh_if_open()` runs right
+    after `network_client_poll()` in `main.c`'s 5s branch and repaints the
+    existing surface, so the graph moves. The size is fixed at open — only
+    an interface/type/DNS-count change while open could change the layout,
+    which then just clips until reopened.
+  - Verified via a scratch build sampling every second and opening the
+    popup from a hook, with a `curl` download (curl: ~88 MiB/s; graph peak
+    78 MB/s over 1s windows); grid values match `ip`/`/sys`/`resolv.conf`.
+    Not yet opened by a real right-click.
 - **Not independently verified against a real Wi-Fi adapter** — this development
   machine has only Ethernet (`enp8s0`); every Wi-Fi-specific code path (the
   `/proc/net/wireless` detection, the Wi-Fi icon variants, `LINK SPEED`/duplex

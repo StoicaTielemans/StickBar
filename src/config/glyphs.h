@@ -75,6 +75,12 @@
 #define GLYPH_ARROW_DOWN 0x2193u
 #define GLYPH_ARROW_UP   0x2191u
 
+// Previous/next chevrons for the clock calendar popup's year navigation
+// (nf-fa-chevron_left / nf-fa-chevron_right) -- confirmed present in
+// JetBrainsMonoNerdFont-Regular.ttf via a fontTools cmap search.
+#define GLYPH_CHEVRON_LEFT  0xF053u
+#define GLYPH_CHEVRON_RIGHT 0xF054u
+
 // Privacy indicator icons (mic/webcam/screen-share currently in use). Mic
 // reuses GLYPH_ICON_MIC above (same glyph the mic/volume modules use).
 // Webcam/screen-share codepoints found via a live fontTools cmap search

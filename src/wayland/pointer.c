@@ -58,6 +58,9 @@ static void pointer_leave(void *data, struct wl_pointer *pointer, uint32_t seria
                            struct wl_surface *surface) {
     (void)pointer; (void)serial;
     AppContext *app = data;
+    if (clock_calendar_popup_is_menu_surface(surface)) {
+        clock_calendar_popup_handle_motion(-1.0, -1.0); // drop any header hover highlight
+    }
     if (app->pointer_over_surface == surface) {
         app->pointer_over_surface = NULL;
         app->pointer_over = NULL;
@@ -86,6 +89,8 @@ static void pointer_motion(void *data, struct wl_pointer *pointer, uint32_t time
         eq_popup_handle_motion(app->pointer_x, app->pointer_y);
     } else if (power_menu_is_menu_surface(app->pointer_over_surface)) {
         power_menu_handle_motion(app->pointer_over_surface, app->pointer_x, app->pointer_y);
+    } else if (clock_calendar_popup_is_menu_surface(app->pointer_over_surface)) {
+        clock_calendar_popup_handle_motion(app->pointer_x, app->pointer_y);
     }
 }
 
@@ -202,7 +207,8 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
         return;
     }
     if (clock_calendar_popup_is_menu_surface(app->pointer_over_surface)) {
-        // Read-only content, same as the sysmon info popup above.
+        // Year navigation in the header; the rest of the popup is read-only.
+        clock_calendar_popup_handle_click(app->pointer_x, app->pointer_y, button);
         return;
     }
     if (clock_calendar_popup_is_catcher_surface(app->pointer_over_surface)) {

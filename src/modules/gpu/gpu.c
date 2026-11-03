@@ -7,7 +7,7 @@
 #include "config/glyphs.h"
 #include "render/module_box.h"
 #include "sysmon/sysmon_client.h"
-#include "sysmon/sysmon_info_popup.h"
+#include "modules/gpu/gpu_popup.h"
 
 // How many different Output pointers we keep the box's hit-rect for -- sized
 // generously (this machine has 2 monitors), matching the convention already
@@ -84,26 +84,5 @@ void gpu_handle_click(Output *output, double x, double y, uint32_t button) {
         return;
     }
 
-    // VRAM/fan/power/P-state aren't polled in the background (see
-    // sysmon_gpu_refresh_details()) -- fetch them now, so the dropdown shows
-    // live values rather than whatever the last 5s poll happened to see.
-    sysmon_gpu_refresh_details();
-
-    char body[512];
-    if (sysmon_gpu_available()) {
-        // Mirrors the reference SystemMonitor.qml's buildTooltip()'s GPU section.
-        snprintf(body, sizeof(body),
-                 "UTIL: %d%% | MEM: %d%%\n"
-                 "TEMP: %d°C\n"
-                 "VRAM: %d/%d MiB\n"
-                 "POWER: %.2fW | FAN: %d%%\n"
-                 "PSTATE: %s",
-                 sysmon_gpu_percent(), sysmon_gpu_mem_percent(), sysmon_gpu_temp_c(),
-                 sysmon_gpu_mem_used_mb(), sysmon_gpu_mem_total_mb(), sysmon_gpu_power_w(),
-                 sysmon_gpu_fan_percent(), sysmon_gpu_pstate());
-    } else {
-        snprintf(body, sizeof(body), "No NVIDIA GPU detected\n(NVML unavailable -- no NVIDIA driver?)");
-    }
-
-    sysmon_info_popup_open(output, COLORS.green, body, rect->x, rect->y, rect->w, rect->h);
+    gpu_popup_open(output, rect->x, rect->y, rect->w, rect->h);
 }

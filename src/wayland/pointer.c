@@ -25,6 +25,7 @@
 #include "modules/volume/volume.h"
 #include "modules/workspaces/workspaces.h"
 #include "sysmon/sysmon_info_popup.h"
+#include "modules/gpu/gpu_popup.h"
 #include "wayland/context.h"
 
 // Finds the Output whose bar surface owns `surface`, or NULL if none does (e.g. the
@@ -188,6 +189,14 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
     }
     if (sysmon_info_popup_is_catcher_surface(app->pointer_over_surface)) {
         sysmon_info_popup_close();
+        return;
+    }
+    if (gpu_popup_is_menu_surface(app->pointer_over_surface)) {
+        // Read-only content, same as the sysmon info popup above.
+        return;
+    }
+    if (gpu_popup_is_catcher_surface(app->pointer_over_surface)) {
+        gpu_popup_close();
         return;
     }
     if (network_info_popup_is_menu_surface(app->pointer_over_surface)) {

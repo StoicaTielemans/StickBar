@@ -38,6 +38,33 @@ static int g_gpu_fan_percent = 0;
 static double g_gpu_power_w = 0.0;
 static char g_gpu_pstate[16] = "";
 
+// Static facts, read once in nvml_init() ("" / 0 if a query isn't supported).
+static char g_gpu_name[96] = "";
+static char g_gpu_driver[80] = "";
+static double g_gpu_power_limit_w = 0.0;
+static int g_gpu_clock_max_mhz = 0;
+static int g_gpu_mem_clock_max_mhz = 0;
+
+// Dropdown-only live values, like VRAM/fan/power above.
+static int g_gpu_clock_mhz = 0;
+static int g_gpu_mem_clock_mhz = 0;
+static int g_gpu_encoder_percent = 0;
+static int g_gpu_decoder_percent = 0;
+
+typedef struct {
+    char name[32]; // /proc/PID/comm (kernel caps it at 15 chars + NUL)
+    int mib;
+} GpuProcess;
+static GpuProcess g_gpu_procs[SYSMON_GPU_MAX_PROCS];
+static int g_gpu_proc_count = 0;
+
+// Usage/temperature history for the dropdown's graphs: one sample per 5s
+// poll, so SYSMON_GPU_HISTORY_LEN covers 5 minutes. Recorded always (these
+// two reads happen every poll anyway, for the bar box), so the graph is full
+// the moment the dropdown opens -- same shape as network_client.c's history.
+static double g_gpu_util_hist[SYSMON_GPU_HISTORY_LEN], g_gpu_temp_hist[SYSMON_GPU_HISTORY_LEN];
+static int g_gpu_hist_head = 0, g_gpu_hist_len = 0;
+
 static int g_mem_percent = 0;
 static double g_mem_used_gb = 0.0;
 static double g_mem_total_gb = 0.0;
@@ -225,6 +252,18 @@ typedef struct {
 } nvmlMemory_v2_t;
 #define NVML_MEMORY_V2 ((unsigned int)(sizeof(nvmlMemory_v2_t) | (2u << 24)))
 #define NVML_TEMPERATURE_GPU 0
+#define NVML_CLOCK_GRAPHICS 0
+#define NVML_CLOCK_MEM 2
+// nvmlProcessInfo_v2_t, which is what the _v3 running-process queries fill
+// in (checked against /opt/cuda's nvml.h). usedGpuMemory is bytes, or
+// NVML_VALUE_NOT_AVAILABLE (all bits set) when the driver can't say.
+typedef struct {
+    unsigned int pid;
+    unsigned long long usedGpuMemory;
+    unsigned int gpuInstanceId, computeInstanceId;
+} nvmlProcessInfo_t;
+#define NVML_VALUE_NOT_AVAILABLE_ULL (~0ULL)
+#define MAX_NVML_PROCS 64 // per query; far above any real desktop's GPU client count
 
 static struct {
     void *lib; // dlopen() handle, NULL if NVML isn't usable this run
@@ -236,6 +275,14 @@ static struct {
     nvmlReturn_t (*get_fan)(nvmlDevice_t, unsigned int *);
     nvmlReturn_t (*get_power)(nvmlDevice_t, unsigned int *);   // milliwatts
     nvmlReturn_t (*get_pstate)(nvmlDevice_t, int *);           // 0..15 => "P0".."P15"
+
+    // Optional: only used by the redesigned dropdown. A driver missing any of
+    // these just leaves that field empty -- it never disables the GPU module.
+    nvmlReturn_t (*get_clock)(nvmlDevice_t, int, unsigned int *);          // MHz
+    nvmlReturn_t (*get_encoder)(nvmlDevice_t, unsigned int *, unsigned int *); // %, sampling period
+    nvmlReturn_t (*get_decoder)(nvmlDevice_t, unsigned int *, unsigned int *);
+    nvmlReturn_t (*get_graphics_procs)(nvmlDevice_t, unsigned int *, nvmlProcessInfo_t *);
+    nvmlReturn_t (*get_compute_procs)(nvmlDevice_t, unsigned int *, nvmlProcessInfo_t *);
 } g_nvml;
 
 static void gpu_warn_once(const char *why) {
@@ -285,6 +332,119 @@ static void nvml_init(void) {
         return;
     }
     g_nvml.lib = lib;
+
+    // Optional dropdown-only symbols (see g_nvml above).
+    g_nvml.get_clock = (nvmlReturn_t (*)(nvmlDevice_t, int, unsigned int *))dlsym(lib, "nvmlDeviceGetClockInfo");
+    g_nvml.get_encoder = (nvmlReturn_t (*)(nvmlDevice_t, unsigned int *, unsigned int *))dlsym(lib, "nvmlDeviceGetEncoderUtilization");
+    g_nvml.get_decoder = (nvmlReturn_t (*)(nvmlDevice_t, unsigned int *, unsigned int *))dlsym(lib, "nvmlDeviceGetDecoderUtilization");
+    g_nvml.get_graphics_procs = (nvmlReturn_t (*)(nvmlDevice_t, unsigned int *, nvmlProcessInfo_t *))dlsym(lib, "nvmlDeviceGetGraphicsRunningProcesses_v3");
+    g_nvml.get_compute_procs = (nvmlReturn_t (*)(nvmlDevice_t, unsigned int *, nvmlProcessInfo_t *))dlsym(lib, "nvmlDeviceGetComputeRunningProcesses_v3");
+
+    // Static facts, read once: they don't change while the driver is loaded.
+    nvmlReturn_t (*get_name)(nvmlDevice_t, char *, unsigned int) =
+        (nvmlReturn_t (*)(nvmlDevice_t, char *, unsigned int))dlsym(lib, "nvmlDeviceGetName");
+    nvmlReturn_t (*get_driver)(char *, unsigned int) = (nvmlReturn_t (*)(char *, unsigned int))dlsym(lib, "nvmlSystemGetDriverVersion");
+    nvmlReturn_t (*get_power_limit)(nvmlDevice_t, unsigned int *) =
+        (nvmlReturn_t (*)(nvmlDevice_t, unsigned int *))dlsym(lib, "nvmlDeviceGetEnforcedPowerLimit");
+    nvmlReturn_t (*get_max_clock)(nvmlDevice_t, int, unsigned int *) =
+        (nvmlReturn_t (*)(nvmlDevice_t, int, unsigned int *))dlsym(lib, "nvmlDeviceGetMaxClockInfo");
+    if (get_name && get_name(g_nvml.device, g_gpu_name, sizeof(g_gpu_name)) != 0) {
+        g_gpu_name[0] = '\0';
+    }
+    if (get_driver && get_driver(g_gpu_driver, sizeof(g_gpu_driver)) != 0) {
+        g_gpu_driver[0] = '\0';
+    }
+    unsigned int value = 0;
+    if (get_power_limit && get_power_limit(g_nvml.device, &value) == 0) {
+        g_gpu_power_limit_w = value / 1000.0; // milliwatts
+    }
+    if (get_max_clock && get_max_clock(g_nvml.device, NVML_CLOCK_GRAPHICS, &value) == 0) {
+        g_gpu_clock_max_mhz = (int)value;
+    }
+    if (get_max_clock && get_max_clock(g_nvml.device, NVML_CLOCK_MEM, &value) == 0) {
+        g_gpu_mem_clock_max_mhz = (int)value;
+    }
+}
+
+static void gpu_history_push(double util, double temp) {
+    g_gpu_util_hist[g_gpu_hist_head] = util;
+    g_gpu_temp_hist[g_gpu_hist_head] = temp;
+    g_gpu_hist_head = (g_gpu_hist_head + 1) % SYSMON_GPU_HISTORY_LEN;
+    if (g_gpu_hist_len < SYSMON_GPU_HISTORY_LEN) {
+        g_gpu_hist_len++;
+    }
+}
+
+// Merges one NVML running-process list into `merged` by PID. An app doing
+// both graphics and compute ("C+G" in nvidia-smi) appears in both lists with
+// the same figure, so keep the larger rather than adding them.
+static void merge_procs(nvmlReturn_t (*query)(nvmlDevice_t, unsigned int *, nvmlProcessInfo_t *),
+                        nvmlProcessInfo_t *merged, unsigned int *merged_count) {
+    if (!query) {
+        return;
+    }
+    nvmlProcessInfo_t list[MAX_NVML_PROCS];
+    unsigned int count = MAX_NVML_PROCS;
+    // A list longer than the buffer fails with INSUFFICIENT_SIZE and fills
+    // nothing; at 64 that would take a very unusual machine, so just skip.
+    if (query(g_nvml.device, &count, list) != 0) {
+        return;
+    }
+    for (unsigned int i = 0; i < count && i < MAX_NVML_PROCS; i++) {
+        unsigned long long used = list[i].usedGpuMemory == NVML_VALUE_NOT_AVAILABLE_ULL ? 0 : list[i].usedGpuMemory;
+        unsigned int j = 0;
+        while (j < *merged_count && merged[j].pid != list[i].pid) {
+            j++;
+        }
+        if (j < *merged_count) {
+            if (used > merged[j].usedGpuMemory) {
+                merged[j].usedGpuMemory = used;
+            }
+        } else if (*merged_count < MAX_NVML_PROCS) {
+            merged[*merged_count] = list[i];
+            merged[*merged_count].usedGpuMemory = used;
+            (*merged_count)++;
+        }
+    }
+}
+
+// Rebuilds g_gpu_procs: the SYSMON_GPU_MAX_PROCS biggest VRAM users, named
+// from /proc/PID/comm -- the short process name, so a Chromium-based
+// browser's GPU process reads "helium" instead of nvidia-smi's multi-line
+// command line.
+static void refresh_gpu_procs(void) {
+    nvmlProcessInfo_t merged[MAX_NVML_PROCS];
+    unsigned int n = 0;
+    merge_procs(g_nvml.get_graphics_procs, merged, &n);
+    merge_procs(g_nvml.get_compute_procs, merged, &n);
+
+    // Selection of the top few by memory -- n is small, so a simple
+    // repeated-max pass is plenty.
+    g_gpu_proc_count = 0;
+    while (g_gpu_proc_count < SYSMON_GPU_MAX_PROCS) {
+        int best = -1;
+        for (unsigned int i = 0; i < n; i++) {
+            if (merged[i].pid != 0 && (best < 0 || merged[i].usedGpuMemory > merged[best].usedGpuMemory)) {
+                best = (int)i;
+            }
+        }
+        if (best < 0) {
+            break;
+        }
+        GpuProcess *p = &g_gpu_procs[g_gpu_proc_count++];
+        p->mib = (int)(merged[best].usedGpuMemory / (1024 * 1024));
+        char path[64];
+        snprintf(path, sizeof(path), "/proc/%u/comm", merged[best].pid);
+        FILE *f = fopen(path, "r");
+        if (!f || !fgets(p->name, sizeof(p->name), f)) {
+            snprintf(p->name, sizeof(p->name), "pid %u", merged[best].pid);
+        }
+        if (f) {
+            fclose(f);
+        }
+        p->name[strcspn(p->name, "\n")] = '\0';
+        merged[best].pid = 0; // taken
+    }
 }
 
 static void poll_gpu(void) {
@@ -341,12 +501,24 @@ void sysmon_gpu_refresh_details(void) {
     } else {
         g_gpu_pstate[0] = '\0';
     }
+
+    unsigned int period = 0;
+    g_gpu_clock_mhz = g_nvml.get_clock && g_nvml.get_clock(g_nvml.device, NVML_CLOCK_GRAPHICS, &value) == 0 ? (int)value : 0;
+    g_gpu_mem_clock_mhz = g_nvml.get_clock && g_nvml.get_clock(g_nvml.device, NVML_CLOCK_MEM, &value) == 0 ? (int)value : 0;
+    g_gpu_encoder_percent = g_nvml.get_encoder && g_nvml.get_encoder(g_nvml.device, &value, &period) == 0 ? (int)value : 0;
+    g_gpu_decoder_percent = g_nvml.get_decoder && g_nvml.get_decoder(g_nvml.device, &value, &period) == 0 ? (int)value : 0;
+    refresh_gpu_procs();
 }
 
 void sysmon_client_poll(void) {
     poll_cpu();
     poll_mem();
     poll_gpu();
+    // Pushed here rather than inside poll_gpu(), which the dropdown's
+    // refresh also calls -- so samples stay exactly one per 5s poll.
+    if (g_gpu_available) {
+        gpu_history_push(g_gpu_percent, g_gpu_temp_c);
+    }
 }
 
 void sysmon_client_shutdown(void) {
@@ -375,6 +547,36 @@ int sysmon_gpu_mem_total_mb(void) { return g_gpu_mem_total_mb; }
 int sysmon_gpu_fan_percent(void) { return g_gpu_fan_percent; }
 double sysmon_gpu_power_w(void) { return g_gpu_power_w; }
 const char *sysmon_gpu_pstate(void) { return g_gpu_pstate; }
+const char *sysmon_gpu_name(void) { return g_gpu_name; }
+const char *sysmon_gpu_driver(void) { return g_gpu_driver; }
+double sysmon_gpu_power_limit_w(void) { return g_gpu_power_limit_w; }
+int sysmon_gpu_clock_mhz(void) { return g_gpu_clock_mhz; }
+int sysmon_gpu_clock_max_mhz(void) { return g_gpu_clock_max_mhz; }
+int sysmon_gpu_mem_clock_mhz(void) { return g_gpu_mem_clock_mhz; }
+int sysmon_gpu_mem_clock_max_mhz(void) { return g_gpu_mem_clock_max_mhz; }
+int sysmon_gpu_encoder_percent(void) { return g_gpu_encoder_percent; }
+int sysmon_gpu_decoder_percent(void) { return g_gpu_decoder_percent; }
+
+int sysmon_gpu_process_count(void) { return g_gpu_proc_count; }
+const char *sysmon_gpu_process_name(int index) {
+    return (index >= 0 && index < g_gpu_proc_count) ? g_gpu_procs[index].name : "";
+}
+int sysmon_gpu_process_mib(int index) {
+    return (index >= 0 && index < g_gpu_proc_count) ? g_gpu_procs[index].mib : 0;
+}
+
+int sysmon_gpu_history_len(void) { return g_gpu_hist_len; }
+// Index 0 is the oldest sample held (see network_client.c's history_slot()).
+static int gpu_history_slot(int index) {
+    int oldest = g_gpu_hist_len < SYSMON_GPU_HISTORY_LEN ? 0 : g_gpu_hist_head;
+    return (oldest + index) % SYSMON_GPU_HISTORY_LEN;
+}
+double sysmon_gpu_util_history(int index) {
+    return (index >= 0 && index < g_gpu_hist_len) ? g_gpu_util_hist[gpu_history_slot(index)] : 0.0;
+}
+double sysmon_gpu_temp_history(int index) {
+    return (index >= 0 && index < g_gpu_hist_len) ? g_gpu_temp_hist[gpu_history_slot(index)] : 0.0;
+}
 
 int sysmon_mem_percent(void) { return g_mem_percent; }
 double sysmon_mem_used_gb(void) { return g_mem_used_gb; }

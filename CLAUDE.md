@@ -174,8 +174,10 @@ stickBar/
     │   ├── module_box.c          shared cairo/pango helpers: bordered box chrome,
     │   │                         centered text, left-aligned text (added for the
     │   │                         tray's menu rows) -- used by every widget
-    │   └── braille_graph.c       btop-style braille-dot history graph (pure
-    │                             cairo), first used by the network dropdown
+    │   ├── braille_graph.c       btop-style braille-dot history graph (pure
+    │   │                         cairo), used by the network and GPU dropdowns
+    │   └── meter_bar.c           segmented "how full" bar (btop's ▰▰▱▱ meters),
+    │                             pure cairo, first used by the GPU dropdown
     ├── hyprland/
     │   ├── ipc_request.c         request socket (.socket.sock): one connection per
     │                             command, cJSON parsing helper
@@ -225,9 +227,9 @@ stickBar/
     │   │                         GPU, all re-read on every 5s poll; plain synchronous
     │   │                         accessors, no locking (single-threaded polling,
     │   │                         unlike pulse_client.c)
-    │   └── sysmon_info_popup.c   shared *read-only* CPU/GPU/memory info dropdown
-    │                             (used by all three of modules/cpu, modules/gpu,
-    │                             modules/mem) -- left-anchored, unlike
+    │   └── sysmon_info_popup.c   shared *read-only* CPU/memory info dropdown
+    │                             (used by modules/cpu and modules/mem; the GPU
+    │                             has its own, modules/gpu/gpu_popup.c) -- left-anchored, unlike
     │                             tray_context_menu.c's and device_popup.c's own
     │                             right-anchored popups, since these three modules
     │                             live in the bar's left region
@@ -269,8 +271,12 @@ stickBar/
         │   └── cpu.c             CPU %+°C module box render + hit-rect + right-
         │                         click-opens-dropdown handling (no left-click)
         ├── gpu/
-        │   └── gpu.c             GPU %+°C module box render (NVIDIA only) +
-        │                         hit-rect + right-click-opens-dropdown handling
+        │   ├── gpu.c             GPU %+°C module box render (NVIDIA only) +
+        │   │                     hit-rect + right-click-opens-dropdown handling
+        │   └── gpu_popup.c       GPU dropdown: name/driver/P-state header,
+        │                         braille usage + temperature graphs, VRAM/power/
+        │                         fan meters, clocks, top VRAM apps; repainted
+        │                         every 5s poll while open
         ├── mem/
         │   └── mem.c             memory % module box render + hit-rect +
         │                         right-click-opens-dropdown handling
@@ -972,6 +978,44 @@ dropdown, rather than one shared tooltip for all three.
     allocates its own buffers (fresh-start RSS ~29 MB → ~55 MB, measured by
     building the same tree with NVML disabled). Judged worth it for the CPU
     and latency win; if memory ever matters more, this is where it went.
+  - **Redesigned GPU dropdown (per explicit user request, third in the popup
+    restyling pass after the calendar and network)** —
+    `modules/gpu/gpu_popup.c`, its own popup now instead of a text block in
+    the shared `sysmon_info_popup.c` (still used by CPU and memory; opening
+    either closes the other, since both drop down from the same spot).
+    Top to bottom: header (short name with "NVIDIA GeForce" stripped, driver
+    version, and a P-state pill: P0-2 `busy` peach, P3-7 `active` yellow,
+    P8+ `idle` green); a graph card with braille usage (0-100%, green →
+    yellow → red) and temperature (mapped 30-90 °C, peach → red) over 5
+    minutes; VRAM/power/fan as `render/meter_bar.c` segmented meters; clock
+    and encoder/decoder lines; and `TOP VRAM APPS` (the 5 biggest, a bar
+    relative to the biggest, always 5 rows tall so the open-time size never
+    clips).
+    - **New NVML calls**, all optional (a missing symbol just leaves that
+      field empty, never disables the module): name, driver version,
+      enforced power limit and max clocks read **once** in `nvml_init()`;
+      current clocks, `nvmlDeviceGetEncoder/DecoderUtilization` and the
+      process list in `sysmon_gpu_refresh_details()` (dropdown only).
+    - **Per-app VRAM**: `nvmlDeviceGetGraphicsRunningProcesses_v3` +
+      `..._ComputeRunningProcesses_v3` (struct = `nvmlProcessInfo_v2_t`,
+      checked against `/opt/cuda`'s `nvml.h`), merged by PID keeping the
+      larger figure (a C+G app is in both lists with the same number),
+      `NVML_VALUE_NOT_AVAILABLE` counted as 0, named from `/proc/PID/comm`
+      so a browser GPU process reads "helium", not its command line.
+    - **History**: a 60-sample usage/temperature ring buffer pushed in
+      `sysmon_client_poll()` -- not inside `poll_gpu()`, which the dropdown's
+      refresh also calls, so it stays exactly one sample per 5s.
+    - **Live while open**: `gpu_popup_refresh_if_open()` after the 5s poll
+      re-runs `sysmon_gpu_refresh_details()` (~4-11 ms, the fan query
+      dominating) and repaints; nothing extra runs while it's closed.
+    - Verified with real `ydotool` right-clicks on a second bar instance:
+      idle values matched `nvidia-smi` (name, driver, 1.7/10.0 GB, 340 W,
+      P5); under a vsync-off `glxgears` load the popup showed 95%, `P0
+      busy`, 167 W, fan 57%, 1935 MHz against `nvidia-smi`'s 82%/166 W/
+      1935 MHz/P0 at nearly the same moment; `WAYLAND_DEBUG` showed the
+      popup surface recommitting every 5s while open.
+      `tests/test_nvml_vs_smi.py` now also checks name, driver, power
+      limit, max clock and the per-PID VRAM list.
   - If the library or driver is missing, `sysmon_gpu_available()` stays false,
     the GPU module shows `--` instead of a percent, and its dropdown shows an
     explicit "No NVIDIA GPU detected" message instead of stale/zero-looking

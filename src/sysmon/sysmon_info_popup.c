@@ -3,6 +3,7 @@
 #include <stdio.h>
 
 #include "bar/popup_surface.h"
+#include "modules/gpu/gpu_popup.h"
 #include "render/module_box.h"
 
 // Sized generously (this machine has 2 monitors), matching the same
@@ -66,6 +67,7 @@ void sysmon_info_popup_open(Output *output, Color accent, const char *body,
                              double box_x, double box_y, double box_w, double box_h) {
     (void)box_w; // left-anchored: only the box's left edge (box_x) matters, not its width
     sysmon_info_popup_close(); // at most one sysmon info popup open at a time
+    gpu_popup_close();         // the GPU dropdown opens from the same spot
 
     g_popup.accent = accent;
     g_popup.output = output;

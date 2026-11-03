@@ -45,7 +45,8 @@ int sysmon_gpu_percent(void);
 int sysmon_gpu_mem_percent(void);
 int sysmon_gpu_temp_c(void);
 
-// Fetches the dropdown-only GPU fields below (VRAM, fan, power, P-state) --
+// Fetches the dropdown-only GPU fields below (VRAM, fan, power, P-state,
+// clocks, encoder/decoder load, the per-app VRAM list) --
 // and re-reads usage/temperature, so all of them are one current snapshot.
 // They're deliberately *not* read on the 5s poll: the fan query alone costs
 // 0.8-5.3ms per call. Call right before showing them; no-op without NVML.
@@ -57,6 +58,32 @@ int sysmon_gpu_mem_total_mb(void);
 int sysmon_gpu_fan_percent(void);
 double sysmon_gpu_power_w(void);
 const char *sysmon_gpu_pstate(void); // e.g. "P8", stable buffer
+int sysmon_gpu_clock_mhz(void);        // current graphics clock
+int sysmon_gpu_mem_clock_mhz(void);    // current memory clock
+int sysmon_gpu_encoder_percent(void);  // NVENC load
+int sysmon_gpu_decoder_percent(void);  // NVDEC load
+
+// The biggest VRAM users (graphics + compute processes merged by PID),
+// largest first, also as of the last refresh_details(). Names are the short
+// /proc/PID/comm name.
+#define SYSMON_GPU_MAX_PROCS 5
+int sysmon_gpu_process_count(void);
+const char *sysmon_gpu_process_name(int index);
+int sysmon_gpu_process_mib(int index);
+
+// Static, read once at startup ("" / 0 if the driver doesn't report it).
+const char *sysmon_gpu_name(void);   // e.g. "NVIDIA GeForce RTX 3080"
+const char *sysmon_gpu_driver(void); // e.g. "615.78.08"
+double sysmon_gpu_power_limit_w(void);
+int sysmon_gpu_clock_max_mhz(void);
+int sysmon_gpu_mem_clock_max_mhz(void);
+
+// Usage % / temperature °C of the last SYSMON_GPU_HISTORY_LEN 5s polls (5
+// minutes), for the dropdown's graphs. Index 0 is the oldest.
+#define SYSMON_GPU_HISTORY_LEN 60
+int sysmon_gpu_history_len(void);
+double sysmon_gpu_util_history(int index);
+double sysmon_gpu_temp_history(int index);
 
 // --- Memory ---
 int sysmon_mem_percent(void);

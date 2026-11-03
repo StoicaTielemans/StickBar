@@ -39,6 +39,7 @@ MprisPlayer *mpris_player_get(int index); // 0 <= index < mpris_player_count()
 
 const char *mpris_player_title(MprisPlayer *player);    // "" if unreported
 const char *mpris_player_artist(MprisPlayer *player);   // "" if unreported
+const char *mpris_player_album(MprisPlayer *player);    // "" if unreported
 
 // Name of the app behind `player`, for labeling it: its MPRIS Identity
 // ("Spotify", "Mozilla Firefox"), or if that's empty, the bus-name suffix
@@ -46,6 +47,8 @@ const char *mpris_player_artist(MprisPlayer *player);   // "" if unreported
 void mpris_player_app_name(MprisPlayer *player, char *out, size_t out_size);
 const char *mpris_player_identity(MprisPlayer *player); // app-provided display name, used as a title fallback
 bool mpris_player_is_playing(MprisPlayer *player);
+// Raw PlaybackStatus: "Playing" | "Paused" | "Stopped", or "" if never fetched.
+const char *mpris_player_status(MprisPlayer *player);
 bool mpris_player_can_go_next(MprisPlayer *player);
 bool mpris_player_can_go_previous(MprisPlayer *player);
 

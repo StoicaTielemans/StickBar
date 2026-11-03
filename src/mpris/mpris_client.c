@@ -30,6 +30,7 @@ struct MprisPlayer {
     char status[16]; // "Playing" | "Paused" | "Stopped" | "" (never fetched yet)
     char title[256];
     char artist[256];
+    char album[256]; // "" if unreported (common: browsers send an empty one)
     bool can_go_next, can_go_previous;
     int64_t length_us;   // 0 if unreported
     int64_t position_us; // last value from mpris_player_refresh_position(), 0 if never polled
@@ -166,6 +167,8 @@ void mpris_player_app_name(MprisPlayer *player, char *out, size_t out_size) {
     snprintf(out, out_size, "%.*s", len, name);
 }
 bool mpris_player_is_playing(MprisPlayer *player) { return strcmp(player->status, "Playing") == 0; }
+const char *mpris_player_status(MprisPlayer *player) { return player->status; }
+const char *mpris_player_album(MprisPlayer *player) { return player->album; }
 bool mpris_player_can_go_next(MprisPlayer *player) { return player->can_go_next; }
 bool mpris_player_can_go_previous(MprisPlayer *player) { return player->can_go_previous; }
 int64_t mpris_player_length_us(MprisPlayer *player) { return player->length_us; }
@@ -231,6 +234,7 @@ void mpris_player_previous(MprisPlayer *player) {
 static void parse_metadata(sd_bus_message *m, MprisPlayer *item) {
     item->title[0] = '\0';
     item->artist[0] = '\0';
+    item->album[0] = '\0';
     item->length_us = 0;
 
     if (sd_bus_message_enter_container(m, SD_BUS_TYPE_ARRAY, "{sv}") <= 0) {
@@ -250,6 +254,12 @@ static void parse_metadata(sd_bus_message *m, MprisPlayer *item) {
                 sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &title);
                 if (title) {
                     snprintf(item->title, sizeof(item->title), "%s", title);
+                }
+            } else if (key && strcmp(key, "xesam:album") == 0 && strcmp(contents, "s") == 0) {
+                const char *album = NULL;
+                sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &album);
+                if (album) {
+                    snprintf(item->album, sizeof(item->album), "%s", album);
                 }
             } else if (key && strcmp(key, "xesam:artist") == 0 && strcmp(contents, "as") == 0) {
                 if (sd_bus_message_enter_container(m, SD_BUS_TYPE_ARRAY, "s") > 0) {

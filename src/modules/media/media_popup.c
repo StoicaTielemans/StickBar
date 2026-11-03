@@ -1,16 +1,17 @@
 #include "modules/media/media_popup.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "bar/popup_surface.h"
 #include "config/glyphs.h"
 #include "modules/media/media.h"
+#include "render/meter_bar.h"
 #include "render/module_box.h"
 
 // Sized generously (this machine has 2 monitors), matching the same
-// MAX_TRACKED_OUTPUTS convention used by modules/tray/tray_context_menu.c
-// and audio/device_popup.c.
+// MAX_TRACKED_OUTPUTS convention used by every other popup in this project.
 #define MAX_TRACKED_OUTPUTS 8
 
 // Mirrors mpris/mpris_client.c's MAX_MPRIS_PLAYERS, but that constant isn't
@@ -19,25 +20,35 @@
 // MAX_DEVICE_ROWS redeclaration.
 #define MAX_MEDIA_ROWS 16
 
-#define ROW_SPACING 8.0        // matches audio/device_popup.c's ColumnLayout spacing
-#define ROW_INNER_SPACING 10.0 // matches each row's RowLayout spacing
-#define OUTER_MARGIN 8.0       // matches Config.bar.popupPadding
-#define TRACK_TEXT_MAX_W 260.0 // matches device_popup.c's own DESC_MAX_W
-#define TRACK_BUF_SIZE 300
-#define TIME_BUF_SIZE 16
+// Layout tuning, local to this popup (see CLAUDE.md "Conventions"). Header,
+// pill and card styling match the CPU/GPU/memory dropdowns on purpose.
+// The content width is fixed, so a track change (a longer title) never
+// changes the popup's size -- titles truncate instead.
+#define CONTENT_W 360.0
+#define OUTER_MARGIN 12.0
+#define SECTION_GAP 10.0
+#define CARD_GAP 8.0
+#define HEADER_H 22.0
+#define PILL_H 16.0
+#define PILL_PAD_X 7.0
+#define CARD_PAD 10.0
+#define TOP_LINE_H 14.0
+#define TITLE_H 20.0
+#define ARTIST_H 16.0
+#define TIMELINE_GAP 6.0
+#define TIMELINE_ROW_H 14.0
+#define TIMELINE_METER_H 6.0
+#define TIMELINE_SEGMENTS 36
+#define CONTROLS_GAP 8.0
+#define BUTTON_W 38.0
+#define BUTTON_H 28.0
+#define BUTTON_GAP 6.0
+#define COL_GAP 10.0
+#define TEXT_BUF_SIZE 600
 
-// Prev/play-pause/next glyph size -- deliberately larger than the track text
-// (FONT.label, 14px) so the controls read as buttons and are easier to hit.
-// Local tuning, not a shared FONT token. Column widths and the row height
-// are measured from the glyphs at this size (compute_layout()), and click
-// hit-testing uses those same columns, so changing it needs nothing else.
+// Prev/play-pause/next glyph size -- deliberately larger than the text so
+// the controls read as buttons. Local tuning, not a shared FONT token.
 #define CONTROL_ICON_PX 22
-
-// Timeline (progress bar) geometry, read-only -- no click-to-seek in this
-// pass, see media_popup_handle_click()'s own doc comment for why.
-#define TIMELINE_W 160.0
-#define TIMELINE_H 4.0
-#define TIME_ROW_GAP 4.0
 
 // Matches the reference MediaPopup.qml's own maxSaneDuration: some players
 // (e.g. a browser tab playing a livestream) report a bogus sentinel length
@@ -45,39 +56,45 @@
 // 24h as "no duration" rather than showing a nonsense timeline.
 #define MAX_SANE_DURATION_US (86400LL * 1000000LL)
 
+enum { BUTTON_PREV, BUTTON_PLAYPAUSE, BUTTON_NEXT, BUTTON_COUNT };
+
 typedef struct {
-    double y, h; // whole card: y relative to popup top, h = full card height (x is always OUTER_MARGIN)
-    double app_y, app_h;           // small app-name header line ("Spotify") at the card's top
-
-    double controls_y, controls_h; // prev/playpause/next + track-text sub-row
-
-    bool has_time; // false if the player reported no (sane) track length
-    double time_y, time_h;
-    char time_left[TIME_BUF_SIZE], time_right[TIME_BUF_SIZE];
-    double progress_frac; // 0..1, only meaningful if has_time
-} RowLayout;
+    MprisPlayer *player;
+    double y, h;         // card rect, relative to the popup (x is always OUTER_MARGIN)
+    bool has_artist;     // artist/album line shown (omitted if both are empty)
+    double buttons_y;    // top of the control chips
+} CardLayout;
 
 typedef struct {
     bool open;
     Color accent;
     Output *output;
     PopupSurface *popup;
+    int top_margin, left_margin; // kept from open time, for recreating the surface
 
-    MprisPlayer *players[MAX_MEDIA_ROWS];
-    RowLayout rows[MAX_MEDIA_ROWS];
-    char track_text[MAX_MEDIA_ROWS][TRACK_BUF_SIZE]; // pre-truncated, computed at layout time
-    char app_name[MAX_MEDIA_ROWS][TRACK_BUF_SIZE];   // pre-truncated app label, computed at layout time
-    int row_count;
-    int hovered_index;
-
-    double prev_col_w, playpause_col_w, next_col_w, time_col_w, content_width, popup_width, popup_height;
+    CardLayout cards[MAX_MEDIA_ROWS];
+    int card_count;
+    int hovered_card, hovered_button; // -1 = none
+    double popup_width, popup_height;
 
     PopupSurface *catchers[MAX_TRACKED_OUTPUTS];
     struct wl_surface *catcher_surfaces[MAX_TRACKED_OUTPUTS];
     int catcher_count;
 } MediaPopupState;
 
-static MediaPopupState g_popup = { .hovered_index = -1 };
+static MediaPopupState g_popup = { .hovered_card = -1, .hovered_button = -1 };
+
+static double text_width(const char *text, int size, bool bold) {
+    double w, h;
+    module_box_measure_text(text, size, bold, &w, &h);
+    (void)h;
+    return w;
+}
+
+static void draw_text_right(cairo_t *cr, double right_x, double y, double h, const char *text, int size, bool bold,
+                            Color color) {
+    module_box_draw_text_left(cr, right_x - text_width(text, size, bold), y, h, text, size, bold, color);
+}
 
 // Binary-search ellipsis truncation over UTF-8 codepoint boundaries -- see
 // modules/media/media.c's own copy of this same algorithm (and
@@ -88,17 +105,15 @@ static MediaPopupState g_popup = { .hovered_index = -1 };
 // produces invalid UTF-8 that pango_layout_set_text() (inside
 // module_box_measure_text()) warns about and silently drops.
 static void truncate_to_width(const char *text, double max_w, int font_px, bool bold, char *out, size_t out_size) {
-    double w, h;
-    module_box_measure_text(text, font_px, bold, &w, &h);
-    if (w <= max_w) {
+    if (text_width(text, font_px, bold) <= max_w) {
         snprintf(out, out_size, "%s", text);
         return;
     }
 
     size_t len = strlen(text);
-    size_t offsets[TRACK_BUF_SIZE];
+    size_t offsets[TEXT_BUF_SIZE];
     size_t n = 0;
-    for (size_t i = 0; i < len && n < TRACK_BUF_SIZE - 1;) {
+    for (size_t i = 0; i < len && n < TEXT_BUF_SIZE - 1;) {
         offsets[n++] = i;
         unsigned char c = (unsigned char)text[i];
         size_t clen = 1;
@@ -116,10 +131,9 @@ static void truncate_to_width(const char *text, double max_w, int font_px, bool 
     size_t lo = 0, hi = n;
     while (lo < hi) {
         size_t mid = (lo + hi + 1) / 2;
-        char candidate[TRACK_BUF_SIZE];
+        char candidate[TEXT_BUF_SIZE + 4];
         snprintf(candidate, sizeof(candidate), "%.*s...", (int)offsets[mid], text);
-        module_box_measure_text(candidate, font_px, bold, &w, &h);
-        if (w <= max_w) {
+        if (text_width(candidate, font_px, bold) <= max_w) {
             lo = mid;
         } else {
             hi = mid - 1;
@@ -128,216 +142,223 @@ static void truncate_to_width(const char *text, double max_w, int font_px, bool 
     snprintf(out, out_size, "%.*s...", (int)offsets[lo], text);
 }
 
-// "m:ss" -- matches MediaPopup.qml's own formatTime() exactly (no leading
-// zero on minutes, always two digits on seconds).
+// "m:ss", or "h:mm:ss" from an hour up (long podcasts, videos) -- below an
+// hour this matches MediaPopup.qml's own formatTime() exactly.
 static void format_time(int64_t us, char *out, size_t out_size) {
     if (us < 0) {
         us = 0;
     }
-    long long total_seconds = (long long)(us / 1000000);
-    long long m = total_seconds / 60;
-    long long s = total_seconds % 60;
-    snprintf(out, out_size, "%lld:%02lld", m, s);
+    long long total = (long long)(us / 1000000);
+    long long h = total / 3600, m = (total % 3600) / 60, s = total % 60;
+    if (h > 0) {
+        snprintf(out, out_size, "%lld:%02lld:%02lld", h, m, s);
+    } else {
+        snprintf(out, out_size, "%lld:%02lld", m, s);
+    }
 }
 
-// Every row shares the same column x-positions (the widest glyph/text across
-// all rows decides each column's width -- see compute_layout()), so these
-// are plain functions of shared state rather than per-row fields.
-static double content_x(void) { return OUTER_MARGIN; }
-static double control_prev_x(void) { return content_x(); }
-static double control_playpause_x(void) { return control_prev_x() + g_popup.prev_col_w + ROW_INNER_SPACING; }
-static double control_next_x(void) { return control_playpause_x() + g_popup.playpause_col_w + ROW_INNER_SPACING; }
-static double control_track_x(void) { return control_next_x() + g_popup.next_col_w + ROW_INNER_SPACING; }
-static double time_left_x(void) { return content_x(); }
-static double timeline_x(void) { return time_left_x() + g_popup.time_col_w + ROW_INNER_SPACING; }
-static double time_right_x(void) { return timeline_x() + TIMELINE_W + ROW_INNER_SPACING; }
+// Status word and colour for a player's PlaybackStatus ("" -> stopped, the
+// spec's state for a player that hasn't reported anything yet).
+static const char *status_word(MprisPlayer *player, Color *color) {
+    const char *status = mpris_player_status(player);
+    if (strcmp(status, "Playing") == 0) {
+        *color = COLORS.green;
+        return "playing";
+    }
+    if (strcmp(status, "Paused") == 0) {
+        *color = COLORS.yellow;
+        return "paused";
+    }
+    *color = COLORS.overlay0;
+    return "stopped";
+}
 
-// Recomputes row geometry (and the truncated track-text/time strings drawn
-// from) directly from mpris_client's live cache -- same reasoning as
-// audio/device_popup.c's compute_layout(): the cache is already live and
-// always-current, so there's nothing to snapshot, and this can safely be
-// re-run on every open *and* every live update while open (including once a
-// second while open, from media_popup_tick() -- see that function's own doc
-// comment for why position needs its own polling).
+static void artist_text(MprisPlayer *player, char *out, size_t out_size) {
+    const char *artist = mpris_player_artist(player);
+    const char *album = mpris_player_album(player);
+    if (artist[0] && album[0]) {
+        snprintf(out, out_size, "%s · %s", artist, album);
+    } else {
+        snprintf(out, out_size, "%s", artist[0] ? artist : album);
+    }
+}
+
+static double card_x(void) { return OUTER_MARGIN; }
+static double inner_x(void) { return OUTER_MARGIN + CARD_PAD; }
+static double inner_w(void) { return CONTENT_W - CARD_PAD * 2.0; }
+static double button_x(int button) { return inner_x() + button * (BUTTON_W + BUTTON_GAP); }
+
+// Recomputes every card's geometry from mpris_client's live cache (already
+// always-current, so there's nothing to snapshot) -- safe to re-run on every
+// open, every live update and every 1s position tick. Only the height can
+// change (player count, artist lines); the width is fixed.
 static void compute_layout(void) {
-    char buf[5];
-    glyph_utf8(GLYPH_ICON_MEDIA_PREV, buf);
-    double prev_w, prev_h;
-    module_box_measure_text(buf, CONTROL_ICON_PX, false, &prev_w, &prev_h);
-
-    glyph_utf8(GLYPH_ICON_MEDIA_PLAY, buf);
-    double play_w, play_h;
-    module_box_measure_text(buf, CONTROL_ICON_PX, false, &play_w, &play_h);
-    glyph_utf8(GLYPH_ICON_MEDIA_PAUSE, buf);
-    double pause_w, pause_h;
-    module_box_measure_text(buf, CONTROL_ICON_PX, false, &pause_w, &pause_h);
-    double playpause_w = play_w > pause_w ? play_w : pause_w;
-    double playpause_h = play_h > pause_h ? play_h : pause_h;
-
-    glyph_utf8(GLYPH_ICON_MEDIA_NEXT, buf);
-    double next_w, next_h;
-    module_box_measure_text(buf, CONTROL_ICON_PX, false, &next_w, &next_h);
-
-    // "00:00" as a representative sample -- fixed-width enough in practice
-    // (this project's own font is monospace) that the column doesn't visibly
-    // jitter as the displayed seconds tick over, without needing to measure
-    // every row's actual time strings just to find the widest.
-    double time_w, time_h;
-    module_box_measure_text("00:00", FONT.sm, false, &time_w, &time_h);
-
-    g_popup.prev_col_w = prev_w;
-    g_popup.playpause_col_w = playpause_w;
-    g_popup.next_col_w = next_w;
-    g_popup.time_col_w = time_w;
-
     int count = mpris_player_count();
     if (count > MAX_MEDIA_ROWS) {
         count = MAX_MEDIA_ROWS; // documented limitation, matches sni_registry's own cap behavior
     }
-    g_popup.row_count = count;
+    g_popup.card_count = count;
 
-    double max_content_w = 0;
-    double card_heights[MAX_MEDIA_ROWS];
-
+    double y = OUTER_MARGIN + HEADER_H + SECTION_GAP;
     for (int i = 0; i < count; i++) {
-        MprisPlayer *player = mpris_player_get(i);
-        g_popup.players[i] = player;
+        CardLayout *card = &g_popup.cards[i];
+        card->player = mpris_player_get(i);
+        char artist[TEXT_BUF_SIZE];
+        artist_text(card->player, artist, sizeof(artist));
+        card->has_artist = artist[0] != '\0';
 
-        // Which app this row belongs to -- with several players open, the
-        // track text alone doesn't say whether it's Spotify or a browser tab.
-        char app_full[TRACK_BUF_SIZE];
-        mpris_player_app_name(player, app_full, sizeof(app_full));
-        truncate_to_width(app_full, TRACK_TEXT_MAX_W, FONT.sm, false, g_popup.app_name[i], TRACK_BUF_SIZE);
-        double app_w, app_h;
-        module_box_measure_text(g_popup.app_name[i], FONT.sm, false, &app_w, &app_h);
-        g_popup.rows[i].app_h = app_h;
-
-        char full_text[TRACK_BUF_SIZE];
-        media_build_track_text(player, full_text, sizeof(full_text));
-        truncate_to_width(full_text, TRACK_TEXT_MAX_W, FONT.label, false, g_popup.track_text[i], TRACK_BUF_SIZE);
-
-        double text_w, text_h;
-        module_box_measure_text(g_popup.track_text[i], FONT.label, false, &text_w, &text_h);
-
-        double controls_row_w =
-            prev_w + ROW_INNER_SPACING + playpause_w + ROW_INNER_SPACING + next_w + ROW_INNER_SPACING + text_w;
-        double controls_row_h = prev_h;
-        if (playpause_h > controls_row_h) controls_row_h = playpause_h;
-        if (next_h > controls_row_h) controls_row_h = next_h;
-        if (text_h > controls_row_h) controls_row_h = text_h;
-        g_popup.rows[i].controls_h = controls_row_h;
-
-        int64_t length_us = mpris_player_length_us(player);
-        bool has_time = length_us > 0 && length_us < MAX_SANE_DURATION_US;
-        g_popup.rows[i].has_time = has_time;
-
-        double time_row_w = 0, time_row_h = 0;
-        if (has_time) {
-            int64_t pos_us = mpris_player_position_us(player);
-            if (pos_us < 0) pos_us = 0;
-            if (pos_us > length_us) pos_us = length_us;
-            format_time(pos_us, g_popup.rows[i].time_left, TIME_BUF_SIZE);
-            format_time(length_us, g_popup.rows[i].time_right, TIME_BUF_SIZE);
-            g_popup.rows[i].progress_frac = (double)pos_us / (double)length_us;
-            time_row_w = time_w + ROW_INNER_SPACING + TIMELINE_W + ROW_INNER_SPACING + time_w;
-            time_row_h = time_h > TIMELINE_H ? time_h : TIMELINE_H;
+        double h = CARD_PAD + TOP_LINE_H + TITLE_H;
+        if (card->has_artist) {
+            h += ARTIST_H;
         }
-        g_popup.rows[i].time_h = time_row_h;
+        h += TIMELINE_GAP + TIMELINE_ROW_H + CONTROLS_GAP;
+        card->buttons_y = y + h;
+        h += BUTTON_H + CARD_PAD;
 
-        double row_content_w = controls_row_w > time_row_w ? controls_row_w : time_row_w;
-        if (app_w > row_content_w) {
-            row_content_w = app_w;
-        }
-        if (row_content_w > max_content_w) {
-            max_content_w = row_content_w;
-        }
-
-        double card_h = app_h + TIME_ROW_GAP + controls_row_h;
-        if (has_time) {
-            card_h += TIME_ROW_GAP + time_row_h;
-        }
-        card_heights[i] = card_h;
-        g_popup.rows[i].h = card_h;
+        card->y = y;
+        card->h = h;
+        y += h + (i < count - 1 ? CARD_GAP : 0.0);
     }
-
-    g_popup.content_width = max_content_w;
-    g_popup.popup_width = g_popup.content_width + OUTER_MARGIN * 2.0;
-
-    double y = OUTER_MARGIN;
-    for (int i = 0; i < count; i++) {
-        g_popup.rows[i].y = y;
-        // Stacked top to bottom: app name, controls + track text, timeline.
-        g_popup.rows[i].app_y = y;
-        g_popup.rows[i].controls_y = y + g_popup.rows[i].app_h + TIME_ROW_GAP;
-        if (g_popup.rows[i].has_time) {
-            g_popup.rows[i].time_y = g_popup.rows[i].controls_y + g_popup.rows[i].controls_h + TIME_ROW_GAP;
-        }
-        y += card_heights[i];
-        if (i < count - 1) {
-            y += ROW_SPACING;
-        }
-    }
+    g_popup.popup_width = CONTENT_W + OUTER_MARGIN * 2.0;
     g_popup.popup_height = y + OUTER_MARGIN;
 }
 
-static void draw_row(cairo_t *cr, int i) {
-    MprisPlayer *player = g_popup.players[i];
-    RowLayout *row = &g_popup.rows[i];
+// ---- Painting ----------------------------------------------------------------
 
-    if (i == g_popup.hovered_index) {
-        module_box_draw_rect(cr, OUTER_MARGIN, row->y, g_popup.content_width, row->h,
-                              COLORS.surface1, (Color){ 0, 0, 0, 0 }, 0.0);
+static void paint_header(cairo_t *cr) {
+    double x = OUTER_MARGIN, y = OUTER_MARGIN;
+    char icon[5], summary[48];
+    glyph_utf8(GLYPH_ICON_MEDIA_PLAY, icon);
+    snprintf(summary, sizeof(summary), "  ·  %d player%s", g_popup.card_count, g_popup.card_count == 1 ? "" : "s");
+    module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, g_popup.accent);
+    double tx = x + text_width(icon, FONT.heading, false) + 8.0;
+    module_box_draw_text_left(cr, tx, y, HEADER_H, "Media", FONT.md, true, COLORS.text);
+    tx += text_width("Media", FONT.md, true);
+    module_box_draw_text_left(cr, tx, y, HEADER_H, summary, FONT.sm, false, COLORS.subtext0);
+
+    // Pill: the "liveliest" state across players -- playing beats paused
+    // beats stopped.
+    bool any_playing = false, any_paused = false;
+    for (int i = 0; i < g_popup.card_count; i++) {
+        const char *status = mpris_player_status(g_popup.cards[i].player);
+        any_playing |= strcmp(status, "Playing") == 0;
+        any_paused |= strcmp(status, "Paused") == 0;
+    }
+    const char *word = any_playing ? "playing" : any_paused ? "paused" : "stopped";
+    Color fill = any_playing ? COLORS.green : any_paused ? COLORS.yellow : COLORS.overlay1;
+    double pill_w = text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
+    double pill_x = x + CONTENT_W - pill_w;
+    double pill_y = y + (HEADER_H - PILL_H) / 2.0;
+    module_box_draw_rect(cr, pill_x, pill_y, pill_w, PILL_H, fill, COLORS.mantle, 0.0);
+    module_box_draw_text_centered(cr, pill_x, pill_y, pill_w, PILL_H, word, FONT.xs, true, COLORS.mantle);
+}
+
+static void paint_timeline(cairo_t *cr, MprisPlayer *player, double y) {
+    int64_t length_us = mpris_player_length_us(player);
+    int64_t pos_us = mpris_player_position_us(player);
+    bool has_length = length_us > 0 && length_us < MAX_SANE_DURATION_US;
+    if (pos_us < 0) {
+        pos_us = 0;
+    }
+    if (has_length && pos_us > length_us) {
+        pos_us = length_us;
     }
 
-    module_box_draw_text_left(cr, content_x(), row->app_y, row->app_h, g_popup.app_name[i], FONT.sm, false,
-                               COLORS.subtext0);
+    char pos[24], len[24], text[56];
+    format_time(pos_us, pos, sizeof(pos));
+    if (has_length) {
+        format_time(length_us, len, sizeof(len));
+        snprintf(text, sizeof(text), "%s / %s", pos, len);
+    } else {
+        // No (sane) length: the meter stays empty and only the elapsed time
+        // shows -- a livestream, or a player that doesn't report one.
+        snprintf(text, sizeof(text), "%s", pos);
+    }
+    // Reserve the widest the label can get, so the meter never shifts as
+    // the seconds tick over (the font is monospace).
+    double text_col_w = text_width("00:00:00 / 00:00:00", FONT.sm, false);
+    double meter_w = inner_w() - text_col_w - COL_GAP;
+    const Color gradient[3] = {g_popup.accent, g_popup.accent, COLORS.peach};
+    double fraction = has_length ? (double)pos_us / (double)length_us : 0.0;
+    meter_bar_draw(cr, inner_x(), y + (TIMELINE_ROW_H - TIMELINE_METER_H) / 2.0, meter_w, TIMELINE_METER_H, fraction,
+                   TIMELINE_SEGMENTS, gradient, COLORS.surface0);
+    draw_text_right(cr, inner_x() + inner_w(), y, TIMELINE_ROW_H, text, FONT.sm, false, COLORS.subtext0);
+}
 
-    char glyph_buf[5];
+static void paint_button(cairo_t *cr, int card_index, int button, double y) {
+    MprisPlayer *player = g_popup.cards[card_index].player;
+    uint32_t glyph = button == BUTTON_PREV   ? GLYPH_ICON_MEDIA_PREV
+                     : button == BUTTON_NEXT ? GLYPH_ICON_MEDIA_NEXT
+                     : mpris_player_is_playing(player) ? GLYPH_ICON_MEDIA_PAUSE
+                                                       : GLYPH_ICON_MEDIA_PLAY;
+    bool enabled = button == BUTTON_PREV   ? mpris_player_can_go_previous(player)
+                   : button == BUTTON_NEXT ? mpris_player_can_go_next(player)
+                                           : true;
+    bool hovered = enabled && card_index == g_popup.hovered_card && button == g_popup.hovered_button;
+    double x = button_x(button);
+    module_box_draw_rect(cr, x, y, BUTTON_W, BUTTON_H, hovered ? COLORS.surface1 : COLORS.surface0, COLORS.mantle,
+                         0.0);
+    char buf[5];
+    glyph_utf8(glyph, buf);
+    module_box_draw_text_centered(cr, x, y, BUTTON_W, BUTTON_H, buf, CONTROL_ICON_PX, false,
+                                  enabled ? g_popup.accent : COLORS.overlay0);
+}
 
-    bool can_prev = mpris_player_can_go_previous(player);
-    glyph_utf8(GLYPH_ICON_MEDIA_PREV, glyph_buf);
-    module_box_draw_text_left(cr, control_prev_x(), row->controls_y, row->controls_h, glyph_buf, CONTROL_ICON_PX, false,
-                               can_prev ? g_popup.accent : COLORS.overlay0);
+static void paint_card(cairo_t *cr, int i) {
+    CardLayout *card = &g_popup.cards[i];
+    MprisPlayer *player = card->player;
+    // The player the bar box shows gets the accent border, like the
+    // calendar's current month.
+    bool active = player == mpris_active_player();
+    module_box_draw_rect(cr, card_x(), card->y, CONTENT_W, card->h, COLORS.base,
+                         active ? g_popup.accent : COLORS.surface1, active ? 2.0 : 1.0);
 
-    bool playing = mpris_player_is_playing(player);
-    glyph_utf8(playing ? GLYPH_ICON_MEDIA_PAUSE : GLYPH_ICON_MEDIA_PLAY, glyph_buf);
-    module_box_draw_text_left(cr, control_playpause_x(), row->controls_y, row->controls_h, glyph_buf, CONTROL_ICON_PX,
-                               false, g_popup.accent);
+    double y = card->y + CARD_PAD;
+    char app[TEXT_BUF_SIZE], line[TEXT_BUF_SIZE];
+    mpris_player_app_name(player, app, sizeof(app));
+    for (char *p = app; *p; p++) {
+        *p = (char)toupper((unsigned char)*p); // ASCII only; multi-byte bytes are left alone
+    }
+    Color status_color;
+    const char *status = status_word(player, &status_color);
+    double status_w = text_width(status, FONT.xs, true);
+    truncate_to_width(app, inner_w() - status_w - COL_GAP, FONT.xs, true, line, sizeof(line));
+    module_box_draw_text_left(cr, inner_x(), y, TOP_LINE_H, line, FONT.xs, true, COLORS.overlay0);
+    draw_text_right(cr, inner_x() + inner_w(), y, TOP_LINE_H, status, FONT.xs, true, status_color);
+    y += TOP_LINE_H;
 
-    bool can_next = mpris_player_can_go_next(player);
-    glyph_utf8(GLYPH_ICON_MEDIA_NEXT, glyph_buf);
-    module_box_draw_text_left(cr, control_next_x(), row->controls_y, row->controls_h, glyph_buf, CONTROL_ICON_PX, false,
-                               can_next ? g_popup.accent : COLORS.overlay0);
+    const char *title = mpris_player_title(player);
+    if (!title[0]) {
+        title = mpris_player_identity(player);
+    }
+    if (!title[0]) {
+        title = "Unknown";
+    }
+    truncate_to_width(title, inner_w(), FONT.label, true, line, sizeof(line));
+    module_box_draw_text_left(cr, inner_x(), y, TITLE_H, line, FONT.label, true, COLORS.text);
+    y += TITLE_H;
 
-    module_box_draw_text_left(cr, control_track_x(), row->controls_y, row->controls_h, g_popup.track_text[i],
-                               FONT.label, false, COLORS.text);
+    if (card->has_artist) {
+        char artist[TEXT_BUF_SIZE];
+        artist_text(player, artist, sizeof(artist));
+        truncate_to_width(artist, inner_w(), FONT.md, false, line, sizeof(line));
+        module_box_draw_text_left(cr, inner_x(), y, ARTIST_H, line, FONT.md, false, COLORS.subtext0);
+        y += ARTIST_H;
+    }
 
-    if (row->has_time) {
-        module_box_draw_text_left(cr, time_left_x(), row->time_y, row->time_h, row->time_left, FONT.sm, false,
-                                   COLORS.subtext0);
-        module_box_draw_text_left(cr, time_right_x(), row->time_y, row->time_h, row->time_right, FONT.sm, false,
-                                   COLORS.subtext0);
-
-        double bar_y = row->time_y + (row->time_h - TIMELINE_H) / 2.0;
-        module_box_draw_rect(cr, timeline_x(), bar_y, TIMELINE_W, TIMELINE_H, COLORS.surface1, (Color){ 0, 0, 0, 0 },
-                              0.0);
-        double frac = row->progress_frac;
-        if (frac < 0) frac = 0;
-        if (frac > 1) frac = 1;
-        double fill_w = TIMELINE_W * frac;
-        if (fill_w > 0) {
-            module_box_draw_rect(cr, timeline_x(), bar_y, fill_w, TIMELINE_H, g_popup.accent, (Color){ 0, 0, 0, 0 },
-                                  0.0);
-        }
+    paint_timeline(cr, player, y + TIMELINE_GAP);
+    for (int b = 0; b < BUTTON_COUNT; b++) {
+        paint_button(cr, i, b, card->buttons_y);
     }
 }
 
 static void draw_popup(cairo_t *cr, void *user_data) {
     (void)user_data;
-    module_box_draw_rect(cr, 0, 0, g_popup.popup_width, g_popup.popup_height,
-                          COLORS.mantle, g_popup.accent, (double)BAR.module_border_width);
-    for (int i = 0; i < g_popup.row_count; i++) {
-        draw_row(cr, i);
+    module_box_draw_rect(cr, 0, 0, g_popup.popup_width, g_popup.popup_height, COLORS.mantle, g_popup.accent,
+                         (double)BAR.module_border_width);
+    paint_header(cr);
+    for (int i = 0; i < g_popup.card_count; i++) {
+        paint_card(cr, i);
     }
 }
 
@@ -347,12 +368,45 @@ static void redraw(void) {
     }
 }
 
+static PopupSurface *create_menu_surface(void) {
+    return popup_surface_create(g_popup.output->app, g_popup.output, (int)g_popup.popup_width,
+                                (int)g_popup.popup_height, g_popup.top_margin, 0, 0, g_popup.left_margin,
+                                ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT,
+                                ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY);
+}
+
+// Re-lays out and repaints; recreates the menu surface if the height
+// changed (a player appeared/disappeared, or gained/lost its artist line).
+// Recreated rather than resized in place for the same reason as
+// audio/mixer_popup.c: a set_size() on the existing layer surface made
+// Hyprland unmap it on shrink. Closes the popup when no player is left.
+static void relayout_and_redraw(void) {
+    double old_h = g_popup.popup_height;
+    compute_layout();
+    if (g_popup.card_count == 0) {
+        media_popup_close();
+        return;
+    }
+    if (g_popup.hovered_card >= g_popup.card_count) {
+        g_popup.hovered_card = -1;
+        g_popup.hovered_button = -1;
+    }
+    if (g_popup.popup_height != old_h) {
+        popup_surface_destroy(g_popup.popup);
+        g_popup.popup = create_menu_surface();
+        if (!g_popup.popup) {
+            media_popup_close();
+            return;
+        }
+    }
+    redraw();
+}
+
 void media_popup_refresh_if_open(void) {
     if (!g_popup.open) {
         return;
     }
-    compute_layout();
-    redraw();
+    relayout_and_redraw();
 }
 
 void media_popup_tick(void) {
@@ -366,11 +420,10 @@ void media_popup_tick(void) {
     // positionChanged() while the popup is on screen. Called once a second
     // from main.c's existing clock timerfd handler rather than a new timer
     // of its own -- see CLAUDE.md's "Media (MPRIS)" section.
-    for (int i = 0; i < g_popup.row_count; i++) {
-        mpris_player_refresh_position(g_popup.players[i]);
+    for (int i = 0; i < g_popup.card_count; i++) {
+        mpris_player_refresh_position(g_popup.cards[i].player);
     }
-    compute_layout();
-    redraw();
+    relayout_and_redraw();
 }
 
 static void create_catchers(AppContext *app) {
@@ -400,7 +453,8 @@ void media_popup_open(Output *output, Color accent, double box_x, double box_y, 
     media_popup_close(); // at most one media popup open at a time
 
     g_popup.accent = accent;
-    g_popup.hovered_index = -1;
+    g_popup.hovered_card = -1;
+    g_popup.hovered_button = -1;
     g_popup.output = output;
 
     // Fetch every open player's current position once, up front, so the
@@ -415,7 +469,7 @@ void media_popup_open(Output *output, Color accent, double box_x, double box_y, 
     }
 
     compute_layout();
-    if (g_popup.row_count == 0) {
+    if (g_popup.card_count == 0) {
         return; // no tracked players at all -- nothing to show
     }
 
@@ -423,13 +477,9 @@ void media_popup_open(Output *output, Color accent, double box_x, double box_y, 
     // other popup in this bar -- see CLAUDE.md's "D-Bus / system tray"
     // for the reasoning. Anchored TOP+LEFT since the media widget lives in the bar's
     // center region -- see media_popup.h's own doc comment.
-    int top_margin = (int)(box_y + box_h) - BAR.height;
-    int left_margin = (int)box_x;
-
-    g_popup.popup = popup_surface_create(output->app, output, (int)g_popup.popup_width, (int)g_popup.popup_height,
-                                          top_margin, 0, 0, left_margin,
-                                          ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT,
-                                          ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY);
+    g_popup.top_margin = (int)(box_y + box_h) - BAR.height;
+    g_popup.left_margin = (int)box_x;
+    g_popup.popup = create_menu_surface();
     if (!g_popup.popup) {
         return;
     }
@@ -448,8 +498,9 @@ void media_popup_close(void) {
     destroy_catchers();
     g_popup.open = false;
     g_popup.output = NULL;
-    g_popup.row_count = 0;
-    g_popup.hovered_index = -1;
+    g_popup.card_count = 0;
+    g_popup.hovered_card = -1;
+    g_popup.hovered_button = -1;
 }
 
 bool media_popup_is_menu_surface(struct wl_surface *surface) {
@@ -468,26 +519,33 @@ bool media_popup_is_catcher_surface(struct wl_surface *surface) {
     return false;
 }
 
-static int row_at(double x, double y) {
-    if (x < OUTER_MARGIN || x >= OUTER_MARGIN + g_popup.content_width) {
-        return -1;
-    }
-    for (int i = 0; i < g_popup.row_count; i++) {
-        RowLayout *row = &g_popup.rows[i];
-        if (y >= row->y && y < row->y + row->h) {
-            return i;
+// Which control chip (card index + button) is under (x, y); false if none.
+static bool button_at(double x, double y, int *card_out, int *button_out) {
+    for (int i = 0; i < g_popup.card_count; i++) {
+        CardLayout *card = &g_popup.cards[i];
+        if (y < card->buttons_y || y >= card->buttons_y + BUTTON_H) {
+            continue;
+        }
+        for (int b = 0; b < BUTTON_COUNT; b++) {
+            if (x >= button_x(b) && x < button_x(b) + BUTTON_W) {
+                *card_out = i;
+                *button_out = b;
+                return true;
+            }
         }
     }
-    return -1;
+    return false;
 }
 
 void media_popup_handle_motion(double x, double y) {
     if (!g_popup.open) {
         return;
     }
-    int idx = row_at(x, y);
-    if (idx != g_popup.hovered_index) {
-        g_popup.hovered_index = idx;
+    int card = -1, button = -1;
+    button_at(x, y, &card, &button);
+    if (card != g_popup.hovered_card || button != g_popup.hovered_button) {
+        g_popup.hovered_card = card;
+        g_popup.hovered_button = button;
         redraw();
     }
 }
@@ -496,36 +554,24 @@ void media_popup_handle_click(double x, double y) {
     if (!g_popup.open) {
         return;
     }
-    int idx = row_at(x, y);
-    if (idx < 0) {
-        return;
-    }
-
-    RowLayout *row = &g_popup.rows[idx];
-    // Only the controls sub-row (prev/playpause/next) is interactive --
-    // landing on the app-name line or the time/progress row is a no-op. No
-    // click-to-seek on the progress bar in this pass: MPRIS's SetPosition()
+    // Only the control chips are interactive -- the text and the timeline
+    // are a no-op. No click-to-seek on the timeline: MPRIS's SetPosition()
     // needs the track's own mpris:trackid object path, which isn't cached
-    // anywhere yet (only the fields this popup actually displays are), and
-    // adding it purely to support seeking wasn't judged worth it here --
-    // the progress bar is read-only, like the sysmon/clock popups' own
-    // read-only content.
-    if (y < row->controls_y || y >= row->controls_y + row->controls_h) {
+    // anywhere (only the fields this popup actually displays are), and
+    // adding it purely to support seeking wasn't judged worth it here.
+    int card = -1, button = -1;
+    if (!button_at(x, y, &card, &button)) {
         return;
     }
-
-    MprisPlayer *player = g_popup.players[idx];
-
-    if (x < content_x()) {
-        return; // left margin, before the prev button
-    } else if (x < control_playpause_x()) {
+    MprisPlayer *player = g_popup.cards[card].player;
+    // prev/next already no-op when the player says it can't.
+    if (button == BUTTON_PREV) {
         mpris_player_previous(player);
-    } else if (x < control_next_x()) {
+    } else if (button == BUTTON_PLAYPAUSE) {
         mpris_player_toggle_playing(player);
-    } else if (x < control_track_x()) {
+    } else {
         mpris_player_next(player);
     }
-    // Landing on the track-text column is a no-op -- deliberately doesn't
-    // close the popup either way, matching audio/device_popup.c's
+    // Deliberately doesn't close the popup, matching audio/device_popup.c's
     // device_popup_handle_click()'s identical "stay open" choice.
 }

@@ -302,11 +302,11 @@ stickBar/
         │   │                     in the bar, unlike every left/right-anchored
         │   │                     module above) + hit-rect + click(play-pause)/
         │   │                     right-click-opens-dropdown handling
-        │   └── media_popup.c     dropdown listing every tracked player (not just
-        │                         the active one), each row an app-name label +
-        │                         prev/play-pause/next controls + a read-only
-        │                         position/duration timeline -- structurally the
-        │                         media-domain twin of device_popup.c
+        │   └── media_popup.c     dropdown: header with a playing/paused pill,
+        │                         one card per tracked player (app + status,
+        │                         title, artist · album, segmented timeline,
+        │                         prev/play-pause/next chips); the active
+        │                         player's card has the accent border
         ├── network/
         │   ├── network.c         default-route interface module box render + hit-
         │   │                     rect + right-click-opens-dropdown handling (no
@@ -1376,8 +1376,36 @@ userdata pointer, `in_use`-gated iteration, `_count()`/`_get(index)` accessors).
     rightward from the trigger's left edge was judged the more reasonable default.
     No overflow-past-either-edge clamping is added, same documented limitation as
     every other popup in this bar.
-- **Each dropdown row shows an app-name label, the controls + track text, and a
-  read-only position/duration timeline**, stacked in that order. The label
+- **Redesigned dropdown (per explicit user request, the last popup in the
+  btop-style restyling pass)** -- same header/pill/card language as the
+  CPU/GPU/memory dropdowns:
+  - **Header**: `Media · N players` and a pill for the liveliest state
+    across players (`playing` green > `paused` yellow > `stopped`).
+  - **One `base` card per player**; the active player (the one the bar box
+    shows, `mpris_active_player()`) gets a 2px accent border, like the
+    calendar's current month. Top to bottom: app name in caps + coloured
+    status word, the title (bold, truncated), `artist · album` (line
+    omitted if both are empty -- `xesam:album` is now parsed; helium sends
+    an empty one), a `meter_bar` timeline with `pos / length` (`h:mm:ss`
+    past an hour; no sane length -> empty meter, elapsed time only), and
+    three button chips. Hover is per chip now, not the whole row.
+  - **Fixed content width (360px)**: titles truncate, so a track change
+    never changes the popup's size. The height still can (players coming
+    and going, artist lines), and **the menu surface is now recreated when
+    it does** -- before, the layout was recomputed on refresh but the
+    surface kept its open-time size, clipping or leaving empty space.
+    Same destroy-and-recreate as `audio/mixer_popup.c` (Hyprland unmapped a
+    shrinking `set_size()`); the popup closes when the last player goes.
+  - Verified with real `ydotool` input against helium plus a fake MPRIS
+    player (a ~70-line Gio script owning `org.mpris.MediaPlayer2.*`, logging
+    calls and toggling its status -- a good way to test controls without
+    touching a real stream): growth recreated the surface live, a click on
+    the fake's play chip sent `PlayPause` and flipped card + pill, hover
+    lit only the chip under the pointer. The *shrink* recreate wasn't
+    observed (a stray real click kept closing the popup first); it's the
+    same code path as growth.
+- **Each card shows an app-name label, the track text, a read-only
+  position/duration timeline and the controls**, stacked in that order. The label
   (`mpris_player_app_name()`: the player's MPRIS `Identity`, e.g. "Spotify",
   or the bus-name suffix minus any `.instance…` tail if that's empty) was added
   because with several players open, the track text alone doesn't say which

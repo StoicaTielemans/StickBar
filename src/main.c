@@ -6,6 +6,7 @@
 #include <sys/epoll.h>
 #include <sys/signalfd.h>
 #include <sys/timerfd.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "audio/device_popup.h"
@@ -43,18 +44,43 @@ static void handle_signal(int sig) {
     g_should_exit = 1;
 }
 
+/*
+ * The clock timer fires at the start of every wall-clock second, not every
+ * second since startup. A plain CLOCK_MONOTONIC 1s interval (what this used to
+ * be) ticks at whatever sub-second offset the bar happened to start at, so the
+ * displayed seconds could lag the real time by up to a full second -- visible
+ * as two bars started at different moments showing different seconds.
+ *
+ *   - CLOCK_REALTIME + TFD_TIMER_ABSTIME, first expiry at the next whole second:
+ *     an absolute periodic timer keeps every later expiry on .000 too, and a
+ *     timerfd never fires early, so localtime() at expiry always sees the new
+ *     second.
+ *   - TFD_TIMER_CANCEL_ON_SET: if the wall clock is *set* (NTP step, manual
+ *     change, resume from suspend), the next read() fails with ECANCELED instead
+ *     of the timer silently staying on the old alignment -- main loop then calls
+ *     arm_clock_timer() again to re-align to the new time.
+ */
+static bool arm_clock_timer(int fd) {
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    struct itimerspec spec = {
+        .it_interval = { .tv_sec = 1, .tv_nsec = 0 },
+        .it_value = { .tv_sec = now.tv_sec + 1, .tv_nsec = 0 },
+    };
+    if (timerfd_settime(fd, TFD_TIMER_ABSTIME | TFD_TIMER_CANCEL_ON_SET, &spec, NULL) < 0) {
+        perror("stickBar: timerfd_settime");
+        return false;
+    }
+    return true;
+}
+
 static int create_clock_timer(void) {
-    int fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    int fd = timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC | TFD_NONBLOCK);
     if (fd < 0) {
         perror("stickBar: timerfd_create");
         return -1;
     }
-    struct itimerspec spec = {
-        .it_interval = { .tv_sec = 1, .tv_nsec = 0 },
-        .it_value = { .tv_sec = 1, .tv_nsec = 0 },
-    };
-    if (timerfd_settime(fd, 0, &spec, NULL) < 0) {
-        perror("stickBar: timerfd_settime");
+    if (!arm_clock_timer(fd)) {
         close(fd);
         return -1;
     }
@@ -338,7 +364,12 @@ int main(void) {
                 // Value is unused (we redraw once per wakeup regardless of how many
                 // 1s intervals elapsed) -- reading it is only to drain the timerfd,
                 // which is required or it stays permanently "readable".
-                (void)!read(timer_fd, &expirations, sizeof(expirations));
+                if (read(timer_fd, &expirations, sizeof(expirations)) < 0 && errno == ECANCELED) {
+                    // The wall clock was set -- re-align to the new second
+                    // boundary (see arm_clock_timer()). Still tick below: the
+                    // time being shown just changed.
+                    arm_clock_timer(timer_fd);
+                }
                 clock_tick();
                 // Piggybacks on this already-ticking 1s timer rather than
                 // adding a new poll source -- see media_popup_tick()'s own

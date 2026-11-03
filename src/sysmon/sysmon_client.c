@@ -292,6 +292,11 @@ static void poll_gpu(void) {
         return;
     }
 
+    // Only what the bar box itself shows (usage + temperature) is read on the
+    // 5s poll; the rest lives only in the dropdown and is fetched when it opens
+    // (sysmon_gpu_refresh_details()). Measured in-bar, the fan query alone took
+    // 0.8-5.3ms per call -- ~90% of the whole poll -- while these two are ~0.01ms.
+    //
     // Utilization is the one field the GPU box can't do without -- if even that
     // fails (e.g. the GPU fell off the bus), keep the previous values, the same
     // "leave old values in place" behavior a malformed nvidia-smi line had.
@@ -302,10 +307,24 @@ static void poll_gpu(void) {
     g_gpu_percent = (int)util.gpu;
     g_gpu_mem_percent = (int)util.memory;
 
-    // Everything else is best-effort per field: a card without a fan (or a
-    // driver refusing one query) shouldn't blank the whole module.
     unsigned int value = 0;
     g_gpu_temp_c = g_nvml.get_temperature(g_nvml.device, NVML_TEMPERATURE_GPU, &value) == 0 ? (int)value : 0;
+
+    g_gpu_available = true;
+}
+
+void sysmon_gpu_refresh_details(void) {
+    if (!g_nvml.lib) {
+        return;
+    }
+
+    // Re-read usage/temperature too, so everything in the dropdown is from the
+    // same moment rather than mixing fresh details with a poll up to 5s old.
+    poll_gpu();
+
+    // Best-effort per field: a card without a fan (or a driver refusing one
+    // query) shouldn't blank the whole dropdown.
+    unsigned int value = 0;
     g_gpu_fan_percent = g_nvml.get_fan(g_nvml.device, &value) == 0 ? (int)value : 0;
     g_gpu_power_w = g_nvml.get_power(g_nvml.device, &value) == 0 ? value / 1000.0 : 0.0;
 
@@ -322,8 +341,6 @@ static void poll_gpu(void) {
     } else {
         g_gpu_pstate[0] = '\0';
     }
-
-    g_gpu_available = true;
 }
 
 void sysmon_client_poll(void) {

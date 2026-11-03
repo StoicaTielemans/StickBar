@@ -386,6 +386,17 @@ but a frame only reaches the compositor if it actually differs:
   there's no previous frame, or the clock box came out a different width (the
   boxes to its left would need to move). Any full redraw request wins over a
   clock-only one.
+- **The clock timer is aligned to wall-clock seconds** (`arm_clock_timer()` in
+  `main.c`): a `CLOCK_REALTIME` timerfd armed with `TFD_TIMER_ABSTIME` for the
+  next whole second, 1s interval. It used to be a `CLOCK_MONOTONIC` interval
+  counted from startup, so the shown seconds lagged real time by however far
+  into a second the bar happened to start (up to ~1s; two bars started at
+  different moments visibly disagreed). `TFD_TIMER_CANCEL_ON_SET` makes a
+  wall-clock *set* (NTP step, manual change, resume from suspend) fail the
+  next `read()` with `ECANCELED`, and the loop re-arms to re-align. Measured
+  with a scratch build logging `CLOCK_REALTIME` per tick: every tick lands
+  0.01-0.13ms after the second boundary. The `ECANCELED` re-arm path wasn't
+  exercised live (it needs root to set the clock).
 
 ### Performance (measured)
 
@@ -396,7 +407,7 @@ build before and after NVML + the redraw path above, run side by side:
 |---|---|---|
 | CPU, incl. spawned children | ~1.2% | ~0.3% |
 | `nvidia-smi` processes per minute | 12 | 0 |
-| Event-loop block from GPU polling | 15-45ms / 5s | ~1.5ms / 5s |
+| Whole 5s sysmon poll (CPU+mem+GPU) | 15-45ms+ (`nvidia-smi`) | ~0.7-1.5ms |
 | Private memory (`Private_Dirty`) | ~6 MB | ~26 MB |
 | RSS at startup | ~29 MB | ~55 MB |
 | Commits/min (both outputs) | ~160 | ~155 |
@@ -906,8 +917,16 @@ dropdown, rather than one shared tooltip for all three.
   at startup** — the library `nvidia-smi` is itself a CLI over. This
   replaced an earlier `popen("nvidia-smi ...")` every 5 seconds, which
   blocked the event loop ~15-45ms per call and (measured over 90s, counting
-  the child processes' own CPU time) cost ~1.2% CPU against ~0.3% now; the
-  six NVML queries take ~1.5ms combined, mostly the fan-speed one.
+  the child processes' own CPU time) cost ~1.2% CPU against ~0.3% now.
+  - **The 5s poll only reads what the bar box shows (usage + temperature,
+    ~0.01ms each).** VRAM, fan, power and P-state appear only in the
+    dropdown, so `gpu_handle_click()` fetches them on open via
+    `sysmon_gpu_refresh_details()` (which also re-reads usage/temperature for
+    one consistent snapshot). Reason: measured in-bar, the fan-speed query
+    alone took 0.8-5.3ms *per call* -- ~90% of the poll -- while everything
+    else was ~0.01ms warm. Whole sysmon poll went from ~3.4-5.8ms to
+    ~0.7-1.5ms; opening the dropdown pays ~4-11ms once, and shows live values
+    instead of ones up to 5s old.
   - **`dlopen`, not linking**: `nvml.h` only ships with the CUDA toolkit
     (`/opt/cuda`), and linking would make stickBar fail to start without the
     NVIDIA driver. The handful of types/prototypes needed are declared

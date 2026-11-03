@@ -84,6 +84,11 @@ void gpu_handle_click(Output *output, double x, double y, uint32_t button) {
         return;
     }
 
+    // VRAM/fan/power/P-state aren't polled in the background (see
+    // sysmon_gpu_refresh_details()) -- fetch them now, so the dropdown shows
+    // live values rather than whatever the last 5s poll happened to see.
+    sysmon_gpu_refresh_details();
+
     char body[512];
     if (sysmon_gpu_available()) {
         // Mirrors the reference SystemMonitor.qml's buildTooltip()'s GPU section.
@@ -97,7 +102,7 @@ void gpu_handle_click(Output *output, double x, double y, uint32_t button) {
                  sysmon_gpu_mem_used_mb(), sysmon_gpu_mem_total_mb(), sysmon_gpu_power_w(),
                  sysmon_gpu_fan_percent(), sysmon_gpu_pstate());
     } else {
-        snprintf(body, sizeof(body), "No NVIDIA GPU detected\n(nvidia-smi unavailable or failed)");
+        snprintf(body, sizeof(body), "No NVIDIA GPU detected\n(NVML unavailable -- no NVIDIA driver?)");
     }
 
     sysmon_info_popup_open(output, COLORS.green, body, rect->x, rect->y, rect->w, rect->h);

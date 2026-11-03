@@ -36,14 +36,22 @@ const char *sysmon_cpu_load_avg(void); // "N.NN N.NN N.NN" (1/5/15 min), stable 
 int sysmon_cpu_core_count(void);
 double sysmon_cpu_core_percent(int index); // 0 <= index < sysmon_cpu_core_count()
 
-// --- GPU (NVIDIA only, via nvidia-smi) ---
-// False until the first successful nvidia-smi query -- lets the GPU module
+// --- GPU (NVIDIA only, via NVML) ---
+// False until the first successful NVML query -- lets the GPU module
 // show an explicit "unavailable" state instead of a misleading 0%/N/A mix on
 // a machine with no discrete NVIDIA GPU (or a driver that isn't loaded).
 bool sysmon_gpu_available(void);
 int sysmon_gpu_percent(void);
 int sysmon_gpu_mem_percent(void);
 int sysmon_gpu_temp_c(void);
+
+// Fetches the dropdown-only GPU fields below (VRAM, fan, power, P-state) --
+// and re-reads usage/temperature, so all of them are one current snapshot.
+// They're deliberately *not* read on the 5s poll: the fan query alone costs
+// 0.8-5.3ms per call. Call right before showing them; no-op without NVML.
+void sysmon_gpu_refresh_details(void);
+
+// Only current as of the last sysmon_gpu_refresh_details() call.
 int sysmon_gpu_mem_used_mb(void);
 int sysmon_gpu_mem_total_mb(void);
 int sysmon_gpu_fan_percent(void);

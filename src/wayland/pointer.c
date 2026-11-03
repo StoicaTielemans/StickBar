@@ -101,11 +101,12 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
     (void)pointer; (void)serial; (void)time;
     AppContext *app = data;
     if (state == WL_POINTER_BUTTON_STATE_RELEASED) {
-        // Releases only matter for ending the mixer's slider drag -- every
-        // other handler here acts on press alone. Unconditional (not gated on
-        // which surface it landed on), so a drag always ends even if the
-        // release somehow arrives elsewhere.
+        // Releases only matter for ending a volume drag (the mixer's sliders
+        // and the device dropdown's meters) -- every other handler here acts
+        // on press alone. Unconditional (not gated on which surface it landed
+        // on), so a drag always ends even if the release arrives elsewhere.
         mixer_popup_handle_release();
+        device_popup_handle_release();
         return;
     }
     if (button != BTN_LEFT && button != BTN_RIGHT && button != BTN_MIDDLE) {
@@ -158,7 +159,7 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
         return;
     }
     if (device_popup_is_menu_surface(app->pointer_over_surface)) {
-        device_popup_handle_click(app->pointer_x, app->pointer_y);
+        device_popup_handle_press(app->pointer_x, app->pointer_y, button);
         return;
     }
     if (device_popup_is_catcher_surface(app->pointer_over_surface)) {
@@ -319,6 +320,10 @@ static void pointer_axis_discrete(void *data, struct wl_pointer *p, uint32_t axi
     int direction = discrete < 0 ? 1 : -1; // see comment above
     if (mixer_popup_is_menu_surface(app->pointer_over_surface)) {
         mixer_popup_handle_scroll(app->pointer_x, app->pointer_y, direction);
+        return;
+    }
+    if (device_popup_is_menu_surface(app->pointer_over_surface)) {
+        device_popup_handle_scroll(app->pointer_x, app->pointer_y, direction);
         return;
     }
     if (!app->pointer_over) {

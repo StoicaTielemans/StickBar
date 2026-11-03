@@ -212,12 +212,12 @@ stickBar/
     │   ├── pulse_client.c        pa_threaded_mainloop connection, live sink/source
     │   │                         cache (fixed-array, like sni_registry.c), volume/
     │   │                         mute/default-device get+set, eventfd notification
-    │   ├── device_popup.c        shared sink/source dropdown popup (used by both
-    │   │                         modules/volume and modules/mic) -- structurally
-    │   │                         the audio-domain twin of tray_context_menu.c
+    │   ├── device_popup.c        shared sink/source dropdown (volume and mic):
+    │   │                         one card per device with details, a click/drag/
+    │   │                         scroll volume meter, mute chip, click-to-default
     │   └── mixer_popup.c         per-app volume mixer (middle-click on the volume
-    │                             box): one row per PA sink input, with a
-    │                             click/drag/scroll slider + mute toggle
+    │                             box): one card per PA sink input, with a
+    │                             click/drag/scroll segmented slider + mute chip
     ├── sysmon/                   /proc + NVML plumbing for CPU/GPU/memory
     │                             (see "System monitor (CPU/GPU/memory)" below) --
     │                             structurally the sysmon-domain twin of dbus/ and
@@ -884,6 +884,40 @@ PulseAudio (on PipeWire 1.6.8)`) — via **libpulse**, not raw `libpipewire`.
   else in this bar uses it) and is itself a conventional way to expose a
   secondary action alongside a primary click, mirroring how the tray already
   distinguishes `Activate()` from opening its own context menu.
+- **Redesigned dropdowns (per explicit user request, after the CPU/GPU/
+  memory/media ones)** -- `device_popup.c` and `mixer_popup.c` now share the
+  header/pill/card/chip language of the other dropdowns, at a fixed 340px
+  content width (names truncate instead of resizing the popup).
+  - **Device cards**: name (accent + `default` tag on the default device,
+    whose card also gets the 2px accent border; `set default` on hover for
+    the others), a detail line `USB · 48 kHz · 2 ch · running` (bus from the
+    `device.bus` proplist, `sample_spec.rate`, channels, and the sink/source
+    state -- running green, idle yellow, suspended dim; `pa_sink_state_t` and
+    `pa_source_state_t` share values so one mapping serves both), then a
+    `meter_bar` volume meter, the percent and a mute chip. The header pill
+    shows the default device's volume or `muted`.
+  - **Device volume is now adjustable** (per explicit user request): press
+    on the meter sets it and starts a drag, scroll anywhere on a card steps
+    it by `PULSE_VOLUME_STEP_PERCENT` (`pulse_node_set_volume_percent()` /
+    `_adjust_volume()`, by index, with the same stale-pointer `in_use` check
+    as the stream setter). The meter spans 0-100% like the mixer's slider;
+    above that (scroll still goes to 200%) it's full with a peach top end.
+    `device_popup_handle_click()` became `_handle_press()` + `_release()` +
+    `_scroll()`, routed from `pointer.c` next to the mixer's.
+  - **Monitor sources are hidden from the mic list** (`monitor_of_sink !=
+    PA_INVALID_INDEX`, filtered in the popup, not in `pulse_source_count()`):
+    every sink's `.monitor` used to be listed, outnumbering the real inputs
+    on this machine three to two. A monitor that *is* the default stays
+    visible so it can be switched away from.
+  - **The device popup now resizes live** (destroy-and-recreate, like the
+    mixer) when a device appears or disappears while it's open.
+  - Mixer: header `Mixer · N apps · <default sink>` + the same pill; one
+    card per stream (name, percent, mute chip, full-width segmented slider).
+    Drag/scroll/resize logic unchanged, just re-targeted to the cards.
+  - **Not verified with real input yet**: the user was in a fullscreen game
+    during implementation, so no `ydotool` clicks were sent (they'd have
+    gone into the game). Built cleanly and the test suite passes; the
+    rendering and the drag/scroll paths still need a live check.
 - **Middle-click on the volume box opens a per-application mixer**
   (`audio/mixer_popup.c`, no reference-bar equivalent — added per explicit
   user request). `pulse_client.c` additionally tracks PA *sink inputs* (one
@@ -1996,10 +2030,8 @@ this module never opens the DAC's HID device.
   tray's `count == 0` → zero-width behavior. Low-risk in practice (this
   failure mode requires a broken/absent PipeWire or PulseAudio installation
   entirely) but worth knowing if it's ever actually hit.
-- **Volume/mic: device popup row count is capped at 32** and the popup's size
-  is fixed at open time — a live device appearing/disappearing while the
-  popup is open updates existing rows' content (icons, percent, default
-  marker) live, but won't resize the popup to add/remove a row for it.
+- **Volume/mic: device popup row count is capped at 32** (it does resize
+  live now when a device appears or disappears while it's open).
 - **Mixer: playback streams only** — apps recording from a mic (PA source
   outputs) aren't listed; no per-app output-device routing either (that's
   `pa_context_move_sink_input_by_index`, not wired up). Opening and live

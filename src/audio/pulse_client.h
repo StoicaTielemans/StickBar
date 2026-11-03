@@ -65,6 +65,20 @@ bool pulse_node_is_default(PulseNode *node);
 void pulse_node_set_default(PulseNode *node);
 void pulse_node_toggle_mute(PulseNode *node);
 
+// Details for the dropdown cards. state: "running" | "idle" | "suspended" |
+// "" (unknown); bus: device.bus upper-cased ("USB", "PCI"), "" if unset. Both
+// return a static buffer valid until the next call of the same function.
+const char *pulse_node_state(PulseNode *node);
+const char *pulse_node_bus(PulseNode *node);
+uint32_t pulse_node_rate(PulseNode *node); // Hz, 0 if unknown
+int pulse_node_channels(PulseNode *node);
+bool pulse_node_is_monitor(PulseNode *node); // a sink's ".monitor" source
+
+// Clamped to 0..PULSE_MAX_VOLUME_PERCENT; silent no-op if the device has
+// since gone away (safe with a stale pointer, e.g. unplugged mid-drag).
+void pulse_node_set_volume_percent(PulseNode *node, int percent);
+void pulse_node_adjust_volume(PulseNode *node, int delta_percent);
+
 // --- Per-application playback streams, for the mixer popup ---
 // PA "sink inputs": one per app currently holding an output stream open. Same
 // live-cache model as the sink/source enumeration above -- updated from the

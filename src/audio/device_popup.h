@@ -2,6 +2,7 @@
 #define CUSTOMBAR_AUDIO_DEVICE_POPUP_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <wayland-client.h>
 
 #include "config/config.h"
@@ -41,17 +42,25 @@ void device_popup_refresh_if_open(void);
 bool device_popup_is_menu_surface(struct wl_surface *surface);
 bool device_popup_is_catcher_surface(struct wl_surface *surface);
 
-// Hover tracking within the open popup (updates which row is highlighted and
-// redraws if it changed). No-op if no popup is currently open.
+// Hover tracking within the open popup (which card / chip is highlighted),
+// and while a volume drag is in progress, keeps setting that device's volume
+// from the pointer's x (Wayland's implicit grab keeps delivering motion to
+// this surface while the button is held, same as audio/mixer_popup.c).
+// No-op if no popup is currently open.
 void device_popup_handle_motion(double x, double y);
 
-// Click-to-trigger within the open popup: clicking the default-marker or the
-// description sets that row's device as the default sink/source; clicking the
-// mute icon toggles that row's mute -- neither closes the popup afterward
-// (unlike the tray's menu), matching the reference's own hover-dismiss model
-// where picking a device or muting one is expected to be followed by more
-// interaction in the same dropdown. No-op if no popup is open or (x, y)
-// doesn't land on a row.
-void device_popup_handle_click(double x, double y);
+// Left press within the open popup: on a card's volume meter, sets that
+// device's volume to the pressed position and starts a drag; on its mute
+// chip, toggles mute; anywhere else on the card, makes it the default
+// sink/source. Never closes the popup (unlike the tray's menu) -- picking a
+// device or muting one is usually followed by more interaction here.
+void device_popup_handle_press(double x, double y, uint32_t button);
+
+// Ends a volume drag, if one is in progress. Safe to call on every release.
+void device_popup_handle_release(void);
+
+// Scrolling over a card steps that device's volume by
+// PULSE_VOLUME_STEP_PERCENT (direction > 0 = up/louder).
+void device_popup_handle_scroll(double x, double y, int direction);
 
 #endif

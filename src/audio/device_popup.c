@@ -1,11 +1,14 @@
 #include "audio/device_popup.h"
 
+#include <linux/input-event-codes.h> // BTN_LEFT
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "audio/pulse_client.h"
 #include "bar/popup_surface.h"
 #include "config/glyphs.h"
+#include "render/meter_bar.h"
 #include "render/module_box.h"
 
 // Sized generously (this machine has 2 monitors), matching the same
@@ -18,21 +21,42 @@
 // MAX_TRAY_ITEMS_HINT redeclaration.
 #define MAX_DEVICE_ROWS 32
 
-// Geometry constants, chosen to visually mirror the reference
-// AudioDevicesPopup.qml / MicDevicesPopup.qml (values annotated with their QML
-// counterpart), matching modules/tray/tray_context_menu.c's own convention of
-// keeping this widget-specific tuning local rather than in config.h.
-#define ROW_SPACING 8.0        // matches the ColumnLayout's `spacing: 8`
-#define ROW_INNER_SPACING 10.0 // matches each RowLayout's `spacing: 10`
-#define OUTER_MARGIN 8.0       // matches `Config.bar.popupPadding`
-#define PERCENT_COL_W 40.0     // matches `Layout.preferredWidth: 40`
-#define DESC_MAX_W 260.0       // matches `Layout.maximumWidth: 260`
+// Layout tuning, local to this popup (see CLAUDE.md "Conventions"). Header,
+// pill, card and chip styling match the CPU/GPU/memory/media dropdowns. The
+// content width is fixed, so a long device name truncates instead of
+// changing the popup's size.
+#define CONTENT_W 340.0
+#define OUTER_MARGIN 12.0
+#define SECTION_GAP 10.0
+#define CARD_GAP 8.0
+#define HEADER_H 22.0
+#define PILL_H 16.0
+#define PILL_PAD_X 7.0
+#define CARD_PAD 10.0
+#define NAME_H 18.0
+#define DETAIL_H 14.0
+#define CONTROL_GAP 6.0
+#define CHIP_W 30.0
+#define CHIP_H 22.0
+#define METER_H 6.0
+#define METER_SEGMENTS 30
+#define METER_SLOP 4.0 // extra grab room past both meter ends, so 0% and 100% are easy to hit
+#define COL_GAP 10.0
 #define DESC_BUF_SIZE 300
-#define PCT_BUF_SIZE 16
+
+// The meter spans 0..100%, like audio/mixer_popup.c's slider: boosting past
+// 100% is rarely wanted, so the full width goes to the useful range. Scroll
+// can still go up to the shared PULSE_MAX_VOLUME_PERCENT; above 100% the
+// meter is full and its top end turns peach.
+#define METER_MAX_PERCENT 100
+
+// Which part of a card the pointer is over, for hover and clicks.
+enum { PART_NONE, PART_BODY, PART_METER, PART_MUTE };
 
 typedef struct {
-    double y, h; // x is always OUTER_MARGIN, width is always g_popup.content_width
-} RowLayout;
+    PulseNode *node;
+    double y; // card top, relative to the popup (x is always OUTER_MARGIN)
+} CardLayout;
 
 typedef struct {
     bool open;
@@ -40,31 +64,46 @@ typedef struct {
     Color accent;
     Output *output;
     PopupSurface *popup;
+    int top_margin, right_margin; // kept from open time, for recreating the surface
 
-    PulseNode *nodes[MAX_DEVICE_ROWS];
-    RowLayout rows[MAX_DEVICE_ROWS];
-    char desc_text[MAX_DEVICE_ROWS][DESC_BUF_SIZE]; // pre-truncated, computed at layout time
-    char pct_text[MAX_DEVICE_ROWS][PCT_BUF_SIZE];
-    int row_count;
-    int hovered_index;
+    CardLayout cards[MAX_DEVICE_ROWS];
+    int card_count;
+    int hovered_card, hovered_part;
 
-    double star_col_w, mute_col_w, content_width, popup_width, popup_height;
+    // Drag state, same model as audio/mixer_popup.c: the node being dragged
+    // (a pointer -- the list can change under a live refresh mid-drag) and
+    // the percent last sent, drawn instead of the cached value so the meter
+    // follows the pointer without waiting for the server round trip.
+    PulseNode *drag_node;
+    int drag_percent;
+
+    double popup_width, popup_height;
 
     PopupSurface *catchers[MAX_TRACKED_OUTPUTS];
     struct wl_surface *catcher_surfaces[MAX_TRACKED_OUTPUTS];
     int catcher_count;
 } DevicePopupState;
 
-static DevicePopupState g_popup = { .hovered_index = -1 };
+static DevicePopupState g_popup = { .hovered_card = -1 };
 
-// The sink popup's row icon mirrors VolumeWidget.qml's own 4-level
-// icon()/muteIcon() thresholds (muted/<34/<67/else); the source popup's row
-// icon is the mic's simple 2-state one -- exactly matching
-// AudioDevicesPopup.qml's and MicDevicesPopup.qml's own (different!)
-// muteIcon(node) functions, not a simplification of one into the other.
-static uint32_t row_status_icon_glyph(bool is_sink, PulseNode *node) {
-    bool muted = pulse_node_muted(node);
-    int pct = pulse_node_volume_percent(node);
+static double text_width(const char *text, int size, bool bold) {
+    double w, h;
+    module_box_measure_text(text, size, bold, &w, &h);
+    (void)h;
+    return w;
+}
+
+static void draw_text_right(cairo_t *cr, double right_x, double y, double h, const char *text, int size, bool bold,
+                            Color color) {
+    module_box_draw_text_left(cr, right_x - text_width(text, size, bold), y, h, text, size, bold, color);
+}
+
+// The sink popup's mute-chip icon mirrors VolumeWidget.qml's own 4-level
+// icon()/muteIcon() thresholds (muted/<34/<67/else); the source popup's is
+// the mic's simple 2-state one -- exactly matching AudioDevicesPopup.qml's
+// and MicDevicesPopup.qml's own (different!) muteIcon(node) functions, not a
+// simplification of one into the other.
+static uint32_t status_icon_glyph(bool is_sink, int pct, bool muted) {
     if (is_sink) {
         if (muted || pct == 0) return GLYPH_ICON_VOLUME_MUTED;
         if (pct < 34) return GLYPH_ICON_VOLUME_LOW;
@@ -74,28 +113,19 @@ static uint32_t row_status_icon_glyph(bool is_sink, PulseNode *node) {
     return muted ? GLYPH_ICON_MIC_MUTED : GLYPH_ICON_MIC;
 }
 
-// Truncates `text` (byte-based -- every real device description seen from
-// this project's actual PulseAudio/PipeWire hardware is plain ASCII, e.g.
-// "Burr-Brown from TI USB Audio CODEC Analog Stereo", so this doesn't need to
-// be UTF-8-codepoint-aware) to the longest prefix that, with "..." appended,
-// still fits within `max_w` at the given font -- mirrors the reference's
-// `elide: Text.ElideRight` + `Layout.maximumWidth: 260`.
+// Truncates `text` to the longest prefix that, with "..." appended, still
+// fits within `max_w` -- mirrors the reference's `elide: Text.ElideRight`.
+// Candidates are cut on UTF-8 codepoint boundaries (not raw byte counts):
+// every description seen from this project's own hardware is plain ASCII,
+// but it costs nothing and matches the fix modules/media needed after
+// multi-byte titles produced Pango "Invalid UTF-8 string" warnings.
 static void truncate_to_width(const char *text, double max_w, int font_px, bool bold,
                                char *out, size_t out_size) {
-    double w, h;
-    module_box_measure_text(text, font_px, bold, &w, &h);
-    if (w <= max_w) {
+    if (text_width(text, font_px, bold) <= max_w) {
         snprintf(out, out_size, "%s", text);
         return;
     }
 
-    // Candidates are still cut on UTF-8 codepoint boundaries, not raw byte
-    // counts, even though every description seen from this project's own
-    // hardware is plain ASCII (see above) -- costs nothing here and keeps
-    // this copy safe if that ever isn't true, matching the fix applied to
-    // modules/media's own two copies of this same algorithm after track
-    // titles/artists (which do routinely contain multi-byte UTF-8) were
-    // observed producing Pango "Invalid UTF-8 string" warnings.
     size_t len = strlen(text);
     size_t offsets[DESC_BUF_SIZE];
     size_t n = 0;
@@ -117,10 +147,9 @@ static void truncate_to_width(const char *text, double max_w, int font_px, bool 
     size_t lo = 0, hi = n;
     while (lo < hi) {
         size_t mid = (lo + hi + 1) / 2;
-        char candidate[DESC_BUF_SIZE];
+        char candidate[DESC_BUF_SIZE + 4];
         snprintf(candidate, sizeof(candidate), "%.*s...", (int)offsets[mid], text);
-        module_box_measure_text(candidate, font_px, bold, &w, &h);
-        if (w <= max_w) {
+        if (text_width(candidate, font_px, bold) <= max_w) {
             lo = mid;
         } else {
             hi = mid - 1;
@@ -129,142 +158,196 @@ static void truncate_to_width(const char *text, double max_w, int font_px, bool 
     snprintf(out, out_size, "%.*s...", (int)offsets[lo], text);
 }
 
-// Recomputes row geometry (and the truncated description/percent strings
-// drawn from) directly from pulse_client's live cache -- unlike
-// tray_context_menu.c, which snapshots DBusMenu entries because those come
-// from a one-shot async D-Bus fetch, pulse_client's sink/source lists are
-// already a live, always-current local cache, so there's nothing to snapshot:
-// this can just be re-run on every open *and* every live update while open.
+// ---- Card geometry ---------------------------------------------------------------
+// Every card has the same shape, so the x positions are shared and only the
+// card's own top varies.
+
+static double card_h(void) { return CARD_PAD + NAME_H + DETAIL_H + CONTROL_GAP + CHIP_H + CARD_PAD; }
+static double inner_x(void) { return OUTER_MARGIN + CARD_PAD; }
+static double inner_w(void) { return CONTENT_W - CARD_PAD * 2.0; }
+static double controls_y(const CardLayout *card) { return card->y + CARD_PAD + NAME_H + DETAIL_H + CONTROL_GAP; }
+static double mute_x(void) { return inner_x() + inner_w() - CHIP_W; }
+static double percent_col_w(void) { return text_width("200%", FONT.sm, false); }
+static double meter_x(void) { return inner_x(); }
+static double meter_w(void) { return mute_x() - COL_GAP - percent_col_w() - COL_GAP - meter_x(); }
+
+// Recomputes the card list from pulse_client's live cache (already
+// always-current, so there's nothing to snapshot -- unlike
+// tray_context_menu.c's one-shot DBusMenu fetch). Monitor sources (a sink's
+// ".monitor") are left out of the mic list: they aren't microphones, and
+// with three outputs they used to outnumber the real inputs. One is still
+// shown if it *is* the default, so it can be seen and switched away from.
 static void compute_layout(void) {
-    char buf[5];
-
-    glyph_utf8(GLYPH_ICON_DEVICE_DEFAULT, buf);
-    double star_w1, star_h1;
-    module_box_measure_text(buf, FONT.heading, false, &star_w1, &star_h1);
-    glyph_utf8(GLYPH_ICON_DEVICE_SELECTABLE, buf);
-    double star_w2, star_h2;
-    module_box_measure_text(buf, FONT.heading, false, &star_w2, &star_h2);
-    double star_w = star_w1 > star_w2 ? star_w1 : star_w2;
-    double star_h = star_h1 > star_h2 ? star_h1 : star_h2;
-
-    // Widest of every possible status-icon glyph for this popup's kind, so the
-    // mute-icon column is a fixed width regardless of which glyph a given row
-    // ends up needing (sink rows can show any of 4; source rows, 2).
-    static const uint32_t SINK_ICONS[4] = { GLYPH_ICON_VOLUME_MUTED, GLYPH_ICON_VOLUME_LOW,
-                                             GLYPH_ICON_VOLUME_MEDIUM, GLYPH_ICON_VOLUME_HIGH };
-    static const uint32_t SOURCE_ICONS[2] = { GLYPH_ICON_MIC_MUTED, GLYPH_ICON_MIC };
-    const uint32_t *icons = g_popup.is_sink ? SINK_ICONS : SOURCE_ICONS;
-    int icon_count = g_popup.is_sink ? 4 : 2;
-    double mute_w = 0, mute_h = 0;
-    for (int i = 0; i < icon_count; i++) {
-        glyph_utf8(icons[i], buf);
-        double w, h;
-        module_box_measure_text(buf, FONT.heading, false, &w, &h);
-        if (w > mute_w) mute_w = w;
-        if (h > mute_h) mute_h = h;
-    }
-
-    g_popup.star_col_w = star_w;
-    g_popup.mute_col_w = mute_w;
-
     int count = g_popup.is_sink ? pulse_sink_count() : pulse_source_count();
-    if (count > MAX_DEVICE_ROWS) {
-        count = MAX_DEVICE_ROWS; // documented limitation, matches sni_registry's own cap behavior
-    }
-    g_popup.row_count = count;
-
-    char prefix_buf[5];
-    glyph_utf8(g_popup.is_sink ? GLYPH_ICON_HEADPHONES : GLYPH_ICON_MIC, prefix_buf);
-
-    double max_content_w = 0;
-    double row_heights[MAX_DEVICE_ROWS];
-
-    for (int i = 0; i < count; i++) {
+    double y = OUTER_MARGIN + HEADER_H + SECTION_GAP;
+    int n = 0;
+    for (int i = 0; i < count && n < MAX_DEVICE_ROWS; i++) {
         PulseNode *node = g_popup.is_sink ? pulse_sink_get(i) : pulse_source_get(i);
-        g_popup.nodes[i] = node;
-
-        char full_desc[DESC_BUF_SIZE];
-        snprintf(full_desc, sizeof(full_desc), "%s %s", prefix_buf, pulse_node_description(node));
-        truncate_to_width(full_desc, DESC_MAX_W, FONT.label, false, g_popup.desc_text[i], DESC_BUF_SIZE);
-
-        double desc_w, desc_h;
-        module_box_measure_text(g_popup.desc_text[i], FONT.label, false, &desc_w, &desc_h);
-
-        snprintf(g_popup.pct_text[i], PCT_BUF_SIZE, "%d%%", pulse_node_volume_percent(node));
-        double pct_w, pct_h;
-        module_box_measure_text(g_popup.pct_text[i], FONT.sm, false, &pct_w, &pct_h);
-
-        double row_content_w =
-            star_w + ROW_INNER_SPACING + desc_w + ROW_INNER_SPACING + PERCENT_COL_W + ROW_INNER_SPACING + mute_w;
-        if (row_content_w > max_content_w) {
-            max_content_w = row_content_w;
+        if (!node) {
+            continue; // removed between count() and get() -- the next refresh catches up
         }
-
-        double row_h = star_h;
-        if (desc_h > row_h) row_h = desc_h;
-        if (pct_h > row_h) row_h = pct_h;
-        if (mute_h > row_h) row_h = mute_h;
-        row_heights[i] = row_h;
-    }
-
-    g_popup.content_width = max_content_w;
-    g_popup.popup_width = max_content_w + OUTER_MARGIN * 2.0;
-
-    double y = OUTER_MARGIN;
-    for (int i = 0; i < count; i++) {
-        g_popup.rows[i].y = y;
-        g_popup.rows[i].h = row_heights[i];
-        y += row_heights[i];
-        if (i < count - 1) {
-            y += ROW_SPACING;
+        if (!g_popup.is_sink && pulse_node_is_monitor(node) && !pulse_node_is_default(node)) {
+            continue;
         }
+        if (n > 0) {
+            y += CARD_GAP;
+        }
+        g_popup.cards[n].node = node;
+        g_popup.cards[n].y = y;
+        y += card_h();
+        n++;
     }
+    g_popup.card_count = n;
+    g_popup.popup_width = CONTENT_W + OUTER_MARGIN * 2.0;
     g_popup.popup_height = y + OUTER_MARGIN;
 }
 
-static void draw_row(cairo_t *cr, int i) {
-    PulseNode *node = g_popup.nodes[i];
-    RowLayout *row = &g_popup.rows[i];
+static int displayed_percent(PulseNode *node) {
+    return node == g_popup.drag_node ? g_popup.drag_percent : pulse_node_volume_percent(node);
+}
+
+// ---- Painting ----------------------------------------------------------------
+
+static void paint_header(cairo_t *cr) {
+    double x = OUTER_MARGIN, y = OUTER_MARGIN;
+    char icon[5], summary[48];
+    glyph_utf8(g_popup.is_sink ? GLYPH_ICON_HEADPHONES : GLYPH_ICON_MIC, icon);
+    const char *title = g_popup.is_sink ? "Output" : "Input";
+    snprintf(summary, sizeof(summary), "  ·  %d device%s", g_popup.card_count, g_popup.card_count == 1 ? "" : "s");
+    module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, g_popup.accent);
+    double tx = x + text_width(icon, FONT.heading, false) + 8.0;
+    module_box_draw_text_left(cr, tx, y, HEADER_H, title, FONT.md, true, COLORS.text);
+    tx += text_width(title, FONT.md, true);
+    module_box_draw_text_left(cr, tx, y, HEADER_H, summary, FONT.sm, false, COLORS.subtext0);
+
+    // Pill: the default device's volume, or "muted". Omitted if the default
+    // isn't in the list (no default reported yet).
+    for (int i = 0; i < g_popup.card_count; i++) {
+        PulseNode *node = g_popup.cards[i].node;
+        if (!pulse_node_is_default(node)) {
+            continue;
+        }
+        char word[16];
+        bool muted = pulse_node_muted(node);
+        if (muted) {
+            snprintf(word, sizeof(word), "muted");
+        } else {
+            snprintf(word, sizeof(word), "%d%%", displayed_percent(node));
+        }
+        Color fill = muted ? COLORS.red : g_popup.accent;
+        double pill_w = text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
+        double pill_x = x + CONTENT_W - pill_w;
+        double pill_y = y + (HEADER_H - PILL_H) / 2.0;
+        module_box_draw_rect(cr, pill_x, pill_y, pill_w, PILL_H, fill, COLORS.mantle, 0.0);
+        module_box_draw_text_centered(cr, pill_x, pill_y, pill_w, PILL_H, word, FONT.xs, true, COLORS.mantle);
+        break;
+    }
+}
+
+// "USB · 48 kHz · 2 ch", skipping whatever the device doesn't report (the
+// state word is drawn after it separately, in its own colour).
+static void detail_text(PulseNode *node, char *out, size_t out_size) {
+    char parts[4][24];
+    int n = 0;
+    const char *bus = pulse_node_bus(node);
+    if (bus[0]) {
+        snprintf(parts[n++], sizeof(parts[0]), "%s", bus);
+    }
+    uint32_t rate = pulse_node_rate(node);
+    if (rate > 0) {
+        if (rate % 1000 == 0) {
+            snprintf(parts[n++], sizeof(parts[0]), "%u kHz", rate / 1000);
+        } else {
+            snprintf(parts[n++], sizeof(parts[0]), "%.1f kHz", rate / 1000.0);
+        }
+    }
+    int channels = pulse_node_channels(node);
+    if (channels > 0) {
+        snprintf(parts[n++], sizeof(parts[0]), "%d ch", channels);
+    }
+    out[0] = '\0';
+    for (int i = 0; i < n; i++) {
+        size_t len = strlen(out);
+        snprintf(out + len, out_size - len, "%s%s", i > 0 ? " · " : "", parts[i]);
+    }
+}
+
+static void paint_chip(cairo_t *cr, double x, double y, bool hovered, uint32_t glyph, Color color) {
+    module_box_draw_rect(cr, x, y, CHIP_W, CHIP_H, hovered ? COLORS.surface1 : COLORS.surface0, COLORS.mantle, 0.0);
+    char buf[5];
+    glyph_utf8(glyph, buf);
+    module_box_draw_text_centered(cr, x, y, CHIP_W, CHIP_H, buf, FONT.heading, false, color);
+}
+
+static void paint_card(cairo_t *cr, int i) {
+    CardLayout *card = &g_popup.cards[i];
+    PulseNode *node = card->node;
     bool is_default = pulse_node_is_default(node);
     bool muted = pulse_node_muted(node);
+    int pct = displayed_percent(node);
+    bool body_hovered = i == g_popup.hovered_card && g_popup.hovered_part == PART_BODY;
 
-    if (i == g_popup.hovered_index) {
-        module_box_draw_rect(cr, OUTER_MARGIN, row->y, g_popup.content_width, row->h,
-                              COLORS.surface1, (Color){ 0, 0, 0, 0 }, 0.0);
+    // The default device gets the accent border, like the calendar's
+    // current month; a hovered card lightens to show it's clickable.
+    module_box_draw_rect(cr, OUTER_MARGIN, card->y, CONTENT_W, card_h(),
+                         body_hovered && !is_default ? COLORS.surface0 : COLORS.base,
+                         is_default ? g_popup.accent : COLORS.surface1, is_default ? 2.0 : 1.0);
+
+    double y = card->y + CARD_PAD;
+    const char *tag = is_default ? "default" : body_hovered ? "set default" : "";
+    double tag_w = tag[0] ? text_width(tag, FONT.xs, true) + COL_GAP : 0.0;
+    char name[DESC_BUF_SIZE];
+    truncate_to_width(pulse_node_description(node), inner_w() - tag_w, FONT.label, true, name, sizeof(name));
+    module_box_draw_text_left(cr, inner_x(), y, NAME_H, name, FONT.label, true,
+                              is_default ? g_popup.accent : COLORS.text);
+    if (tag[0]) {
+        draw_text_right(cr, inner_x() + inner_w(), y, NAME_H, tag, FONT.xs, true,
+                        is_default ? g_popup.accent : COLORS.overlay0);
+    }
+    y += NAME_H;
+
+    // Detail line, with the state word in its own colour at the end.
+    char detail[96];
+    detail_text(node, detail, sizeof(detail));
+    module_box_draw_text_left(cr, inner_x(), y, DETAIL_H, detail, FONT.xs, false, COLORS.overlay0);
+    const char *state = pulse_node_state(node);
+    if (state[0]) {
+        Color state_color = strcmp(state, "running") == 0 ? COLORS.green
+                            : strcmp(state, "idle") == 0  ? COLORS.yellow
+                                                          : COLORS.overlay0;
+        char tail[24];
+        snprintf(tail, sizeof(tail), "%s%s", detail[0] ? " · " : "", state);
+        module_box_draw_text_left(cr, inner_x() + text_width(detail, FONT.xs, false), y, DETAIL_H, tail, FONT.xs,
+                                  false, state_color);
     }
 
-    double star_x = OUTER_MARGIN;
-    double desc_x = OUTER_MARGIN + g_popup.star_col_w + ROW_INNER_SPACING;
-    double mute_x = OUTER_MARGIN + g_popup.content_width - g_popup.mute_col_w;
-    double percent_x = mute_x - ROW_INNER_SPACING - PERCENT_COL_W;
-
-    char glyph_buf[5];
-    glyph_utf8(is_default ? GLYPH_ICON_DEVICE_DEFAULT : GLYPH_ICON_DEVICE_SELECTABLE, glyph_buf);
-    module_box_draw_text_left(cr, star_x, row->y, row->h, glyph_buf, FONT.heading, false, g_popup.accent);
-
-    Color desc_color = is_default ? g_popup.accent : COLORS.text;
-    module_box_draw_text_left(cr, desc_x, row->y, row->h, g_popup.desc_text[i], FONT.label, is_default, desc_color);
-
-    double pct_w, pct_h;
-    module_box_measure_text(g_popup.pct_text[i], FONT.sm, false, &pct_w, &pct_h);
-    (void)pct_h;
-    // Right-aligned within the PERCENT_COL_W column -- reuses draw_text_left
-    // with a precomputed x rather than adding a new right-align helper, same
-    // trick module_box.c's existing two draw functions already make possible.
-    module_box_draw_text_left(cr, percent_x + (PERCENT_COL_W - pct_w), row->y, row->h,
-                               g_popup.pct_text[i], FONT.sm, false, COLORS.subtext0);
-
-    glyph_utf8(row_status_icon_glyph(g_popup.is_sink, node), glyph_buf);
-    Color mute_color = muted ? COLORS.overlay0 : g_popup.accent;
-    module_box_draw_text_left(cr, mute_x, row->y, row->h, glyph_buf, FONT.heading, false, mute_color);
+    // Controls: volume meter (a slider), percent, mute chip.
+    double cy = controls_y(card);
+    Color gradient[3];
+    if (muted) {
+        gradient[0] = gradient[1] = gradient[2] = COLORS.overlay0;
+    } else {
+        gradient[0] = gradient[1] = g_popup.accent;
+        gradient[2] = pct > METER_MAX_PERCENT ? COLORS.peach : g_popup.accent;
+    }
+    meter_bar_draw(cr, meter_x(), cy + (CHIP_H - METER_H) / 2.0, meter_w(), METER_H,
+                   (double)pct / METER_MAX_PERCENT, METER_SEGMENTS, gradient, COLORS.surface0);
+    char pct_text[16];
+    snprintf(pct_text, sizeof(pct_text), "%d%%", pct);
+    draw_text_right(cr, mute_x() - COL_GAP, cy, CHIP_H, pct_text, FONT.sm, false,
+                    muted ? COLORS.overlay0 : COLORS.subtext0);
+    bool mute_hovered = i == g_popup.hovered_card && g_popup.hovered_part == PART_MUTE;
+    paint_chip(cr, mute_x(), cy, mute_hovered, status_icon_glyph(g_popup.is_sink, pct, muted),
+               muted ? COLORS.overlay0 : g_popup.accent);
 }
 
 static void draw_popup(cairo_t *cr, void *user_data) {
     (void)user_data;
     module_box_draw_rect(cr, 0, 0, g_popup.popup_width, g_popup.popup_height,
                           COLORS.mantle, g_popup.accent, (double)BAR.module_border_width);
-    for (int i = 0; i < g_popup.row_count; i++) {
-        draw_row(cr, i);
+    paint_header(cr);
+    for (int i = 0; i < g_popup.card_count; i++) {
+        paint_card(cr, i);
     }
 }
 
@@ -274,15 +357,41 @@ static void redraw(void) {
     }
 }
 
-// Called by modules/volume and modules/mic (via their pulse_client notify-fd
-// handling in main.c) whenever the audio cache changes while this popup is
-// open, so e.g. an external volume change (another app, physical media keys)
-// shows up live instead of only reflecting state as of the moment it opened.
+static PopupSurface *create_menu_surface(void) {
+    return popup_surface_create(g_popup.output->app, g_popup.output, (int)g_popup.popup_width,
+                                (int)g_popup.popup_height, g_popup.top_margin, g_popup.right_margin, 0, 0,
+                                ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
+                                ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY);
+}
+
+// Called after every pulse_client_pump() so an external change (another app,
+// media keys, a device plugged in) shows up live. If the card count changed
+// the menu surface is recreated at the new height -- not resized in place,
+// for the same reason as audio/mixer_popup.c (Hyprland unmapped a shrinking
+// set_size()). A drag in progress loses its implicit grab across a
+// recreate; the next release still ends it.
 void device_popup_refresh_if_open(void) {
     if (!g_popup.open) {
         return;
     }
+    double old_h = g_popup.popup_height;
     compute_layout();
+    if (g_popup.card_count == 0) {
+        device_popup_close();
+        return;
+    }
+    if (g_popup.hovered_card >= g_popup.card_count) {
+        g_popup.hovered_card = -1;
+        g_popup.hovered_part = PART_NONE;
+    }
+    if (g_popup.popup_height != old_h) {
+        popup_surface_destroy(g_popup.popup);
+        g_popup.popup = create_menu_surface();
+        if (!g_popup.popup) {
+            device_popup_close();
+            return;
+        }
+    }
     redraw();
 }
 
@@ -314,11 +423,13 @@ void device_popup_open(Output *output, bool is_sink, Color accent,
 
     g_popup.is_sink = is_sink;
     g_popup.accent = accent;
-    g_popup.hovered_index = -1;
+    g_popup.hovered_card = -1;
+    g_popup.hovered_part = PART_NONE;
+    g_popup.drag_node = NULL;
     g_popup.output = output;
 
     compute_layout();
-    if (g_popup.row_count == 0) {
+    if (g_popup.card_count == 0) {
         return; // no sinks/sources at all -- nothing to show
     }
 
@@ -327,16 +438,12 @@ void device_popup_open(Output *output, bool is_sink, Color accent,
     // bar's right region, so right-anchoring the popup under its trigger's
     // right edge reuses proven-correct positioning rather than the reference
     // QML's own left-aligned-under-widget popup.
-    int top_margin = (int)(box_y + box_h) - BAR.height;
-    int right_margin = output->width - (int)(box_x + box_w);
-    if (right_margin < 0) {
-        right_margin = 0;
+    g_popup.top_margin = (int)(box_y + box_h) - BAR.height;
+    g_popup.right_margin = output->width - (int)(box_x + box_w);
+    if (g_popup.right_margin < 0) {
+        g_popup.right_margin = 0;
     }
-
-    g_popup.popup = popup_surface_create(output->app, output, (int)g_popup.popup_width, (int)g_popup.popup_height,
-                                          top_margin, right_margin, 0, 0,
-                                          ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
-                                          ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY);
+    g_popup.popup = create_menu_surface();
     if (!g_popup.popup) {
         return;
     }
@@ -355,8 +462,10 @@ void device_popup_close(void) {
     destroy_catchers();
     g_popup.open = false;
     g_popup.output = NULL;
-    g_popup.row_count = 0;
-    g_popup.hovered_index = -1;
+    g_popup.card_count = 0;
+    g_popup.hovered_card = -1;
+    g_popup.hovered_part = PART_NONE;
+    g_popup.drag_node = NULL;
 }
 
 bool device_popup_is_menu_surface(struct wl_surface *surface) {
@@ -375,50 +484,109 @@ bool device_popup_is_catcher_surface(struct wl_surface *surface) {
     return false;
 }
 
-static int row_at(double x, double y) {
-    if (x < OUTER_MARGIN || x >= OUTER_MARGIN + g_popup.content_width) {
+// Which card and which part of it (x, y) lands on; -1 / PART_NONE if none.
+static int card_at(double x, double y, int *part) {
+    *part = PART_NONE;
+    if (x < OUTER_MARGIN || x >= OUTER_MARGIN + CONTENT_W) {
         return -1;
     }
-    for (int i = 0; i < g_popup.row_count; i++) {
-        RowLayout *row = &g_popup.rows[i];
-        if (y >= row->y && y < row->y + row->h) {
-            return i;
+    for (int i = 0; i < g_popup.card_count; i++) {
+        CardLayout *card = &g_popup.cards[i];
+        if (y < card->y || y >= card->y + card_h()) {
+            continue;
         }
+        double cy = controls_y(card);
+        bool in_controls = y >= cy && y < cy + CHIP_H;
+        if (in_controls && x >= mute_x() && x < mute_x() + CHIP_W) {
+            *part = PART_MUTE;
+        } else if (in_controls && x >= meter_x() - METER_SLOP && x < meter_x() + meter_w() + METER_SLOP) {
+            *part = PART_METER;
+        } else {
+            *part = PART_BODY;
+        }
+        return i;
     }
     return -1;
+}
+
+// Maps a surface-local x to a meter percent, clamped to the track -- used
+// for the press and every drag motion after it (where x can land well
+// outside the track, or the popup, under the implicit grab).
+static int percent_at_x(double x) {
+    double frac = (x - meter_x()) / meter_w();
+    if (frac < 0) frac = 0;
+    if (frac > 1) frac = 1;
+    return (int)lround(frac * METER_MAX_PERCENT);
+}
+
+static void drag_to(double x) {
+    int pct = percent_at_x(x);
+    if (pct == g_popup.drag_percent) {
+        return; // don't flood the server with identical requests on every pixel
+    }
+    g_popup.drag_percent = pct;
+    pulse_node_set_volume_percent(g_popup.drag_node, pct);
+    redraw();
 }
 
 void device_popup_handle_motion(double x, double y) {
     if (!g_popup.open) {
         return;
     }
-    int idx = row_at(x, y);
-    if (idx != g_popup.hovered_index) {
-        g_popup.hovered_index = idx;
+    if (g_popup.drag_node) {
+        drag_to(x);
+        return;
+    }
+    int part;
+    int idx = card_at(x, y, &part);
+    if (idx != g_popup.hovered_card || part != g_popup.hovered_part) {
+        g_popup.hovered_card = idx;
+        g_popup.hovered_part = part;
         redraw();
     }
 }
 
-void device_popup_handle_click(double x, double y) {
-    if (!g_popup.open) {
+void device_popup_handle_press(double x, double y, uint32_t button) {
+    if (!g_popup.open || button != BTN_LEFT) {
         return;
     }
-    int idx = row_at(x, y);
+    int part;
+    int idx = card_at(x, y, &part);
     if (idx < 0) {
         return;
     }
-
-    double mute_x = OUTER_MARGIN + g_popup.content_width - g_popup.mute_col_w;
-    PulseNode *node = g_popup.nodes[idx];
-
-    if (x >= mute_x) {
-        // Landed on the mute-icon column.
+    PulseNode *node = g_popup.cards[idx].node;
+    if (part == PART_MUTE) {
         pulse_node_toggle_mute(node);
+    } else if (part == PART_METER) {
+        g_popup.drag_node = node;
+        g_popup.drag_percent = -1; // force drag_to() to send the first value
+        drag_to(x);
     } else {
-        // Landed on the star or description column -- both set this row's
-        // device as the default, matching the reference's identical
-        // onClicked handler on both of those StyledText elements.
+        // The rest of the card sets this device as the default, matching the
+        // reference's onClicked on the device name.
         pulse_node_set_default(node);
     }
     // Deliberately doesn't close the popup -- see device_popup.h.
+}
+
+void device_popup_handle_release(void) {
+    if (!g_popup.drag_node) {
+        return;
+    }
+    g_popup.drag_node = NULL;
+    redraw(); // fall back to drawing the cached (server-confirmed) value
+}
+
+void device_popup_handle_scroll(double x, double y, int direction) {
+    if (!g_popup.open || g_popup.drag_node) {
+        return;
+    }
+    int part;
+    int idx = card_at(x, y, &part);
+    if (idx < 0) {
+        return;
+    }
+    pulse_node_adjust_volume(g_popup.cards[idx].node,
+                             direction > 0 ? PULSE_VOLUME_STEP_PERCENT : -PULSE_VOLUME_STEP_PERCENT);
 }

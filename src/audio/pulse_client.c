@@ -1,5 +1,6 @@
 #include "audio/pulse_client.h"
 
+#include <ctype.h>
 #include <math.h>
 #include <pulse/pulseaudio.h>
 #include <stdio.h>
@@ -25,6 +26,11 @@ struct PulseNode {
     char description[256]; // human-readable, e.g. "Yeti X Analog Stereo"
     int volume_percent;
     bool muted;
+    // Details for the dropdown cards (read with the same lock as the rest).
+    char state[12];  // "running" | "idle" | "suspended" | "" (unknown/invalid)
+    char bus[16];    // device.bus proplist, upper-cased ("USB", "PCI"), "" if unset
+    uint32_t rate;   // sample_spec.rate, Hz
+    bool is_monitor; // a source that monitors a sink (sources only)
 };
 
 static pa_threaded_mainloop *g_mainloop = NULL;
@@ -108,7 +114,22 @@ static struct PulseNode *find_node_by_name(bool is_sink, const char *name) {
     return NULL;
 }
 
-static void upsert_node(bool is_sink, uint32_t index, const char *name, const char *description,
+// pa_sink_state_t and pa_source_state_t share their values (RUNNING 0,
+// IDLE 1, SUSPENDED 2; negative = invalid/init), so one mapping serves both.
+static void node_set_details(struct PulseNode *node, int state, pa_proplist *props, uint32_t rate,
+                             bool is_monitor) {
+    const char *word = state == 0 ? "running" : state == 1 ? "idle" : state == 2 ? "suspended" : "";
+    snprintf(node->state, sizeof(node->state), "%s", word);
+    const char *bus = props ? pa_proplist_gets(props, "device.bus") : NULL;
+    snprintf(node->bus, sizeof(node->bus), "%s", bus ? bus : "");
+    for (char *p = node->bus; *p; p++) {
+        *p = (char)toupper((unsigned char)*p);
+    }
+    node->rate = rate;
+    node->is_monitor = is_monitor;
+}
+
+static struct PulseNode *upsert_node(bool is_sink, uint32_t index, const char *name, const char *description,
                          const pa_cvolume *volume, int mute) {
     struct PulseNode *node = find_node_by_index(is_sink, index);
     if (!node) {
@@ -116,7 +137,7 @@ static void upsert_node(bool is_sink, uint32_t index, const char *name, const ch
         if (!node) {
             fprintf(stderr, "stickBar: pulse %s limit (%d) reached, ignoring index %u\n",
                     is_sink ? "sink" : "source", MAX_PULSE_NODES, index);
-            return;
+            return NULL;
         }
         memset(node, 0, sizeof(*node));
         node->in_use = true;
@@ -128,6 +149,7 @@ static void upsert_node(bool is_sink, uint32_t index, const char *name, const ch
     node->channels = volume->channels;
     node->volume_percent = (int)lround((double)pa_cvolume_avg(volume) * 100.0 / PA_VOLUME_NORM);
     node->muted = mute != 0;
+    return node;
 }
 
 static void remove_node(bool is_sink, uint32_t index) {
@@ -162,7 +184,10 @@ static void sink_info_cb(pa_context *ctx, const pa_sink_info *info, int eol, voi
     if (eol || !info) {
         return; // eol=1 marks the end of a get_sink_info_list() batch; info is NULL then
     }
-    upsert_node(true, info->index, info->name, info->description, &info->volume, info->mute);
+    struct PulseNode *node = upsert_node(true, info->index, info->name, info->description, &info->volume, info->mute);
+    if (node) {
+        node_set_details(node, info->state, info->proplist, info->sample_spec.rate, false);
+    }
     notify_dirty();
 }
 
@@ -171,7 +196,12 @@ static void source_info_cb(pa_context *ctx, const pa_source_info *info, int eol,
     if (eol || !info) {
         return;
     }
-    upsert_node(false, info->index, info->name, info->description, &info->volume, info->mute);
+    struct PulseNode *node =
+        upsert_node(false, info->index, info->name, info->description, &info->volume, info->mute);
+    if (node) {
+        node_set_details(node, info->state, info->proplist, info->sample_spec.rate,
+                         info->monitor_of_sink != PA_INVALID_INDEX);
+    }
     notify_dirty();
 }
 
@@ -594,6 +624,78 @@ void pulse_node_toggle_mute(PulseNode *node) {
         pa_context_set_source_mute_by_index(g_context, node->index, !node->muted, NULL, NULL);
     }
     pa_threaded_mainloop_unlock(g_mainloop);
+}
+
+// The detail strings are copied out under the lock into a per-call static
+// buffer, unlike pulse_node_description() -- these change at runtime (a
+// device going idle/suspended), so an unlocked read could see a torn string.
+const char *pulse_node_state(PulseNode *node) {
+    static char buf[12];
+    buf[0] = '\0';
+    if (!g_mainloop) return buf;
+    pa_threaded_mainloop_lock(g_mainloop);
+    snprintf(buf, sizeof(buf), "%s", node->state);
+    pa_threaded_mainloop_unlock(g_mainloop);
+    return buf;
+}
+
+const char *pulse_node_bus(PulseNode *node) {
+    static char buf[16];
+    buf[0] = '\0';
+    if (!g_mainloop) return buf;
+    pa_threaded_mainloop_lock(g_mainloop);
+    snprintf(buf, sizeof(buf), "%s", node->bus);
+    pa_threaded_mainloop_unlock(g_mainloop);
+    return buf;
+}
+
+uint32_t pulse_node_rate(PulseNode *node) {
+    if (!g_mainloop) return 0;
+    pa_threaded_mainloop_lock(g_mainloop);
+    uint32_t rate = node->rate;
+    pa_threaded_mainloop_unlock(g_mainloop);
+    return rate;
+}
+
+int pulse_node_channels(PulseNode *node) {
+    if (!g_mainloop) return 0;
+    pa_threaded_mainloop_lock(g_mainloop);
+    int channels = node->channels;
+    pa_threaded_mainloop_unlock(g_mainloop);
+    return channels;
+}
+
+bool pulse_node_is_monitor(PulseNode *node) {
+    if (!g_mainloop) return false;
+    pa_threaded_mainloop_lock(g_mainloop);
+    bool monitor = node->is_monitor;
+    pa_threaded_mainloop_unlock(g_mainloop);
+    return monitor;
+}
+
+void pulse_node_set_volume_percent(PulseNode *node, int percent) {
+    if (!g_mainloop || !g_context) return;
+    pa_threaded_mainloop_lock(g_mainloop);
+    // in_use check for the same stale-pointer reason as
+    // pulse_stream_set_volume_percent() (a device unplugged mid-drag).
+    if (node->in_use) {
+        int new_pct = clampi(percent, 0, PULSE_MAX_VOLUME_PERCENT);
+        pa_cvolume cv;
+        pa_cvolume_set(&cv, node->channels > 0 ? node->channels : 2,
+                       (pa_volume_t)lround((double)new_pct / 100.0 * PA_VOLUME_NORM));
+        // Fire-and-forget, same as pulse_default_sink_adjust_volume().
+        if (node->is_sink) {
+            pa_context_set_sink_volume_by_index(g_context, node->index, &cv, NULL, NULL);
+        } else {
+            pa_context_set_source_volume_by_index(g_context, node->index, &cv, NULL, NULL);
+        }
+    }
+    pa_threaded_mainloop_unlock(g_mainloop);
+}
+
+void pulse_node_adjust_volume(PulseNode *node, int delta_percent) {
+    // Read, then set (the lock isn't recursive), same as pulse_stream_adjust_volume().
+    pulse_node_set_volume_percent(node, pulse_node_volume_percent(node) + delta_percent);
 }
 
 int pulse_stream_count(void) {

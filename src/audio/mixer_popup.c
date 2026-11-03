@@ -8,6 +8,7 @@
 #include "audio/pulse_client.h"
 #include "bar/popup_surface.h"
 #include "config/glyphs.h"
+#include "render/meter_bar.h"
 #include "render/module_box.h"
 
 // Sized generously (this machine has 2 monitors), matching the same
@@ -18,32 +19,42 @@
 // same reason device_popup.c redeclares MAX_PULSE_NODES as MAX_DEVICE_ROWS.
 #define MAX_MIXER_ROWS 32
 
-// Geometry. Spacing/margins deliberately match audio/device_popup.c's own
-// values so the two dropdowns read as siblings; the name/slider widths are
-// this popup's own tuning (there's no reference-bar mixer to mirror).
-#define ROW_SPACING 8.0
-#define ROW_INNER_SPACING 10.0
-#define OUTER_MARGIN 8.0
-#define NAME_COL_W 150.0
-#define SLIDER_W 140.0
-#define SLIDER_TRACK_H 4.0
-#define SLIDER_KNOB_R 5.0
-#define PERCENT_COL_W 40.0
-#define MIN_ROW_H 20.0
+// Layout tuning, local to this popup. Deliberately the same width, header,
+// card and chip styling as audio/device_popup.c so the two dropdowns read as
+// siblings. The width never depends on content, so only the height changes
+// as streams come and go (which keeps the right-anchored popup from jumping
+// sideways).
+#define CONTENT_W 340.0
+#define OUTER_MARGIN 12.0
+#define SECTION_GAP 10.0
+#define CARD_GAP 8.0
+#define HEADER_H 22.0
+#define PILL_H 16.0
+#define PILL_PAD_X 7.0
+#define CARD_PAD 10.0
+#define CHIP_W 30.0
+#define CHIP_H 22.0
+#define SLIDER_GAP 6.0
+#define SLIDER_ROW_H 12.0 // hit area of the slider row; the meter itself is METER_H tall
+#define METER_H 6.0
+#define METER_SEGMENTS 36
+#define METER_SLOP 4.0 // extra grab room past both slider ends
+#define COL_GAP 10.0
+#define EMPTY_CARD_H 40.0
 #define NAME_BUF_SIZE 300
-#define PCT_BUF_SIZE 16
 
 // The slider spans 0..100%, not 0..PULSE_MAX_VOLUME_PERCENT -- per-app
 // boosting past 100% is rarely what anyone wants from a mixer, so the full
 // track width goes to the useful range. A stream already above 100% (set
 // elsewhere, or via scrolling, which still allows up to the shared 200% cap)
-// just shows a full track; its percent label still reports the real value.
+// shows a full track with a peach top end; its percent still reports the
+// real value.
 #define SLIDER_MAX_PERCENT 100
 
 #define EMPTY_TEXT "No applications playing audio"
 
 typedef struct {
-    double y, h;
+    double y, h; // card rect, relative to the popup (x is always OUTER_MARGIN)
 } RowLayout;
 
 typedef struct {
@@ -54,18 +65,18 @@ typedef struct {
 
     PulseStream *streams[MAX_MIXER_ROWS];
     RowLayout rows[MAX_MIXER_ROWS];
-    char name_text[MAX_MIXER_ROWS][NAME_BUF_SIZE];
     int row_count;
     int hovered_index;
+    bool hovered_mute; // hovering the hovered row's mute chip
 
     // Drag state: the stream being dragged (a pointer, not a row index -- rows
     // can reorder/disappear under a live refresh mid-drag) plus the percent
-    // last sent for it, drawn in place of the cached value so the knob tracks
-    // the pointer immediately rather than lagging one server round trip.
+    // last sent for it, drawn in place of the cached value so the slider
+    // tracks the pointer immediately rather than lagging one server round trip.
     PulseStream *drag_stream;
     int drag_percent;
 
-    double mute_col_w, content_width, popup_width, popup_height;
+    double popup_width, popup_height;
 
     // Kept from open time so the menu surface can be recreated at a new
     // height on a live row-count change (see mixer_popup_refresh_if_open()).
@@ -77,6 +88,18 @@ typedef struct {
 } MixerPopupState;
 
 static MixerPopupState g_mixer = { .hovered_index = -1 };
+
+static double text_width(const char *text, int size, bool bold) {
+    double w, h;
+    module_box_measure_text(text, size, bold, &w, &h);
+    (void)h;
+    return w;
+}
+
+static void draw_text_right(cairo_t *cr, double right_x, double y, double h, const char *text, int size, bool bold,
+                            Color color) {
+    module_box_draw_text_left(cr, right_x - text_width(text, size, bold), y, h, text, size, bold, color);
+}
 
 // Same 4-level thresholds as modules/volume's own status icon.
 static uint32_t status_icon_glyph(int percent, bool muted) {
@@ -92,9 +115,7 @@ static uint32_t status_icon_glyph(int percent, bool muted) {
 // non-ASCII, so the codepoint-boundary handling matters more here.
 static void truncate_to_width(const char *text, double max_w, int font_px, bool bold,
                                char *out, size_t out_size) {
-    double w, h;
-    module_box_measure_text(text, font_px, bold, &w, &h);
-    if (w <= max_w) {
+    if (text_width(text, font_px, bold) <= max_w) {
         snprintf(out, out_size, "%s", text);
         return;
     }
@@ -120,10 +141,9 @@ static void truncate_to_width(const char *text, double max_w, int font_px, bool 
     size_t lo = 0, hi = n;
     while (lo < hi) {
         size_t mid = (lo + hi + 1) / 2;
-        char candidate[NAME_BUF_SIZE];
+        char candidate[NAME_BUF_SIZE + 4];
         snprintf(candidate, sizeof(candidate), "%.*s...", (int)offsets[mid], text);
-        module_box_measure_text(candidate, font_px, bold, &w, &h);
-        if (w <= max_w) {
+        if (text_width(candidate, font_px, bold) <= max_w) {
             lo = mid;
         } else {
             hi = mid - 1;
@@ -132,84 +152,96 @@ static void truncate_to_width(const char *text, double max_w, int font_px, bool 
     snprintf(out, out_size, "%.*s...", (int)offsets[lo], text);
 }
 
-// Column x positions, all derived from the fixed column widths -- the popup's
-// width never depends on its content, so only its height changes as streams
-// come and go (which keeps the right-anchored popup from jumping sideways).
-static double name_x(void) { return OUTER_MARGIN; }
-static double slider_x(void) { return name_x() + NAME_COL_W + ROW_INNER_SPACING; }
-static double percent_x(void) { return slider_x() + SLIDER_W + ROW_INNER_SPACING; }
-static double mute_x(void) { return percent_x() + PERCENT_COL_W + ROW_INNER_SPACING; }
+// ---- Card geometry ---------------------------------------------------------------
+// Each card: a top row (name ... percent [mute chip]) and a full-width
+// slider under it. Every card has the same shape, so x positions are shared.
+
+static double card_h(void) { return CARD_PAD + CHIP_H + SLIDER_GAP + SLIDER_ROW_H + CARD_PAD; }
+static double inner_x(void) { return OUTER_MARGIN + CARD_PAD; }
+static double inner_w(void) { return CONTENT_W - CARD_PAD * 2.0; }
+static double mute_x(void) { return inner_x() + inner_w() - CHIP_W; }
+static double percent_col_w(void) { return text_width("200%", FONT.sm, false); }
+static double slider_x(void) { return inner_x(); }
+static double slider_w(void) { return inner_w(); }
+static double slider_row_y(const RowLayout *row) { return row->y + CARD_PAD + CHIP_H + SLIDER_GAP; }
 
 // Rebuilt from pulse_client's live cache on open and on every refresh, same
 // "nothing to snapshot, just re-read" model as device_popup.c's
 // compute_layout().
 static void compute_layout(void) {
-    char buf[5];
-    static const uint32_t ICONS[4] = { GLYPH_ICON_VOLUME_MUTED, GLYPH_ICON_VOLUME_LOW,
-                                        GLYPH_ICON_VOLUME_MEDIUM, GLYPH_ICON_VOLUME_HIGH };
-    double mute_w = 0, mute_h = 0;
-    for (int i = 0; i < 4; i++) {
-        glyph_utf8(ICONS[i], buf);
-        double w, h;
-        module_box_measure_text(buf, FONT.heading, false, &w, &h);
-        if (w > mute_w) mute_w = w;
-        if (h > mute_h) mute_h = h;
-    }
-    g_mixer.mute_col_w = mute_w;
-    g_mixer.content_width = mute_x() + mute_w - OUTER_MARGIN;
-    g_mixer.popup_width = g_mixer.content_width + OUTER_MARGIN * 2.0;
-
     int count = pulse_stream_count();
     if (count > MAX_MIXER_ROWS) {
         count = MAX_MIXER_ROWS;
     }
 
-    double row_h = mute_h > MIN_ROW_H ? mute_h : MIN_ROW_H;
     int valid = 0;
     for (int i = 0; i < count; i++) {
         PulseStream *stream = pulse_stream_get(i);
         if (!stream) {
             continue; // removed between count() and get() -- the next refresh catches up
         }
-        g_mixer.streams[valid] = stream;
-        truncate_to_width(pulse_stream_name(stream), NAME_COL_W, FONT.label, false,
-                          g_mixer.name_text[valid], NAME_BUF_SIZE);
-        valid++;
+        g_mixer.streams[valid++] = stream;
     }
     g_mixer.row_count = valid;
 
-    double y = OUTER_MARGIN;
-    int visual_rows = valid > 0 ? valid : 1; // the empty-state message takes one row
-    for (int i = 0; i < visual_rows; i++) {
-        g_mixer.rows[i].y = y;
-        g_mixer.rows[i].h = row_h;
-        y += row_h;
-        if (i < visual_rows - 1) {
-            y += ROW_SPACING;
-        }
+    double y = OUTER_MARGIN + HEADER_H + SECTION_GAP;
+    if (valid == 0) {
+        g_mixer.rows[0].y = y; // the empty-state card
+        g_mixer.rows[0].h = EMPTY_CARD_H;
+        y += EMPTY_CARD_H;
     }
+    for (int i = 0; i < valid; i++) {
+        if (i > 0) {
+            y += CARD_GAP;
+        }
+        g_mixer.rows[i].y = y;
+        g_mixer.rows[i].h = card_h();
+        y += card_h();
+    }
+    g_mixer.popup_width = CONTENT_W + OUTER_MARGIN * 2.0;
     g_mixer.popup_height = y + OUTER_MARGIN;
 }
 
-static void draw_slider(cairo_t *cr, double y, double h, int percent, bool muted) {
-    double frac = (double)percent / SLIDER_MAX_PERCENT;
-    if (frac < 0) frac = 0;
-    if (frac > 1) frac = 1;
+// ---- Painting ----------------------------------------------------------------
 
-    double track_y = y + (h - SLIDER_TRACK_H) / 2.0;
-    double sx = slider_x();
-    Color fill = muted ? COLORS.overlay0 : g_mixer.accent;
+// "Mixer · 3 apps · TE-C Analog Stereo" plus a pill with the default sink's
+// volume (or "muted") -- the device these streams mostly play through.
+static void paint_header(cairo_t *cr) {
+    double x = OUTER_MARGIN, y = OUTER_MARGIN;
+    const char *sink_name = "";
+    for (int i = 0; i < pulse_sink_count(); i++) {
+        PulseNode *node = pulse_sink_get(i);
+        if (node && pulse_node_is_default(node)) {
+            sink_name = pulse_node_description(node);
+            break;
+        }
+    }
 
-    module_box_draw_rect(cr, sx, track_y, SLIDER_W, SLIDER_TRACK_H,
-                          COLORS.surface1, (Color){ 0, 0, 0, 0 }, 0.0);
-    module_box_draw_rect(cr, sx, track_y, SLIDER_W * frac, SLIDER_TRACK_H,
-                          fill, (Color){ 0, 0, 0, 0 }, 0.0);
+    char word[16];
+    bool muted = pulse_default_sink_muted();
+    if (muted) {
+        snprintf(word, sizeof(word), "muted");
+    } else {
+        snprintf(word, sizeof(word), "%d%%", pulse_default_sink_volume_percent());
+    }
+    double pill_w = text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
 
-    cairo_save(cr);
-    cairo_set_source_rgba(cr, fill.r, fill.g, fill.b, fill.a);
-    cairo_arc(cr, sx + SLIDER_W * frac, y + h / 2.0, SLIDER_KNOB_R, 0, 2 * M_PI);
-    cairo_fill(cr);
-    cairo_restore(cr);
+    char icon[5], summary[NAME_BUF_SIZE], summary_full[NAME_BUF_SIZE];
+    glyph_utf8(GLYPH_ICON_VOLUME_HIGH, icon);
+    snprintf(summary_full, sizeof(summary_full), "  ·  %d app%s%s%s", g_mixer.row_count,
+             g_mixer.row_count == 1 ? "" : "s", sink_name[0] ? "  ·  " : "", sink_name);
+    module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, g_mixer.accent);
+    double tx = x + text_width(icon, FONT.heading, false) + 8.0;
+    module_box_draw_text_left(cr, tx, y, HEADER_H, "Mixer", FONT.md, true, COLORS.text);
+    tx += text_width("Mixer", FONT.md, true);
+    truncate_to_width(summary_full, x + CONTENT_W - pill_w - COL_GAP - tx, FONT.sm, false, summary, sizeof(summary));
+    module_box_draw_text_left(cr, tx, y, HEADER_H, summary, FONT.sm, false, COLORS.subtext0);
+
+    Color fill = muted ? COLORS.red : g_mixer.accent;
+    double pill_x = x + CONTENT_W - pill_w;
+    double pill_y = y + (HEADER_H - PILL_H) / 2.0;
+    module_box_draw_rect(cr, pill_x, pill_y, pill_w, PILL_H, fill, COLORS.mantle, 0.0);
+    module_box_draw_text_centered(cr, pill_x, pill_y, pill_w, PILL_H, word, FONT.xs, true, COLORS.mantle);
 }
 
 static void draw_row(cairo_t *cr, int i) {
@@ -217,39 +249,51 @@ static void draw_row(cairo_t *cr, int i) {
     RowLayout *row = &g_mixer.rows[i];
     bool muted = pulse_stream_muted(stream);
     int percent = stream == g_mixer.drag_stream ? g_mixer.drag_percent : pulse_stream_volume_percent(stream);
+    bool hovered = i == g_mixer.hovered_index;
 
-    if (i == g_mixer.hovered_index) {
-        module_box_draw_rect(cr, OUTER_MARGIN, row->y, g_mixer.content_width, row->h,
-                              COLORS.surface0, (Color){ 0, 0, 0, 0 }, 0.0);
-    }
+    module_box_draw_rect(cr, OUTER_MARGIN, row->y, CONTENT_W, row->h, COLORS.base,
+                         hovered ? COLORS.overlay0 : COLORS.surface1, 1.0);
 
-    module_box_draw_text_left(cr, name_x(), row->y, row->h, g_mixer.name_text[i], FONT.label, false,
-                               muted ? COLORS.overlay0 : COLORS.text);
+    double y = row->y + CARD_PAD;
+    char name[NAME_BUF_SIZE];
+    double name_max_w = mute_x() - COL_GAP - percent_col_w() - COL_GAP - inner_x();
+    truncate_to_width(pulse_stream_name(stream), name_max_w, FONT.label, true, name, sizeof(name));
+    module_box_draw_text_left(cr, inner_x(), y, CHIP_H, name, FONT.label, true,
+                              muted ? COLORS.overlay0 : COLORS.text);
 
-    draw_slider(cr, row->y, row->h, percent, muted);
-
-    char pct_text[PCT_BUF_SIZE];
+    char pct_text[16];
     snprintf(pct_text, sizeof(pct_text), "%d%%", percent);
-    double pct_w, pct_h;
-    module_box_measure_text(pct_text, FONT.sm, false, &pct_w, &pct_h);
-    (void)pct_h;
-    // Right-aligned within its column, same trick as device_popup.c.
-    module_box_draw_text_left(cr, percent_x() + (PERCENT_COL_W - pct_w), row->y, row->h,
-                               pct_text, FONT.sm, false, COLORS.subtext0);
+    draw_text_right(cr, mute_x() - COL_GAP, y, CHIP_H, pct_text, FONT.sm, false,
+                    muted ? COLORS.overlay0 : COLORS.subtext0);
 
+    bool chip_hovered = hovered && g_mixer.hovered_mute;
+    module_box_draw_rect(cr, mute_x(), y, CHIP_W, CHIP_H, chip_hovered ? COLORS.surface1 : COLORS.surface0,
+                         COLORS.mantle, 0.0);
     char glyph_buf[5];
     glyph_utf8(status_icon_glyph(percent, muted), glyph_buf);
-    module_box_draw_text_left(cr, mute_x(), row->y, row->h, glyph_buf, FONT.heading, false,
-                               muted ? COLORS.overlay0 : g_mixer.accent);
+    module_box_draw_text_centered(cr, mute_x(), y, CHIP_W, CHIP_H, glyph_buf, FONT.heading, false,
+                                  muted ? COLORS.overlay0 : g_mixer.accent);
+
+    Color gradient[3];
+    if (muted) {
+        gradient[0] = gradient[1] = gradient[2] = COLORS.overlay0;
+    } else {
+        gradient[0] = gradient[1] = g_mixer.accent;
+        gradient[2] = percent > SLIDER_MAX_PERCENT ? COLORS.peach : g_mixer.accent;
+    }
+    meter_bar_draw(cr, slider_x(), slider_row_y(row) + (SLIDER_ROW_H - METER_H) / 2.0, slider_w(), METER_H,
+                   (double)percent / SLIDER_MAX_PERCENT, METER_SEGMENTS, gradient, COLORS.surface0);
 }
 
 static void draw_popup(cairo_t *cr, void *user_data) {
     (void)user_data;
     module_box_draw_rect(cr, 0, 0, g_mixer.popup_width, g_mixer.popup_height,
                           COLORS.mantle, g_mixer.accent, (double)BAR.module_border_width);
+    paint_header(cr);
     if (g_mixer.row_count == 0) {
-        module_box_draw_text_left(cr, OUTER_MARGIN, g_mixer.rows[0].y, g_mixer.rows[0].h,
-                                   EMPTY_TEXT, FONT.label, false, COLORS.subtext0);
+        RowLayout *row = &g_mixer.rows[0];
+        module_box_draw_rect(cr, OUTER_MARGIN, row->y, CONTENT_W, row->h, COLORS.base, COLORS.surface1, 1.0);
+        module_box_draw_text_left(cr, inner_x(), row->y, row->h, EMPTY_TEXT, FONT.label, false, COLORS.subtext0);
         return;
     }
     for (int i = 0; i < g_mixer.row_count; i++) {
@@ -279,6 +323,7 @@ void mixer_popup_refresh_if_open(void) {
     compute_layout();
     if (g_mixer.hovered_index >= g_mixer.row_count) {
         g_mixer.hovered_index = -1;
+        g_mixer.hovered_mute = false;
     }
     if (g_mixer.popup_height != old_h) {
         // An app started/stopped playing -- the popup needs a new height.
@@ -327,6 +372,7 @@ void mixer_popup_open(Output *output, Color accent,
 
     g_mixer.accent = accent;
     g_mixer.hovered_index = -1;
+    g_mixer.hovered_mute = false;
     g_mixer.drag_stream = NULL;
     g_mixer.output = output;
 
@@ -365,6 +411,7 @@ void mixer_popup_close(void) {
     g_mixer.output = NULL;
     g_mixer.row_count = 0;
     g_mixer.hovered_index = -1;
+    g_mixer.hovered_mute = false;
     g_mixer.drag_stream = NULL;
 }
 
@@ -385,7 +432,7 @@ bool mixer_popup_is_catcher_surface(struct wl_surface *surface) {
 }
 
 static int row_at(double x, double y) {
-    if (x < OUTER_MARGIN || x >= OUTER_MARGIN + g_mixer.content_width) {
+    if (x < OUTER_MARGIN || x >= OUTER_MARGIN + CONTENT_W) {
         return -1;
     }
     for (int i = 0; i < g_mixer.row_count; i++) {
@@ -397,12 +444,23 @@ static int row_at(double x, double y) {
     return -1;
 }
 
+static bool on_mute_chip(const RowLayout *row, double x, double y) {
+    double cy = row->y + CARD_PAD;
+    return x >= mute_x() && x < mute_x() + CHIP_W && y >= cy && y < cy + CHIP_H;
+}
+
+static bool on_slider(const RowLayout *row, double x, double y) {
+    double sy = slider_row_y(row);
+    return y >= sy && y < sy + SLIDER_ROW_H && x >= slider_x() - METER_SLOP &&
+           x < slider_x() + slider_w() + METER_SLOP;
+}
+
 // Maps a surface-local x to a slider percent, clamped to the track -- used
 // both for the initial press and for every drag motion afterward (where x
 // can land well outside the track, or the popup entirely, under the
 // implicit grab).
 static int percent_at_x(double x) {
-    double frac = (x - slider_x()) / SLIDER_W;
+    double frac = (x - slider_x()) / slider_w();
     if (frac < 0) frac = 0;
     if (frac > 1) frac = 1;
     return (int)lround(frac * SLIDER_MAX_PERCENT);
@@ -427,18 +485,17 @@ void mixer_popup_handle_press(double x, double y, uint32_t button) {
         return;
     }
     PulseStream *stream = g_mixer.streams[idx];
+    RowLayout *row = &g_mixer.rows[idx];
 
-    if (x >= mute_x()) {
+    if (on_mute_chip(row, x, y)) {
         pulse_stream_toggle_mute(stream);
-    } else if (x >= slider_x() - SLIDER_KNOB_R && x < slider_x() + SLIDER_W + SLIDER_KNOB_R) {
-        // Small knob-radius slop on both ends so grabbing the knob at exactly
-        // 0% or 100% still starts a drag.
+    } else if (on_slider(row, x, y)) {
         g_mixer.drag_stream = stream;
         g_mixer.drag_percent = -1; // force drag_to() to send the first value
         drag_to(x);
     }
-    // Landing on the name or percent column does nothing -- stays open
-    // either way, same as device_popup.c.
+    // Landing on the name or percent does nothing -- stays open either way,
+    // same as device_popup.c.
 }
 
 void mixer_popup_handle_motion(double x, double y) {
@@ -450,8 +507,10 @@ void mixer_popup_handle_motion(double x, double y) {
         return;
     }
     int idx = row_at(x, y);
-    if (idx != g_mixer.hovered_index) {
+    bool mute = idx >= 0 && on_mute_chip(&g_mixer.rows[idx], x, y);
+    if (idx != g_mixer.hovered_index || mute != g_mixer.hovered_mute) {
         g_mixer.hovered_index = idx;
+        g_mixer.hovered_mute = mute;
         redraw();
     }
 }

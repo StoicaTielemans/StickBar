@@ -72,44 +72,47 @@ def main():
     if subprocess.run([sys.executable, "-c", "from gi.repository import Gio"], capture_output=True).returncode:
         common.skip("needs PyGObject (gi) for the fake tray app")
     failures = []
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory() as tmp, common.ControlledBar(binary) as bar:
+        # The bar first: if no other StatusNotifierWatcher is running (the
+        # user's own bar usually is one), this instance claims the role
+        # itself, so the fake always has something to register with.
+        bar.wait_ready(("clock",))
+        time.sleep(0.5)
         log = Path(tmp) / "fake.log"
         log.write_text("")
         fake = subprocess.Popen([sys.executable, str(FAKE), str(log), str(LIFETIME_S)])
         try:
             if not wait_for(lambda: "registered" in log_lines(log), 5):
-                common.fail("fake tray app couldn't register (no StatusNotifierWatcher running?)")
-            with common.ControlledBar(binary) as bar:
-                bar.wait_ready(("tray",))
-                icon = wait_for(lambda: (r := bar.cmd(f"target trayicon {bar.output} {TITLE}")).get("ok") and r)
-                if not icon:
-                    common.fail("the fake tray icon never appeared in the bar")
-                bar.must(f"click {bar.output} {icon['x']} {icon['y']} right")
-                menu = bar.wait_menu(True)
+                common.fail("fake tray app couldn't register with a StatusNotifierWatcher")
+            icon = wait_for(lambda: (r := bar.cmd(f"target trayicon {bar.output} {TITLE}")).get("ok") and r)
+            if not icon:
+                common.fail("the fake tray icon never appeared in the bar")
+            bar.must(f"click {bar.output} {icon['x']} {icon['y']} right")
+            menu = bar.wait_menu(True)
 
-                got = [(None, None, None, None) if e["separator"] else
-                       (e["label"], e["toggle"], e["toggled"], e["submenu"]) for e in menu["tray_entries"]]
-                if got != EXPECTED:
-                    failures.append(f"entries as shown: {got}")
-                png = Path(tmp) / "tray.png"
-                bar.must(f"snapshot {png}")
-                cards, border = count_cards(png)
-                if cards != 4:
-                    failures.append(f"{cards} cards for 3 separators (expected 4)")
-                if not common.close_rgb(border, common.hex_rgb("6c7086")):
-                    failures.append(f"border {border} is not the neutral overlay0 grey")
+            got = [(None, None, None, None) if e["separator"] else
+                   (e["label"], e["toggle"], e["toggled"], e["submenu"]) for e in menu["tray_entries"]]
+            if got != EXPECTED:
+                failures.append(f"entries as shown: {got}")
+            png = Path(tmp) / "tray.png"
+            bar.must(f"snapshot {png}")
+            cards, border = count_cards(png)
+            if cards != 4:
+                failures.append(f"{cards} cards for 3 separators (expected 4)")
+            if not common.close_rgb(border, common.hex_rgb("6c7086")):
+                failures.append(f"border {border} is not the neutral overlay0 grey")
 
-                t = bar.must("target traymenu Disabled Item")
-                bar.must(f"menu-click {t['x']} {t['y']}")
-                time.sleep(0.4)
-                if not bar.must("menu")["open"] or any(line.startswith("event") for line in log_lines(log)):
-                    failures.append("clicking the disabled entry did something")
+            t = bar.must("target traymenu Disabled Item")
+            bar.must(f"menu-click {t['x']} {t['y']}")
+            time.sleep(0.4)
+            if not bar.must("menu")["open"] or any(line.startswith("event") for line in log_lines(log)):
+                failures.append("clicking the disabled entry did something")
 
-                t = bar.must("target traymenu Show Notifications")
-                bar.must(f"menu-click {t['x']} {t['y']}")
-                if not wait_for(lambda: "event 3 Show _Notifications" in log_lines(log)):
-                    failures.append(f"clicking an entry didn't send its event: {log_lines(log)}")
-                bar.wait_menu(False)
+            t = bar.must("target traymenu Show Notifications")
+            bar.must(f"menu-click {t['x']} {t['y']}")
+            if not wait_for(lambda: "event 3 Show _Notifications" in log_lines(log)):
+                failures.append(f"clicking an entry didn't send its event: {log_lines(log)}")
+            bar.wait_menu(False)
         finally:
             fake.kill()
             fake.wait()

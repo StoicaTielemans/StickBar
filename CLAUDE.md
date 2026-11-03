@@ -1904,12 +1904,23 @@ this bar has (the button, and the keybind below) always wants toggle semantics.
   already uses, and notably *not* the classic `signal()` + flip-a-flag pattern
   `g_should_exit` (SIGINT/SIGTERM) uses, since that pattern only works for
   "the main loop should notice eventually," not "call `power_menu_toggle()`
-  right now." Blocking happens early in `main()`, before `pulse_client_init()`
-  spawns its own background thread — POSIX signal masks are inherited at
-  thread-creation time, so this ensures that thread's mask blocks `SIGUSR1`
-  too (the correct multi-threaded-process pattern for `signalfd`: block
-  everywhere, only the thread holding the `signalfd` itself ever actually
-  reads a pending instance). Add a keybind like this to `hyprland.conf` to
+  right now." **SIGUSR1 is blocked as the very first statement of
+  `main()`** (`block_powermenu_signal()`), before anything can start a
+  thread; the signalfd itself is still created later. POSIX signal masks are
+  per-thread and inherited at creation, and a process-directed signal
+  (`pkill`) goes to *any* thread that doesn't block it -- so every thread
+  must inherit the block (the correct multi-threaded-process pattern for
+  `signalfd`: block everywhere, only the thread holding the `signalfd`
+  itself ever actually reads a pending instance). **This regressed once**:
+  the block used to happen after `sysmon_client_init()`, which was fine
+  while the GPU came from `nvidia-smi`, but NVML's init starts two threads
+  of its own (one named `cuda00001c00008`). The kernel delivered the
+  keybind's SIGUSR1 to one of them, and its default action killed the bar
+  -- the user reported "the power menu crashes the bar". Clicking the Arch
+  logo still worked, which is why it went unnoticed.
+  `tests/test_power_menu.py` checks every thread's `SigBlk` and sends real
+  SIGUSR1s to a test instance; with the old order it fails exactly that
+  way. Add a keybind like this to `hyprland.conf` to
   wire it up:
   ```
   bind = SUPER, Escape, exec, pkill -SIGUSR1 -x stickBar

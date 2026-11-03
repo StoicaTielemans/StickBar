@@ -126,20 +126,34 @@ static int create_sysmon_timer(void) {
 // asynchronous delivery path; otherwise it would either be delivered async
 // (unsafe to act on directly) or, since SIGUSR1's default disposition is to
 // terminate the process, kill the bar the first time the keybind is used.
-// Called early in main(), before pulse_client_init() spawns its own
-// background thread -- POSIX signal masks are per-thread but inherited at
-// creation time, so blocking SIGUSR1 here ensures that thread inherits the
-// same blocked mask too (the correct pattern for signalfd in a
-// multi-threaded process: block everywhere, only the thread holding the
-// signalfd itself ever actually consumes a pending instance).
-static int create_powermenu_signal_fd(void) {
+//
+// The blocking and the signalfd are two steps on purpose. POSIX signal masks
+// are per-thread, inherited when a thread is created, and a process-directed
+// signal (pkill) goes to *any* thread that doesn't block it -- so SIGUSR1 has
+// to be blocked before the first thread exists, i.e. as the very first thing
+// in main() (block_powermenu_signal()). It used to be blocked here, after
+// sysmon_client_init(): fine while the GPU came from nvidia-smi, but NVML's
+// init starts two threads of its own, which then had SIGUSR1 unblocked -- the
+// kernel delivered the keybind's signal to one of them and its default
+// action killed the bar. tests/test_power_menu.py guards this.
+static bool block_powermenu_signal(void) {
     sigset_t mask;
     sigemptyset(&mask);
     sigaddset(&mask, SIGUSR1);
     if (sigprocmask(SIG_BLOCK, &mask, NULL) < 0) {
         perror("stickBar: sigprocmask(SIGUSR1)");
-        return -1;
+        return false;
     }
+    return true;
+}
+
+static int create_powermenu_signal_fd(bool blocked) {
+    if (!blocked) {
+        return -1; // unblocked, signalfd would never see it -- and SIGUSR1 stays fatal
+    }
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGUSR1);
     int fd = signalfd(-1, &mask, SFD_CLOEXEC | SFD_NONBLOCK);
     if (fd < 0) {
         perror("stickBar: signalfd(SIGUSR1)");
@@ -170,6 +184,9 @@ static HyprlandEvents *reconnect_hypr_events(int epoll_fd, HyprlandEvents *old, 
 }
 
 int main(void) {
+    // First, before anything can start a thread (NVML, PulseAudio and
+    // PipeWire all do) -- see create_powermenu_signal_fd()'s comment.
+    bool sigusr1_blocked = block_powermenu_signal();
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
 
@@ -224,7 +241,7 @@ int main(void) {
     // if signalfd() itself fails for some reason, the bar still runs fine,
     // just without a SIGUSR1 trigger (the Arch logo button still works
     // regardless, since it doesn't go through this fd at all).
-    int powermenu_signal_fd = create_powermenu_signal_fd();
+    int powermenu_signal_fd = create_powermenu_signal_fd(sigusr1_blocked);
     if (powermenu_signal_fd >= 0 && !event_loop_add_fd(epoll_fd, powermenu_signal_fd, EPOLLIN)) {
         close(powermenu_signal_fd);
         powermenu_signal_fd = -1;

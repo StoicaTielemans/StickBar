@@ -127,7 +127,11 @@ def on_bus(conn, name):
 
 
 def on_registered(conn, result):
-    conn.call_finish(result)
+    try:
+        conn.call_finish(result)
+    except GLib.Error as e:  # no watcher running: the test reports it
+        LOG.write(f"register failed: {e.message}\n")
+        return
     LOG.write("registered\n")
 
 

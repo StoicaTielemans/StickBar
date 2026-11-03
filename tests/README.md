@@ -49,6 +49,7 @@ pass, 1 is fail, 77 is skipped (for example, no NVIDIA driver).
 | `test_audio.py` | On a throwaway null sink: a meter press sets ~75 %, a drag ends at ~25 %, scroll steps +5 %, the mute chip toggles. The mic dropdown lists only non-monitor sources. The mixer grows when a `paplay` stream starts, its slider and mute chip work, and it shrinks when the stream ends. Never touches a real device's volume or the default device. | Broken device-volume controls, monitors back in the mic list, a mixer that doesn't resize. |
 | `test_media.py` | Against `lib/fake_mpris.py`: metadata (incl. album) and status are read right; the play/next/prev chips send PlayPause/Next/Previous; the popup shrinks (or closes) when the player quits. | Broken controls, a popup stuck at its open-time size. |
 | `test_tray.py` | Against `lib/fake_tray.py`: the fake's icon appears; its menu shows every entry with access-key underscores stripped, checkmark/radio state and the submenu marker; 3 separators make 4 cards on a grey border; a disabled entry is inert; a click sends that entry's `clicked` event and closes the menu. | Raw `_` labels, lost toggle state, a broken click path. |
+| `test_power_menu.py` | Every thread of the bar has SIGUSR1 in `SigBlk`; SIGUSR1 (the Hyprland keybind's signal, sent to the test instance's pid only) opens and closes the overlay, and a burst of them leaves the bar running; an Arch-logo click opens it, a background click closes it. The Logout/Restart/Shutdown buttons are never clicked. | SIGUSR1 blocked only after NVML started its threads, so the keybind killed the bar (exit by signal 10). |
 | `test_nvml_vs_smi.py` | Makes the same NVML calls as `sysmon_client.c` and compares the results with `nvidia-smi`: usage, temperature, memory, fan, power and P-state, plus the GPU dropdown's name, driver, power limit, max clock and per-process VRAM list. | Wrong units, memory read through the v1 call (which counts reserved memory), or a wrong process-info struct layout. |
 
 The tests were checked in both directions. Against the build from before these
@@ -65,7 +66,9 @@ the current source, rebuilding and running the test, which then failed:
 - no monitor filter: `test_audio` (6 mic cards instead of 2);
 - no media recreate: `test_media` (popup stuck at 300 px);
 - no mixer recreate: `test_audio` (mixer stuck at 116 px);
-- raw DBusMenu labels: `test_tray` ("Show Notifications" not found).
+- raw DBusMenu labels: `test_tray` ("Show Notifications" not found);
+- SIGUSR1 blocked late, as before the fix: `test_power_menu` (the bar died
+  of signal 10; an NVML thread, `cuda00001c00008`, didn't block it).
 
 `test_audio`'s mixer check waits for its own stream by name and compares
 the popup's drawn card count with its row count, instead of expecting the
@@ -107,8 +110,9 @@ starts with fresh starts.
 - `fake_mpris.py`: an MPRIS player that only logs the calls it gets, so
   media tests never pause or skip a real one.
 - `fake_tray.py`: a StatusNotifierItem with a DBusMenu that only logs
-  clicks. It registers with the running watcher (usually your own bar), so
-  its grey icon shows in your tray for the ~20s the test runs.
+  clicks. It registers with the running watcher -- usually your own bar, so
+  its grey icon shows in your tray for the ~20s the test runs; if none is
+  running, the test's own bar instance takes the watcher role.
 - `wlproxy.py`: a Unix-socket proxy that sits between the bar and the
   compositor. It also forwards the file descriptors Wayland passes over the
   socket (needed for shm buffers), so killing it simulates the compositor going

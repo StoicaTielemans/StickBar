@@ -110,10 +110,30 @@ static int g_gpu_hist_head = 0, g_gpu_hist_len = 0;
 static int g_mem_percent = 0;
 static double g_mem_used_gb = 0.0;
 static double g_mem_total_gb = 0.0;
-static double g_mem_free_gb = 0.0;
+static double g_mem_avail_gb = 0.0; // MemAvailable (the old dropdown labelled this "FREE")
+static double g_mem_free_gb = 0.0;  // MemFree
+static double g_mem_shared_gb = 0.0;
+static double g_mem_dirty_mb = 0.0;
 static double g_swap_used_gb = 0.0;
 static double g_swap_total_gb = 0.0;
 static int g_swap_percent = 0;
+
+// Used %/swap % history, same shape as the CPU's and GPU's.
+static double g_mem_used_hist[SYSMON_MEM_HISTORY_LEN], g_mem_swap_hist[SYSMON_MEM_HISTORY_LEN];
+static int g_mem_hist_head = 0, g_mem_hist_len = 0;
+
+// Dropdown-only memory details (sysmon_mem_refresh_details()).
+static bool g_psi_available = false;
+static double g_psi_some[3];
+static bool g_swap_zram = false;
+static char g_zram_algorithm[24] = "";
+static double g_zram_orig_mb = 0.0, g_zram_compr_mb = 0.0, g_zram_used_mb = 0.0;
+typedef struct {
+    char name[32];
+    double gb;
+} MemProcess;
+static MemProcess g_mem_procs[SYSMON_MEM_MAX_PROCS];
+static int g_mem_proc_count = 0;
 
 static void nvml_init(void);
 
@@ -328,7 +348,14 @@ static void poll_mem(void) {
     g_mem_percent = (int)lround(100.0 * (double)mem_used_kb / (double)mem_total_kb);
     g_mem_used_gb = (double)mem_used_kb / 1024.0 / 1024.0;
     g_mem_total_gb = (double)mem_total_kb / 1024.0 / 1024.0;
-    g_mem_free_gb = (double)mem_avail_kb / 1024.0 / 1024.0;
+    g_mem_avail_gb = (double)mem_avail_kb / 1024.0 / 1024.0;
+    // Only the dropdown shows these; a missing field (-1) reads as 0.
+    long long free_kb = parse_meminfo_field(buf, "MemFree:");
+    long long shmem_kb = parse_meminfo_field(buf, "Shmem:");
+    long long dirty_kb = parse_meminfo_field(buf, "Dirty:");
+    g_mem_free_gb = free_kb > 0 ? (double)free_kb / 1024.0 / 1024.0 : 0.0;
+    g_mem_shared_gb = shmem_kb > 0 ? (double)shmem_kb / 1024.0 / 1024.0 : 0.0;
+    g_mem_dirty_mb = dirty_kb > 0 ? (double)dirty_kb / 1024.0 : 0.0;
 
     long long swap_total_kb = parse_meminfo_field(buf, "SwapTotal:");
     long long swap_free_kb = parse_meminfo_field(buf, "SwapFree:");
@@ -642,6 +669,36 @@ static ProcTicks *proc_slot(ProcTicks *table, int pid) {
     return &table[h];
 }
 
+// Reads /proc/PID/stat into `buf` and copies the process name into `name`.
+// Returns a pointer just past the name's closing ")" (the state field comes
+// next), or NULL if the process is gone or the line is malformed.
+static char *read_proc_stat(int pid, char *buf, size_t buf_size, char name[32]) {
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/stat", pid);
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        return NULL; // exited since readdir()
+    }
+    size_t n = fread(buf, 1, buf_size - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+
+    // "PID (comm) S ppid ...": comm may itself contain spaces or ')',
+    // so it runs from the first '(' to the *last* ')'.
+    char *open_paren = strchr(buf, '(');
+    char *close_paren = strrchr(buf, ')');
+    if (!open_paren || !close_paren || close_paren < open_paren) {
+        return NULL;
+    }
+    size_t len = (size_t)(close_paren - open_paren - 1);
+    if (len >= 32) {
+        len = 31;
+    }
+    memcpy(name, open_paren + 1, len);
+    name[len] = '\0';
+    return close_paren;
+}
+
 // One pass over /proc/[0-9]*/stat: records every process's utime+stime and,
 // if a previous pass exists, turns the per-PID differences into "% of the
 // whole CPU" summed by process name, keeping the top SYSMON_CPU_MAX_PROCS.
@@ -670,21 +727,9 @@ static void sample_cpu_processes(void) {
             continue;
         }
         int pid = atoi(ent->d_name);
-        char path[64], buf[512];
-        snprintf(path, sizeof(path), "/proc/%d/stat", pid);
-        FILE *f = fopen(path, "r");
-        if (!f) {
-            continue; // exited since readdir()
-        }
-        size_t n = fread(buf, 1, sizeof(buf) - 1, f);
-        fclose(f);
-        buf[n] = '\0';
-
-        // "PID (comm) S ppid ...": comm may itself contain spaces or ')',
-        // so it runs from the first '(' to the *last* ')'.
-        char *open_paren = strchr(buf, '(');
-        char *close_paren = strrchr(buf, ')');
-        if (!open_paren || !close_paren || close_paren < open_paren) {
+        char buf[512], name[32];
+        char *close_paren = read_proc_stat(pid, buf, sizeof(buf), name);
+        if (!close_paren) {
             continue;
         }
         // After ") " come fields 3.. (state first); utime/stime are fields
@@ -708,13 +753,6 @@ static void sample_cpu_processes(void) {
         if (old->pid != pid || ticks <= old->ticks) {
             continue; // new since the last scan, or idle
         }
-        char name[32];
-        size_t len = (size_t)(close_paren - open_paren - 1);
-        if (len >= sizeof(name)) {
-            len = sizeof(name) - 1;
-        }
-        memcpy(name, open_paren + 1, len);
-        name[len] = '\0';
         double percent = (double)(ticks - old->ticks) * 100.0 / denom;
         int g = 0;
         while (g < group_count && strcmp(groups[g].name, name) != 0) {
@@ -790,6 +828,153 @@ void sysmon_cpu_reset_process_sample(void) {
     g_cpu_proc_count = 0;
 }
 
+// /proc/pressure/memory: "some avg10=0.00 avg60=0.00 avg300=0.00 total=N".
+// Absent on kernels built without PSI (CONFIG_PSI) or booted with psi=0.
+static void read_memory_pressure(void) {
+    FILE *f = fopen("/proc/pressure/memory", "r");
+    g_psi_available = f && fscanf(f, "some avg10=%lf avg60=%lf avg300=%lf", &g_psi_some[0], &g_psi_some[1],
+                                  &g_psi_some[2]) == 3;
+    if (f) {
+        fclose(f);
+    }
+}
+
+// Finds a /dev/zramN in /proc/swaps and reads that device's mm_stat (first
+// three fields: orig_data_size, compr_data_size, mem_used_total, in bytes)
+// and comp_algorithm (every supported one, the active one in [brackets]).
+static void read_zram(void) {
+    g_swap_zram = false;
+    FILE *f = fopen("/proc/swaps", "r");
+    if (!f) {
+        return;
+    }
+    char line[256], dev[32] = "";
+    while (fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "/dev/%31[a-z0-9]", dev) == 1 && strncmp(dev, "zram", 4) == 0) {
+            break;
+        }
+        dev[0] = '\0';
+    }
+    fclose(f);
+    if (!dev[0]) {
+        return;
+    }
+
+    char path[96];
+    snprintf(path, sizeof(path), "/sys/block/%s/mm_stat", dev);
+    f = fopen(path, "r");
+    unsigned long long orig = 0, compr = 0, used = 0;
+    bool ok = f && fscanf(f, "%llu %llu %llu", &orig, &compr, &used) == 3;
+    if (f) {
+        fclose(f);
+    }
+    if (!ok) {
+        return;
+    }
+    g_swap_zram = true;
+    g_zram_orig_mb = orig / 1048576.0;
+    g_zram_compr_mb = compr / 1048576.0;
+    g_zram_used_mb = used / 1048576.0;
+
+    g_zram_algorithm[0] = '\0';
+    snprintf(path, sizeof(path), "/sys/block/%s/comp_algorithm", dev);
+    f = fopen(path, "r");
+    if (f) {
+        char algos[256];
+        if (fgets(algos, sizeof(algos), f)) {
+            char *open = strchr(algos, '[');
+            char *close = open ? strchr(open, ']') : NULL;
+            if (open && close) {
+                *close = '\0';
+                snprintf(g_zram_algorithm, sizeof(g_zram_algorithm), "%s", open + 1);
+            }
+        }
+        fclose(f);
+    }
+}
+
+// One pass over /proc/[0-9]*: each process's private resident memory,
+// summed by name, keeping the top SYSMON_MEM_MAX_PROCS.
+//
+// "Private" is /proc/PID/statm's resident minus shared pages, which equals
+// RssAnon. Plain RSS counts every shared library again per process (summed
+// for a browser's ~20 processes it said 7.0 GB against a PSS of 3.9 GB);
+// PSS itself (smaps_rollup) would be exact but took ~215 ms here and isn't
+// readable for other users' processes. Private memory gave 3.5 GB in ~6 ms
+// and is readable for every process. A snapshot, no previous scan needed.
+static void sample_mem_processes(void) {
+    DIR *dir = opendir("/proc");
+    if (!dir) {
+        return;
+    }
+    double page_gb = (double)sysconf(_SC_PAGESIZE) / (1024.0 * 1024.0 * 1024.0);
+    enum { MAX_NAMES = 512 };
+    static MemProcess groups[MAX_NAMES];
+    int group_count = 0;
+
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != NULL) {
+        if (ent->d_name[0] < '0' || ent->d_name[0] > '9') {
+            continue;
+        }
+        int pid = atoi(ent->d_name);
+        char path[64];
+        snprintf(path, sizeof(path), "/proc/%d/statm", pid);
+        FILE *f = fopen(path, "r");
+        if (!f) {
+            continue;
+        }
+        unsigned long long size = 0, resident = 0, shared = 0;
+        bool ok = fscanf(f, "%llu %llu %llu", &size, &resident, &shared) == 3;
+        fclose(f);
+        if (!ok || resident <= shared) {
+            continue; // kernel threads have no memory of their own
+        }
+        char buf[512], name[32];
+        if (!read_proc_stat(pid, buf, sizeof(buf), name)) {
+            continue;
+        }
+        int g = 0;
+        while (g < group_count && strcmp(groups[g].name, name) != 0) {
+            g++;
+        }
+        if (g == group_count) {
+            if (group_count == MAX_NAMES) {
+                continue;
+            }
+            snprintf(groups[g].name, sizeof(groups[g].name), "%s", name);
+            groups[g].gb = 0.0;
+            group_count++;
+        }
+        groups[g].gb += (double)(resident - shared) * page_gb;
+    }
+    closedir(dir);
+
+    g_mem_proc_count = 0;
+    while (g_mem_proc_count < SYSMON_MEM_MAX_PROCS) {
+        int best = -1;
+        for (int i = 0; i < group_count; i++) {
+            if (groups[i].gb > 0.0 && (best < 0 || groups[i].gb > groups[best].gb)) {
+                best = i;
+            }
+        }
+        if (best < 0) {
+            break;
+        }
+        g_mem_procs[g_mem_proc_count++] = groups[best];
+        groups[best].gb = 0.0; // taken
+    }
+}
+
+void sysmon_mem_refresh_details(void) {
+    // Fresh totals too, so the dropdown's numbers are from one moment (same
+    // reasoning as sysmon_gpu_refresh_details()). History isn't touched.
+    poll_mem();
+    read_memory_pressure();
+    read_zram();
+    sample_mem_processes();
+}
+
 void sysmon_client_poll(void) {
     poll_cpu();
     poll_mem();
@@ -804,6 +989,12 @@ void sysmon_client_poll(void) {
     // refresh also calls -- so samples stay exactly one per 5s poll.
     if (g_gpu_available) {
         gpu_history_push(g_gpu_percent, g_gpu_temp_c);
+    }
+    g_mem_used_hist[g_mem_hist_head] = g_mem_percent;
+    g_mem_swap_hist[g_mem_hist_head] = g_swap_percent;
+    g_mem_hist_head = (g_mem_hist_head + 1) % SYSMON_MEM_HISTORY_LEN;
+    if (g_mem_hist_len < SYSMON_MEM_HISTORY_LEN) {
+        g_mem_hist_len++;
     }
 }
 
@@ -901,7 +1092,42 @@ double sysmon_gpu_temp_history(int index) {
 int sysmon_mem_percent(void) { return g_mem_percent; }
 double sysmon_mem_used_gb(void) { return g_mem_used_gb; }
 double sysmon_mem_total_gb(void) { return g_mem_total_gb; }
+double sysmon_mem_avail_gb(void) { return g_mem_avail_gb; }
 double sysmon_mem_free_gb(void) { return g_mem_free_gb; }
+double sysmon_mem_cache_gb(void) {
+    double cache = g_mem_avail_gb - g_mem_free_gb;
+    return cache > 0.0 ? cache : 0.0;
+}
+double sysmon_mem_shared_gb(void) { return g_mem_shared_gb; }
+double sysmon_mem_dirty_mb(void) { return g_mem_dirty_mb; }
 double sysmon_swap_used_gb(void) { return g_swap_used_gb; }
 double sysmon_swap_total_gb(void) { return g_swap_total_gb; }
 int sysmon_swap_percent(void) { return g_swap_percent; }
+
+int sysmon_mem_history_len(void) { return g_mem_hist_len; }
+static int mem_history_slot(int index) {
+    int oldest = g_mem_hist_len < SYSMON_MEM_HISTORY_LEN ? 0 : g_mem_hist_head;
+    return (oldest + index) % SYSMON_MEM_HISTORY_LEN;
+}
+double sysmon_mem_used_history(int index) {
+    return (index >= 0 && index < g_mem_hist_len) ? g_mem_used_hist[mem_history_slot(index)] : 0.0;
+}
+double sysmon_mem_swap_history(int index) {
+    return (index >= 0 && index < g_mem_hist_len) ? g_mem_swap_hist[mem_history_slot(index)] : 0.0;
+}
+
+bool sysmon_mem_psi_available(void) { return g_psi_available; }
+double sysmon_mem_psi_some(int window) { return (window >= 0 && window < 3) ? g_psi_some[window] : 0.0; }
+bool sysmon_swap_is_zram(void) { return g_swap_zram; }
+const char *sysmon_zram_algorithm(void) { return g_zram_algorithm; }
+double sysmon_zram_orig_mb(void) { return g_zram_orig_mb; }
+double sysmon_zram_compr_mb(void) { return g_zram_compr_mb; }
+double sysmon_zram_used_mb(void) { return g_zram_used_mb; }
+
+int sysmon_mem_process_count(void) { return g_mem_proc_count; }
+const char *sysmon_mem_process_name(int index) {
+    return (index >= 0 && index < g_mem_proc_count) ? g_mem_procs[index].name : "";
+}
+double sysmon_mem_process_gb(int index) {
+    return (index >= 0 && index < g_mem_proc_count) ? g_mem_procs[index].gb : 0.0;
+}

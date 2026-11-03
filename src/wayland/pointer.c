@@ -24,9 +24,9 @@
 #include "modules/tray/tray_context_menu.h"
 #include "modules/volume/volume.h"
 #include "modules/workspaces/workspaces.h"
-#include "sysmon/sysmon_info_popup.h"
 #include "modules/cpu/cpu_popup.h"
 #include "modules/gpu/gpu_popup.h"
+#include "modules/mem/mem_popup.h"
 #include "wayland/context.h"
 
 // Finds the Output whose bar surface owns `surface`, or NULL if none does (e.g. the
@@ -181,19 +181,19 @@ static void pointer_button(void *data, struct wl_pointer *pointer, uint32_t seri
         eq_popup_close();
         return;
     }
-    if (sysmon_info_popup_is_menu_surface(app->pointer_over_surface)) {
+    if (mem_popup_is_menu_surface(app->pointer_over_surface)) {
         // Read-only content -- a click lands here but there's nothing to
-        // dispatch to, unlike the two interactive popups above; absorbed so
-        // it doesn't fall through to the bar-surface path below (which would
-        // be wrong anyway, since this surface never matches any Output).
+        // dispatch to, unlike the interactive popups above; absorbed so it
+        // doesn't fall through to the bar-surface path below (which would be
+        // wrong anyway, since this surface never matches any Output).
         return;
     }
-    if (sysmon_info_popup_is_catcher_surface(app->pointer_over_surface)) {
-        sysmon_info_popup_close();
+    if (mem_popup_is_catcher_surface(app->pointer_over_surface)) {
+        mem_popup_close();
         return;
     }
     if (cpu_popup_is_menu_surface(app->pointer_over_surface)) {
-        // Read-only content, same as the sysmon info popup above.
+        // Read-only content, same as the memory popup above.
         return;
     }
     if (cpu_popup_is_catcher_surface(app->pointer_over_surface)) {

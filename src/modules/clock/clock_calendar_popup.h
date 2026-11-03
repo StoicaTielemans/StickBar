@@ -17,7 +17,7 @@
 // obvious primary left-click action). `box_x/y/w/h` is the clock box's own
 // screen-space rect, as recorded by clock_render(). Right-anchored the same
 // way modules/tray/tray_context_menu.c is, since the clock lives in the bar's
-// right region, not the left (unlike sysmon/sysmon_info_popup.c's popups).
+// right region, not the left (unlike the CPU/GPU/memory popups).
 void clock_calendar_popup_toggle(Output *output, double box_x, double box_y, double box_w, double box_h);
 
 void clock_calendar_popup_close(void);

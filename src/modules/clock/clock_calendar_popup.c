@@ -380,7 +380,7 @@ void clock_calendar_popup_toggle(Output *output, double box_x, double box_y, dou
     // Same anchor+margin math (including the BAR.height correction) as
     // modules/tray/tray_context_menu.c -- see CLAUDE.md's "D-Bus / system
     // tray" section for the reasoning. Right-anchored, unlike
-    // sysmon/sysmon_info_popup.c, because the clock lives in the bar's right
+    // modules/cpu/cpu_popup.c, because the clock lives in the bar's right
     // region, not the left.
     int top_margin = (int)(box_y + box_h) - BAR.height;
     int right_margin = output->width - (int)(box_x + box_w);

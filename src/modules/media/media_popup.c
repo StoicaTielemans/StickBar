@@ -420,8 +420,8 @@ void media_popup_open(Output *output, Color accent, double box_x, double box_y, 
     }
 
     // Same top_margin math (including the BAR.height correction) as every
-    // other popup in this bar -- see sysmon/sysmon_info_popup.c for the
-    // reasoning. Anchored TOP+LEFT since the media widget lives in the bar's
+    // other popup in this bar -- see CLAUDE.md's "D-Bus / system tray"
+    // for the reasoning. Anchored TOP+LEFT since the media widget lives in the bar's
     // center region -- see media_popup.h's own doc comment.
     int top_margin = (int)(box_y + box_h) - BAR.height;
     int left_margin = (int)box_x;

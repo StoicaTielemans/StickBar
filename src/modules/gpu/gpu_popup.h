@@ -10,9 +10,9 @@
 // btop-style braille graphs of the last 5 minutes of usage and temperature,
 // VRAM/power/fan meters, clock and video-engine lines, and the top VRAM-using
 // apps. Read-only (clicks on it are absorbed, a catcher click closes it),
-// TOP+LEFT-anchored under the box like sysmon/sysmon_info_popup.c -- the GPU
-// box lives in the bar's left region. Opening it closes the CPU/memory info
-// popup and vice versa, since both drop down from the same spot.
+// TOP+LEFT-anchored under the box like modules/cpu/cpu_popup.c -- the GPU
+// box lives in the bar's left region. Opening it closes the CPU and memory
+// dropdowns and vice versa, since all three drop down from the same spot.
 void gpu_popup_open(Output *output, double box_x, double box_y, double box_w, double box_h);
 void gpu_popup_close(void);
 

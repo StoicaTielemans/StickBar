@@ -17,8 +17,7 @@
 double cpu_render(cairo_t *cr, Output *output, double x, double box_top, double box_height);
 
 // Hit-tests (x, y) against `output`'s most recently rendered box. Right-click
-// opens a read-only info dropdown (per-core usage, frequency, temperature,
-// load average) via sysmon/sysmon_info_popup.c; left-click is a no-op (there's
+// opens the CPU dropdown (modules/cpu/cpu_popup.c); left-click is a no-op (there's
 // no mute-equivalent primary action for a system monitor widget). No-op if
 // (x, y) doesn't land on the box.
 void cpu_handle_click(Output *output, double x, double y, uint32_t button);

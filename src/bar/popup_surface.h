@@ -20,8 +20,8 @@ typedef struct PopupSurface PopupSurface; // opaque
 // tooltip/popup modules can reuse it directly -- all four margins are exposed
 // (not just top/right) because a popup anchored under a *left*-region trigger
 // needs TOP+LEFT with an explicit left_margin instead of TOP+RIGHT with a
-// right_margin (see sysmon/sysmon_info_popup.c, which right-anchoring left
-// the CPU/GPU/memory dropdowns clipped off the left edge of the screen for --
+// right_margin (see modules/cpu/cpu_popup.c -- right-anchoring left the
+// CPU/GPU/memory dropdowns clipped off the left edge of the screen for --
 // a real bug caught by the user, not a hypothetical).
 PopupSurface *popup_surface_create(AppContext *app, Output *output, int width, int height,
                                     int top_margin, int right_margin, int bottom_margin, int left_margin,

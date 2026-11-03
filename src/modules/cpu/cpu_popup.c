@@ -8,11 +8,11 @@
 #include "bar/popup_surface.h"
 #include "config/glyphs.h"
 #include "modules/gpu/gpu_popup.h"
+#include "modules/mem/mem_popup.h"
 #include "render/braille_graph.h"
 #include "render/meter_bar.h"
 #include "render/module_box.h"
 #include "sysmon/sysmon_client.h"
-#include "sysmon/sysmon_info_popup.h"
 
 // Sized generously (this machine has 2 monitors), matching the same
 // MAX_TRACKED_OUTPUTS convention used by every other popup in this project.
@@ -455,7 +455,7 @@ void cpu_popup_open(Output *output, double box_x, double box_y, double box_w, do
     (void)box_w; // left-anchored: only the box's left edge matters
     cpu_popup_close();
     gpu_popup_close();         // all three sysmon dropdowns open at the same spot
-    sysmon_info_popup_close();
+    mem_popup_close();
 
     // Start a fresh process measurement: this scan only primes it, the one
     // cpu_popup_tick() runs ~1s from now produces the first real figures.
@@ -469,8 +469,10 @@ void cpu_popup_open(Output *output, double box_x, double box_y, double box_w, do
     g_popup.popup_width = content_w + OUTER_MARGIN * 2.0;
     g_popup.popup_height = paint_content(NULL, content_w);
 
-    // Same TOP+LEFT anchor math (including the BAR.height correction) as
-    // sysmon/sysmon_info_popup.c -- see its comment for why left-anchored.
+    // TOP+LEFT, with the BAR.height correction every popup needs (see
+    // CLAUDE.md "D-Bus / system tray"): the box lives in the bar's left
+    // region, so the popup grows rightward from the box's left edge -- a
+    // right anchor would push it off the left of the screen.
     int top_margin = (int)(box_y + box_h) - BAR.height;
     int left_margin = (int)box_x;
     g_popup.popup = popup_surface_create(output->app, output, (int)g_popup.popup_width, (int)g_popup.popup_height,

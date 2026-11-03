@@ -17,8 +17,7 @@
 double gpu_render(cairo_t *cr, Output *output, double x, double box_top, double box_height);
 
 // Hit-tests (x, y) against `output`'s most recently rendered box. Right-click
-// opens a read-only info dropdown (utilization, VRAM, power, fan, pstate) via
-// sysmon/sysmon_info_popup.c; left-click is a no-op. No-op if (x, y) doesn't
+// opens the GPU dropdown (modules/gpu/gpu_popup.c); left-click is a no-op. No-op if (x, y) doesn't
 // land on the box.
 void gpu_handle_click(Output *output, double x, double y, uint32_t button);
 

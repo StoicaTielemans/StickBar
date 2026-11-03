@@ -12,10 +12,9 @@
 // under the trigger box at (box_x, box_y, box_h) on `output` (box_w is
 // unused -- only the box's left edge matters for a left-anchored popup) --
 // same TOP+LEFT anchor math (including the BAR.height correction) as
-// sysmon/sysmon_info_popup.c, since the privacy module lives in the bar's
-// left region like CPU/GPU/memory. Always styled in COLORS.maroon (unlike
-// sysmon_info_popup_open(), this popup has only the one caller/accent, so
-// there's no need to parameterize it). Closes any previously open privacy
+// modules/cpu/cpu_popup.c, since the privacy module lives in the bar's
+// left region like CPU/GPU/memory. Always styled in COLORS.maroon (it has only
+// the one caller/accent, so there's no need to parameterize it). Closes any previously open privacy
 // info popup first (single-popup-at-a-time, same v1 simplification as every
 // other popup in this project -- see CLAUDE.md's "Known limitations").
 void privacy_info_popup_open(Output *output, const char *body,

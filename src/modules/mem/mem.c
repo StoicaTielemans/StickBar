@@ -5,9 +5,9 @@
 
 #include "config/config.h"
 #include "config/glyphs.h"
+#include "modules/mem/mem_popup.h"
 #include "render/module_box.h"
 #include "sysmon/sysmon_client.h"
-#include "sysmon/sysmon_info_popup.h"
 
 // How many different Output pointers we keep the box's hit-rect for -- sized
 // generously (this machine has 2 monitors), matching the convention already
@@ -80,14 +80,5 @@ void mem_handle_click(Output *output, double x, double y, uint32_t button) {
         return;
     }
 
-    // Mirrors the reference SystemMonitor.qml's buildTooltip()'s MEM section.
-    char body[256];
-    snprintf(body, sizeof(body),
-             "USED: %.2f/%.2f GB (%d%%)\n"
-             "FREE: %.2f GB\n"
-             "SWAP: %.2f/%.2f GB (%d%%)",
-             sysmon_mem_used_gb(), sysmon_mem_total_gb(), sysmon_mem_percent(), sysmon_mem_free_gb(),
-             sysmon_swap_used_gb(), sysmon_swap_total_gb(), sysmon_swap_percent());
-
-    sysmon_info_popup_open(output, COLORS.yellow, body, rect->x, rect->y, rect->w, rect->h);
+    mem_popup_open(output, rect->x, rect->y, rect->w, rect->h);
 }

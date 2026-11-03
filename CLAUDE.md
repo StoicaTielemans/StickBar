@@ -175,9 +175,10 @@ stickBar/
     │   │                         centered text, left-aligned text (added for the
     │   │                         tray's menu rows) -- used by every widget
     │   ├── braille_graph.c       btop-style braille-dot history graph (pure
-    │   │                         cairo), used by the network and GPU dropdowns
+    │   │                         cairo), used by the network/CPU/GPU/memory
+    │                             dropdowns
     │   └── meter_bar.c           segmented "how full" bar (btop's ▰▰▱▱ meters),
-    │                             pure cairo, first used by the GPU dropdown
+    │                             pure cairo, used by the CPU/GPU/memory dropdowns
     ├── hyprland/
     │   ├── ipc_request.c         request socket (.socket.sock): one connection per
     │                             command, cJSON parsing helper
@@ -226,13 +227,10 @@ stickBar/
     │   │                         loadavg, and NVML (dlopen'd libnvidia-ml) for the
     │   │                         GPU, all re-read on every 5s poll; plain synchronous
     │   │                         accessors, no locking (single-threaded polling,
-    │   │                         unlike pulse_client.c)
-    │   └── sysmon_info_popup.c   *read-only* text info dropdown, now only
-    │                             used by modules/mem (CPU and GPU have their
-    │                             own redesigned popups) -- left-anchored, unlike
-    │                             tray_context_menu.c's and device_popup.c's own
-    │                             right-anchored popups, since these three modules
-    │                             live in the bar's left region
+    │                             unlike pulse_client.c); also the dropdown-only
+    │                             details (process scans, PSI, zram, clocks). The
+    │                             old shared text dropdown (sysmon_info_popup.c)
+    │                             is gone -- each module has its own popup now
     ├── mpris/                    MPRIS (media player) plumbing for the media module
     │                             (see "Media (MPRIS)" below) -- structurally the
     │                             mpris-domain twin of dbus/'s SNI plumbing, reusing
@@ -281,8 +279,12 @@ stickBar/
         │                         fan meters, clocks, top VRAM apps; repainted
         │                         every 5s poll while open
         ├── mem/
-        │   └── mem.c             memory % module box render + hit-rect +
-        │                         right-click-opens-dropdown handling
+        │   ├── mem.c             memory % module box render + hit-rect +
+        │   │                     right-click-opens-dropdown handling
+        │   └── mem_popup.c       memory dropdown: total/swap/pressure-pill
+        │                         header, braille used + swap graphs, an
+        │                         apps/cache/free bar, RAM/swap meters, zram/
+        │                         avail/PSI rows, top apps by private memory
         ├── clock/
         │   ├── clock.c           timerfd-driven formatted time string + rendering +
         │   │                     hit-rect + right-click-opens-calendar handling
@@ -372,7 +374,8 @@ stickBar/
   `modules/media/media_popup.h`, `modules/network/network.h` /
   `modules/network/network_info_popup.h`,
   `modules/powermenu/arch_logo.h` / `modules/powermenu/power_menu.h`,
-  `audio/device_popup.h`, and `sysmon/sysmon_info_popup.h` for click/scroll
+  `modules/cpu/cpu_popup.h` / `modules/gpu/gpu_popup.h` /
+  `modules/mem/mem_popup.h`, and `audio/device_popup.h` for click/scroll
   routing — a flat list of explicit call sites, not a generic dispatch table
   (see "D-Bus / system tray" below for why that still isn't worth building;
   now at N=11 clickable bar-surface modules plus 7 popup kinds, still cheap
@@ -384,7 +387,7 @@ stickBar/
   never stored on any `Output` (only `bar_surface.c`-owned surfaces are).
   `pointer.c`'s button handler checks each popup kind's surfaces in turn (the
   power menu's, the tray context menu's, the audio device popup's, the
-  sysmon info popup's, the media popup's, then the network info popup's —
+  CPU/GPU/memory dropdowns', the media popup's, then the network info popup's —
   each via its own `_is_menu_surface()` / `_is_catcher_surface()` pair;
   since every popup kind's surfaces are disjoint from every other's, the
   order among them doesn't actually matter functionally), *then* falls back
@@ -984,8 +987,9 @@ dropdown, rather than one shared tooltip for all three.
   - **Redesigned GPU dropdown (per explicit user request, third in the popup
     restyling pass after the calendar and network)** —
     `modules/gpu/gpu_popup.c`, its own popup now instead of a text block in
-    the shared `sysmon_info_popup.c` (still used by CPU and memory; opening
-    either closes the other, since both drop down from the same spot).
+    the old shared `sysmon_info_popup.c` (deleted once memory moved over too;
+    opening any of the CPU/GPU/memory dropdowns closes the other two, since
+    all three drop down from the same spot).
     Top to bottom: header (short name with "NVIDIA GeForce" stripped, driver
     version, and a P-state pill: P0-2 `busy` peach, P3-7 `active` yellow,
     P8+ `idle` green); a graph card with braille usage (0-100%, green →
@@ -1066,6 +1070,48 @@ dropdown, rather than one shared tooltip for all three.
       model/cores/threads vs `lscpu`, P/E split vs sysfs, uptime vs
       `uptime -p`, clocks vs `/proc/cpuinfo`, and a 4-loop load; and the
       `WAYLAND_DEBUG` commit timing above.
+  - **Redesigned memory dropdown (fifth and last in the restyling pass)** —
+    `modules/mem/mem_popup.c`, the CPU dropdown's twin in layout. With it,
+    nothing used `sysmon/sysmon_info_popup.c` any more, so that file was
+    deleted (comments that cited it as the TOP+LEFT example now point at
+    `cpu_popup.c`).
+    - **Header**: total, swap kind (`zram swap` / `swap` / `no swap`), and a
+      pill from **PSI** (`/proc/pressure/memory`, `some avg10`: `ok` <1%
+      green, `pressure` <10% yellow, `thrashing` red), not from percent used
+      -- RAM that looks full but is mostly cache isn't a problem, stalling
+      is. Falls back to percent used (<70/<90) without PSI.
+    - **Apps / cache / free bar**: apps = total - available (the box's own
+      "used"), cache = available - free (reclaimable), free = MemFree; the
+      three add up to the total, which explains a tiny "free" at a glance.
+      Note `sysmon_mem_free_gb()` used to return *MemAvailable* (the old
+      text dropdown called that "FREE"); it's now real MemFree, and
+      available is `sysmon_mem_avail_gb()`.
+    - **Rows**: RAM/SWAP meters; ZRAM (only if `/proc/swaps` lists a
+      `/dev/zramN`: active algorithm from the `[bracketed]` entry of
+      `comp_algorithm`, stored -> compressed from `mm_stat`'s first two
+      fields with the ratio, and its real RAM use from the third); AVAIL with
+      shared (Shmem) and dirty; PRESS, the three PSI `some` averages.
+    - **Top apps by *private* memory** (`sample_mem_processes()`):
+      `/proc/PID/statm` resident - shared (= RssAnon), summed by name like
+      the CPU list. Measured on this desktop while choosing: summed **RSS**
+      counts shared libraries once per process (helium 7.0 GB); **PSS** from
+      `smaps_rollup` is exact (3.9 GB) but took ~215 ms and is unreadable
+      for 328 of 439 processes (other users'); private memory gave 3.5 GB in
+      ~6 ms (Python) and is readable for all. A snapshot, so unlike the CPU
+      list it's ready at open -- no priming scan, no tick. The `stat`-name
+      parsing is shared with the CPU scan (`read_proc_stat()`).
+    - **History**: used %/swap % ring buffer pushed in
+      `sysmon_client_poll()`; the graph's peak labels start from the current
+      (refreshed) values, so `used 40%` never sits beside `peak 31%` when
+      the fresh read is ahead of the last poll sample.
+    - Verified with real `ydotool` right-clicks on a second bar instance:
+      apps/free/avail vs `free -b`, zram vs `mm_stat`, PSI vs
+      `/proc/pressure/memory`; with a 3 GB `bytearray` held by `python3`,
+      apps rose 2.8 GB and `python3 3.00 GB` showed second in TOP APPS;
+      `WAYLAND_DEBUG` showed the popup recommitting on the 5s poll. **Gotcha
+      while testing**: the memory box is at x≈370-422 on DP-2, not where a
+      downscaled strip screenshot suggested -- log the recorded hit-rect
+      rather than eyeballing coordinates when a click seems to do nothing.
   - If the library or driver is missing, `sysmon_gpu_available()` stays false,
     the GPU module shows `--` instead of a percent, and its dropdown shows an
     explicit "No NVIDIA GPU detected" message instead of stale/zero-looking
@@ -1095,7 +1141,8 @@ dropdown, rather than one shared tooltip for all three.
   ("the popup get cut off the left side of the screen"). Fixed by generalizing
   `popup_surface_create()`'s signature to accept all four margins (updating
   its two existing callers to pass `0, 0` for the now-explicit bottom/left
-  params) and having `sysmon_info_popup.c` anchor TOP+LEFT with an explicit
+  params) and having the left-region popups (then `sysmon_info_popup.c`,
+  now `cpu_popup.c`/`gpu_popup.c`/`mem_popup.c`) anchor TOP+LEFT with an explicit
   `left_margin = box_x` instead — grows rightward from the trigger's left
   edge, which is the correct direction for a left-region trigger. No
   overflow-past-the-*right*-edge clamping was added (unlike the right-anchored
@@ -1313,7 +1360,7 @@ userdata pointer, `in_use`-gated iteration, `_count()`/`_get(index)` accessors).
   pump — cheap, since it's a no-op unless the popup is actually open) as
   `device_popup.c`'s own `device_popup_refresh_if_open()`.
   - **Anchored TOP+LEFT under the trigger's left edge**, like
-    `sysmon/sysmon_info_popup.c` rather than the tray's/audio popup's own
+    `modules/cpu/cpu_popup.c` rather than the tray's/audio popup's own
     TOP+RIGHT anchoring — chosen because the media widget lives in the bar's
     *center* region rather than flush against either edge, so growing the popup
     rightward from the trigger's left edge was judged the more reasonable default.
@@ -1443,8 +1490,8 @@ the identical 5000ms interval).
   makes that same swap: `wayland/pointer.c` has no hover-duration/timer
   infrastructure.
   `modules/network/network_info_popup.c` is structurally the network-domain twin
-  of `sysmon/sysmon_info_popup.c` (read-only, same catcher shape) — but
-  anchored **TOP+RIGHT**, unlike `sysmon_info_popup.c`'s TOP+LEFT, since the
+  of `modules/cpu/cpu_popup.c` (read-only, same catcher shape) — but
+  anchored **TOP+RIGHT**, unlike `cpu_popup.c`'s TOP+LEFT, since the
   network widget lives in the bar's *right* region (between the EQ module and
   Clock -- otherwise matching the reference `Bar.qml`'s own `rightLayout`
   order) rather than the left like CPU/GPU/memory.
@@ -1578,14 +1625,15 @@ and `modules/privacy/privacy.c` + `privacy_info_popup.c` are the bar-facing half
 - **No left-click action; right-click opens a read-only dropdown** — matches
   cpu/gpu/mem/network's own established convention exactly (no obvious single
   "primary action" for a status-only widget). `modules/privacy/
-  privacy_info_popup.c` is structurally sysmon_info_popup.c's near-twin: same
+  privacy_info_popup.c` is structurally the old text-only sysmon dropdown's
+  near-twin (that file is gone now; `cpu_popup.c` has the same shape): same
   TOP+LEFT anchor math (including the `BAR.height` correction), same per-output
   click-catcher creation, same read-only "absorb click on menu surface, close on
   catcher click" behavior, snapshotted at click time rather than live-refreshed
   while open (this data only changes on a real PipeWire graph change anyway, and
   a right-click re-snapshots it fresh each time) — the one difference is it has
-  only the one caller/accent (`COLORS.maroon`), so unlike
-  `sysmon_info_popup_open()` it takes no `accent` parameter. The dropdown body
+  only the one caller/accent (`COLORS.maroon`), so it takes no `accent`
+  parameter. The dropdown body
   groups entries into `MICROPHONE:`/`WEBCAM:`/`SCREEN SHARE:` sections (a
   section header is omitted entirely if empty), each app name on its own
   indented line, built fresh in `privacy_handle_click()` from
@@ -1643,7 +1691,7 @@ this bar has (the button, and the keybind below) always wants toggle semantics.
   `PanelWindow` with its own centered button row, not one surface spanning a
   combined virtual desktop) — same `popup_surface_create(..., 0, 0, ...,
   ANCHOR_TOP|BOTTOM|LEFT|RIGHT, ...)` shape every other popup's *click-catcher*
-  surfaces already use (see `sysmon/sysmon_info_popup.c`'s `create_catchers()`),
+  surfaces already use (see e.g. `modules/cpu/cpu_popup.c`'s `create_catchers()`),
   except this surface actually draws visible content instead of staying
   transparent. The real per-output pixel size is read back from `Output.width`/
   `Output.height` (already tracked from `wl_output`'s own `mode` event) rather
@@ -2006,8 +2054,7 @@ this module never opens the DAC's HID device.
   webcam/screen-share ever shows the wrong icon in practice, that function is
   the first thing to re-check.
 - **Privacy: no per-app mute/stop control** — the dropdown is read-only, same
-  "list what's active" scope as `sysmon_info_popup.c`'s CPU/GPU/memory
-  dropdowns; there's no equivalent of PipeWire's own ability to suspend a
+  "list what's active" scope as the CPU/GPU/memory dropdowns; there's no equivalent of PipeWire's own ability to suspend a
   node from this bar.
 - **Privacy: node/link tables are capped at 256 entries each**
   (`MAX_PW_NODES`/`MAX_PW_LINKS` in `pipewire_client.c`) — comfortably above

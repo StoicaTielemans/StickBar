@@ -124,11 +124,48 @@ double sysmon_gpu_temp_history(int index);
 
 // --- Memory ---
 int sysmon_mem_percent(void);
-double sysmon_mem_used_gb(void);
+double sysmon_mem_used_gb(void);  // total - available: what apps hold ("apps" in the dropdown)
 double sysmon_mem_total_gb(void);
-double sysmon_mem_free_gb(void);
+double sysmon_mem_avail_gb(void); // MemAvailable: free + what the kernel can reclaim
+double sysmon_mem_free_gb(void);  // MemFree: truly unused, usually small
+double sysmon_mem_cache_gb(void); // available - free: reclaimable cache
+double sysmon_mem_shared_gb(void);
+double sysmon_mem_dirty_mb(void);
 double sysmon_swap_used_gb(void);
 double sysmon_swap_total_gb(void);
 int sysmon_swap_percent(void);
+
+// Used % / swap % of the last SYSMON_MEM_HISTORY_LEN 5s polls (5 minutes).
+// Index 0 is the oldest.
+#define SYSMON_MEM_HISTORY_LEN 60
+int sysmon_mem_history_len(void);
+double sysmon_mem_used_history(int index);
+double sysmon_mem_swap_history(int index);
+
+// Dropdown-only details: memory pressure (PSI), zram stats and the top apps
+// by private memory. Not part of the 5s poll; the dropdown calls this on
+// open and on each poll while it's open. A snapshot, so unlike the CPU's
+// process list it's ready immediately.
+void sysmon_mem_refresh_details(void);
+
+// PSI "some" averages from /proc/pressure/memory: % of time at least one
+// task was stalled waiting on memory. window 0/1/2 = 10s/60s/300s.
+bool sysmon_mem_psi_available(void);
+double sysmon_mem_psi_some(int window);
+
+// Swap backed by a /dev/zramN device (compressed RAM), with its stats from
+// /sys/block/zramN/mm_stat. Sizes in MiB.
+bool sysmon_swap_is_zram(void);
+const char *sysmon_zram_algorithm(void); // e.g. "zstd"
+double sysmon_zram_orig_mb(void);        // data stored, uncompressed
+double sysmon_zram_compr_mb(void);       // the same data compressed
+double sysmon_zram_used_mb(void);        // RAM zram really uses (incl. overhead)
+
+// Top apps by private resident memory (statm resident - shared, i.e. RssAnon),
+// summed by process name. Biggest first.
+#define SYSMON_MEM_MAX_PROCS 5
+int sysmon_mem_process_count(void);
+const char *sysmon_mem_process_name(int index);
+double sysmon_mem_process_gb(int index);
 
 #endif

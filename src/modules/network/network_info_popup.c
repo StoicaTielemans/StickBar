@@ -423,7 +423,7 @@ void network_info_popup_open(Output *output, double box_x, double box_y, double 
     // Same TOP+RIGHT anchor+margin math (including the BAR.height
     // correction) as audio/device_popup.c and modules/tray/tray_context_menu.c
     // -- see CLAUDE.md's "D-Bus / system tray" section for the reasoning.
-    // Right-anchored, unlike sysmon/sysmon_info_popup.c's own TOP+LEFT,
+    // Right-anchored, unlike modules/cpu/cpu_popup.c's TOP+LEFT,
     // because the network widget lives in the bar's *right* region.
     int top_margin = (int)(box_y + box_h) - BAR.height;
     int right_margin = output->width - (int)(box_x + box_w);

@@ -13,9 +13,9 @@
 // audio/device_popup.c (same popup/click-catcher/outside-click-dismiss
 // shape, same live "recompute on every relevant update while open" model --
 // see media_popup_refresh_if_open() below) rather than
-// sysmon/sysmon_info_popup.c's read-only twin, since this one is
+// the read-only CPU/GPU/memory popups, since this one is
 // interactive. Anchored TOP+LEFT with box_x as the left_margin, same
-// left-anchored math as sysmon/sysmon_info_popup.c -- chosen because the
+// left-anchored math as modules/cpu/cpu_popup.c -- chosen because the
 // media widget lives in the bar's *center* region rather than flush against
 // either edge, so growing the popup rightward from the trigger's left edge
 // (rather than the tray/audio popups' own right-anchored growth) was judged

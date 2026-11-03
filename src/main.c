@@ -28,6 +28,7 @@
 #include "network/network_client.h"
 #include "modules/cpu/cpu_popup.h"
 #include "modules/gpu/gpu_popup.h"
+#include "modules/mem/mem_popup.h"
 #include "modules/network/network_info_popup.h"
 #include "pipewire/pipewire_client.h"
 #include "sysmon/sysmon_client.h"
@@ -392,6 +393,7 @@ int main(void) {
                 // Moves the GPU dropdown's graphs along; no-op if closed.
                 gpu_popup_refresh_if_open();
                 cpu_popup_refresh_if_open();
+                mem_popup_refresh_if_open();
                 // Piggybacks on this same 5-second timer rather than adding
                 // a second poll source -- matches the reference
                 // NetworkMonitor.qml's own identical 5000ms interval.

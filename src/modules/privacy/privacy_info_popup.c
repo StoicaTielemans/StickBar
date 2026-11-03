@@ -6,8 +6,7 @@
 #include "render/module_box.h"
 
 // Sized generously (this machine has 2 monitors), matching the same
-// MAX_TRACKED_OUTPUTS convention used by sysmon/sysmon_info_popup.c and
-// every other per-output popup table in this project.
+// MAX_TRACKED_OUTPUTS convention used by every other per-output popup table in this project.
 #define MAX_TRACKED_OUTPUTS 8
 #define OUTER_MARGIN 8.0 // matches Config.bar.popupPadding, same as the other popups
 #define BODY_MAX_LEN 2048
@@ -70,7 +69,7 @@ void privacy_info_popup_open(Output *output, const char *body,
     g_popup.popup_height = text_h + OUTER_MARGIN * 2.0;
 
     // Same top_margin math (including the BAR.height correction) as
-    // sysmon/sysmon_info_popup.c -- see CLAUDE.md's "D-Bus / system tray"
+    // modules/cpu/cpu_popup.c -- see CLAUDE.md's "D-Bus / system tray"
     // section for the original reasoning. Anchored TOP+LEFT with a
     // left_margin, since the privacy module lives in the bar's left region
     // like CPU/GPU/memory.

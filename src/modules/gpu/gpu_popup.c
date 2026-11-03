@@ -7,11 +7,11 @@
 #include "bar/popup_surface.h"
 #include "config/glyphs.h"
 #include "modules/cpu/cpu_popup.h"
+#include "modules/mem/mem_popup.h"
 #include "render/braille_graph.h"
 #include "render/meter_bar.h"
 #include "render/module_box.h"
 #include "sysmon/sysmon_client.h"
-#include "sysmon/sysmon_info_popup.h"
 
 // Sized generously (this machine has 2 monitors), matching the same
 // MAX_TRACKED_OUTPUTS convention used by every other popup in this project.
@@ -425,8 +425,8 @@ static void destroy_catchers(void) {
 void gpu_popup_open(Output *output, double box_x, double box_y, double box_w, double box_h) {
     (void)box_w; // left-anchored: only the box's left edge matters
     gpu_popup_close();
-    sysmon_info_popup_close(); // same drop-down spot as the CPU/memory popups
-    cpu_popup_close();
+    cpu_popup_close(); // all three sysmon dropdowns open at the same spot
+    mem_popup_close();
 
     // VRAM/fan/power/clocks/apps aren't polled in the background (see
     // sysmon_gpu_refresh_details()) -- fetch them now, before measuring.
@@ -437,8 +437,7 @@ void gpu_popup_open(Output *output, double box_x, double box_y, double box_w, do
     g_popup.popup_width = content_w + OUTER_MARGIN * 2.0;
     g_popup.popup_height = paint_content(NULL, content_w);
 
-    // Same TOP+LEFT anchor math (including the BAR.height correction) as
-    // sysmon/sysmon_info_popup.c -- see its comment for why left-anchored.
+    // Same TOP+LEFT anchor math as modules/cpu/cpu_popup.c.
     int top_margin = (int)(box_y + box_h) - BAR.height;
     int left_margin = (int)box_x;
     g_popup.popup = popup_surface_create(output->app, output, (int)g_popup.popup_width, (int)g_popup.popup_height,

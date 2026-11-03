@@ -26,6 +26,13 @@
 #define TRACK_BUF_SIZE 300
 #define TIME_BUF_SIZE 16
 
+// Prev/play-pause/next glyph size -- deliberately larger than the track text
+// (FONT.label, 14px) so the controls read as buttons and are easier to hit.
+// Local tuning, not a shared FONT token. Column widths and the row height
+// are measured from the glyphs at this size (compute_layout()), and click
+// hit-testing uses those same columns, so changing it needs nothing else.
+#define CONTROL_ICON_PX 22
+
 // Timeline (progress bar) geometry, read-only -- no click-to-seek in this
 // pass, see media_popup_handle_click()'s own doc comment for why.
 #define TIMELINE_W 160.0
@@ -156,20 +163,20 @@ static void compute_layout(void) {
     char buf[5];
     glyph_utf8(GLYPH_ICON_MEDIA_PREV, buf);
     double prev_w, prev_h;
-    module_box_measure_text(buf, FONT.heading, false, &prev_w, &prev_h);
+    module_box_measure_text(buf, CONTROL_ICON_PX, false, &prev_w, &prev_h);
 
     glyph_utf8(GLYPH_ICON_MEDIA_PLAY, buf);
     double play_w, play_h;
-    module_box_measure_text(buf, FONT.heading, false, &play_w, &play_h);
+    module_box_measure_text(buf, CONTROL_ICON_PX, false, &play_w, &play_h);
     glyph_utf8(GLYPH_ICON_MEDIA_PAUSE, buf);
     double pause_w, pause_h;
-    module_box_measure_text(buf, FONT.heading, false, &pause_w, &pause_h);
+    module_box_measure_text(buf, CONTROL_ICON_PX, false, &pause_w, &pause_h);
     double playpause_w = play_w > pause_w ? play_w : pause_w;
     double playpause_h = play_h > pause_h ? play_h : pause_h;
 
     glyph_utf8(GLYPH_ICON_MEDIA_NEXT, buf);
     double next_w, next_h;
-    module_box_measure_text(buf, FONT.heading, false, &next_w, &next_h);
+    module_box_measure_text(buf, CONTROL_ICON_PX, false, &next_w, &next_h);
 
     // "00:00" as a representative sample -- fixed-width enough in practice
     // (this project's own font is monospace) that the column doesn't visibly
@@ -298,17 +305,17 @@ static void draw_row(cairo_t *cr, int i) {
 
     bool can_prev = mpris_player_can_go_previous(player);
     glyph_utf8(GLYPH_ICON_MEDIA_PREV, glyph_buf);
-    module_box_draw_text_left(cr, control_prev_x(), row->controls_y, row->controls_h, glyph_buf, FONT.heading, false,
+    module_box_draw_text_left(cr, control_prev_x(), row->controls_y, row->controls_h, glyph_buf, CONTROL_ICON_PX, false,
                                can_prev ? g_popup.accent : COLORS.overlay0);
 
     bool playing = mpris_player_is_playing(player);
     glyph_utf8(playing ? GLYPH_ICON_MEDIA_PAUSE : GLYPH_ICON_MEDIA_PLAY, glyph_buf);
-    module_box_draw_text_left(cr, control_playpause_x(), row->controls_y, row->controls_h, glyph_buf, FONT.heading,
+    module_box_draw_text_left(cr, control_playpause_x(), row->controls_y, row->controls_h, glyph_buf, CONTROL_ICON_PX,
                                false, g_popup.accent);
 
     bool can_next = mpris_player_can_go_next(player);
     glyph_utf8(GLYPH_ICON_MEDIA_NEXT, glyph_buf);
-    module_box_draw_text_left(cr, control_next_x(), row->controls_y, row->controls_h, glyph_buf, FONT.heading, false,
+    module_box_draw_text_left(cr, control_next_x(), row->controls_y, row->controls_h, glyph_buf, CONTROL_ICON_PX, false,
                                can_next ? g_popup.accent : COLORS.overlay0);
 
     module_box_draw_text_left(cr, control_track_x(), row->controls_y, row->controls_h, g_popup.track_text[i],

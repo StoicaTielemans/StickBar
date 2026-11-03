@@ -103,6 +103,15 @@
 #define GLYPH_ICON_RESTART   0xF0453u // nf-md-restart
 #define GLYPH_ICON_SHUTDOWN  0xF0425u // nf-md-power
 
+// Tray menu toggle entries (DBusMenu toggle-type checkmark / radio), on and
+// off -- confirmed present in JetBrainsMonoNerdFont-Regular.ttf's cmap via
+// fontTools (md-checkbox_marked / _blank_outline, md-radiobox_marked /
+// _blank).
+#define GLYPH_ICON_CHECKBOX_ON  0xF0132u
+#define GLYPH_ICON_CHECKBOX_OFF 0xF0131u
+#define GLYPH_ICON_RADIO_ON     0xF043Eu
+#define GLYPH_ICON_RADIO_OFF    0xF043Du
+
 // Encodes a single Unicode codepoint as UTF-8 into `out`, nul-terminated.
 // `out` must have room for at least 5 bytes (up to 4 bytes of encoding + '\0').
 // Returns the number of encoded bytes (excluding the terminator).

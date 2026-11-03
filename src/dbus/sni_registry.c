@@ -27,6 +27,7 @@ struct SniItem {
     char bus_name[256];
     char path[256];
     char id[128];
+    char title[128];     // SNI Title ("Steam"), "" if the item doesn't set one
     char menu_path[256]; // empty or "/" means "no menu" (see sni_item_has_menu)
     char icon_name[128];       // used only as a fallback when IconPixmap is absent
     char icon_theme_path[512]; // per-item IconThemePath override, if the item set one
@@ -93,6 +94,10 @@ bool sni_item_has_menu(SniItem *item) {
     // but not meaningful. An empty string covers implementations that omit the
     // property from GetAll entirely instead.
     return item->menu_path[0] != '\0' && strcmp(item->menu_path, "/") != 0;
+}
+
+const char *sni_item_title(SniItem *item) {
+    return item->title[0] ? item->title : item->id;
 }
 
 const char *sni_item_bus_name(SniItem *item) {
@@ -250,6 +255,12 @@ static void fetch_item_properties(SniItem *item) {
                     sd_bus_message_read_basic(reply, SD_BUS_TYPE_STRING, &id);
                     if (id) {
                         snprintf(item->id, sizeof(item->id), "%s", id);
+                    }
+                } else if (key && strcmp(key, "Title") == 0 && strcmp(contents, "s") == 0) {
+                    const char *title = NULL;
+                    sd_bus_message_read_basic(reply, SD_BUS_TYPE_STRING, &title);
+                    if (title) {
+                        snprintf(item->title, sizeof(item->title), "%s", title);
                     }
                 } else if (key && strcmp(key, "Menu") == 0 && strcmp(contents, "o") == 0) {
                     const char *menu = NULL;

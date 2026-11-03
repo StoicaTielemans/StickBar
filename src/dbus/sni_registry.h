@@ -41,6 +41,8 @@ SniItem *sni_registry_get(int index); // 0 <= index < sni_registry_count()
 
 cairo_surface_t *sni_item_icon_surface(SniItem *item); // NULL -> caller draws a placeholder
 bool sni_item_has_menu(SniItem *item);
+// Display name for the item: its SNI Title, else its Id ("" if neither is set).
+const char *sni_item_title(SniItem *item);
 const char *sni_item_bus_name(SniItem *item);
 const char *sni_item_menu_path(SniItem *item);
 sd_bus *sni_item_bus(SniItem *item); // for callers issuing their own DBusMenu calls (tray_context_menu.c)

@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <wayland-client.h>
 
+#include "dbus/dbusmenu.h"
 #include "dbus/sni_registry.h"
 #include "wayland/context.h"
 
@@ -33,5 +34,12 @@ void tray_context_menu_handle_motion(double x, double y);
 // Click-to-trigger-then-close within the open menu. No-op if no menu is open or
 // (x, y) doesn't land on an enabled entry.
 void tray_context_menu_handle_click(double x, double y);
+
+// Test-control hooks (testing/test_control.c): the open menu's entries as
+// shown (-1 / NULL if closed), and the popup-local centre of the entry with
+// a given (displayed) label. Not used by the bar itself.
+int tray_context_menu_test_entry_count(void);
+const DbusMenuEntry *tray_context_menu_test_entry(int index);
+bool tray_context_menu_test_target(const char *label, double *x, double *y);
 
 #endif

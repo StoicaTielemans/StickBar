@@ -28,7 +28,8 @@ cairo/pangocairo — no GTK, no other UI toolkit.
   pills), click to switch.
 - **Clock** — current time, right-click for a 12-month year-calendar dropdown.
 - **System tray** — StatusNotifierItem icons with DBusMenu right-click menus
-  (the usual system tray you'd see in any status bar).
+  (the usual system tray you'd see in any status bar), drawn as cards per
+  menu section with checkmarks/radio buttons shown.
 - **Volume / Mic** — default sink/source level, click to mute, scroll to
   adjust, right-click for a device dropdown (PipeWire/PulseAudio): one card
   per device with its details, a draggable volume meter, a mute toggle, and

@@ -1,6 +1,7 @@
 #include "modules/tray/tray.h"
 
 #include <linux/input-event-codes.h> // BTN_LEFT
+#include <string.h>
 
 #include "config/config.h"
 #include "dbus/sni_registry.h"
@@ -133,4 +134,25 @@ void tray_handle_click(Output *output, double x, double y, uint32_t button) {
         }
         return;
     }
+}
+
+// Test-control hook (testing/test_control.c): where the icon of the item
+// titled `title` (sni_item_title()) was last drawn on `output`.
+bool tray_test_icon_rect(Output *output, const char *title, double *x, double *y, double *w, double *h) {
+    for (int i = 0; i < MAX_TRACKED_OUTPUTS; i++) {
+        if (g_tray_states[i].output != output) {
+            continue;
+        }
+        for (int j = 0; j < g_tray_states[i].rect_count; j++) {
+            IconRect *r = &g_tray_states[i].rects[j];
+            if (strcmp(sni_item_title(r->item), title) == 0) {
+                *x = r->x;
+                *y = r->y;
+                *w = r->w;
+                *h = r->h;
+                return true;
+            }
+        }
+    }
+    return false;
 }

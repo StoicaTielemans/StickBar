@@ -15,10 +15,11 @@ Device dropdown (right-click volume):
 Mic dropdown: one card per non-monitor source (monitors are hidden), and
 the test sink's monitor is flagged as one.
 Mixer (middle-click volume):
-  - a stream starting while it's open adds a row and the popup grows;
+  - a stream starting while it's open gets a row, and after it ends the
+    row goes -- each time the popup is resized to match (as many cards
+    drawn as rows, at the surface's size);
   - a press on that stream's slider at 40% sets the stream to ~40%, its
-    mute chip mutes it;
-  - the stream ending removes the row and the popup shrinks again.
+    mute chip toggles its mute (and back).
 """
 
 import json
@@ -144,17 +145,51 @@ def check_devices(bar, failures):
     bar.wait_menu(False)
 
 
+def card_runs(png, x=15):
+    """Cards (runs of `base`) down the popup at column x -- inside the cards'
+    left padding, left of any text -- below the header."""
+    w, h, px = common.png_pixels(png)
+    runs, inside = 0, False
+    for y in range(40, h):
+        is_card = common.close_rgb(px[y][x], common.COLORS["base"], tol=4)
+        runs += 1 if is_card and not inside else 0
+        inside = is_card
+    return runs, h
+
+
+def mixer_consistent(bar, tmp, label, failures):
+    """The popup was resized to its content: as many cards drawn as rows the
+    mixer has, and the snapshot (drawn at the surface's size) matches."""
+    menu = bar.must("menu")
+    png = Path(tmp) / f"mixer-{label}.png"
+    bar.must(f"snapshot {png}")
+    cards, h = card_runs(png)
+    expected = max(1, menu["mixer_rows"])  # an empty mixer still shows one card
+    if cards != expected or h != menu["height"]:
+        failures.append(f"mixer {label}: {cards} cards drawn in a {h}px popup for "
+                        f"{menu['mixer_rows']} rows (surface {menu['height']}px)")
+    return menu
+
+
 def check_mixer(bar, tmp, failures):
+    # Counts of *other* apps' streams can change at any moment (a browser
+    # tab starting or stopping sound), so this waits for the test stream by
+    # name and checks the popup's size against what it shows, rather than
+    # expecting the row count to go up and down by exactly one.
     wav = Path(tmp) / "silence.wav"
     silent_wav(wav, 6)
     bar.click_module("volume", "middle")
-    before = bar.wait_menu(True)
+    bar.wait_menu(True)
+    mixer_consistent(bar, tmp, "before", failures)
     player = subprocess.Popen(["paplay", f"--device={SINK}", f"--property=application.name={STREAM}", str(wav)],
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    has_row = lambda: bar.cmd(f"target mixer slider 0.5 {STREAM}").get("ok")  # noqa: E731
     try:
-        grown = bar.wait_menu(True, timeout=4.0, mixer_rows=before["mixer_rows"] + 1)
-        if grown["height"] <= before["height"] and before["mixer_rows"] > 0:
-            failures.append(f"mixer didn't grow for a new stream ({before['height']} -> {grown['height']})")
+        if not wait_for(has_row, 4.0):
+            failures.append("the test stream never got a mixer row")
+            return
+        time.sleep(0.2)
+        with_stream = mixer_consistent(bar, tmp, "with stream", failures)
         if not wait_for(stream_state):
             failures.append("paplay stream never appeared in pactl")
             return
@@ -174,10 +209,12 @@ def check_mixer(bar, tmp, failures):
         if not wait_for(lambda: (s := stream_state()) and s[1] == start_muted):
             failures.append("second click on the mixer mute chip didn't toggle it back")
         player.wait(timeout=10)
-        shrunk = bar.wait_menu(True, timeout=4.0, mixer_rows=before["mixer_rows"])
-        if shrunk["height"] != before["height"]:
-            failures.append(f"mixer didn't shrink back after the stream ended "
-                            f"({before['height']} -> {grown['height']} -> {shrunk['height']})")
+        if not wait_for(lambda: not has_row(), 4.0):
+            failures.append("the test stream's row stayed after it ended")
+        time.sleep(0.2)
+        after = mixer_consistent(bar, tmp, "after", failures)
+        if after["mixer_rows"] < with_stream["mixer_rows"] and after["height"] >= with_stream["height"]:
+            failures.append(f"mixer didn't shrink: {with_stream['height']} -> {after['height']}px")
     finally:
         if player.poll() is None:
             player.kill()

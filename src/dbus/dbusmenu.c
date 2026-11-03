@@ -7,6 +7,24 @@
 
 #define MENU_INTERFACE "com.canonical.dbusmenu"
 
+// DBusMenu labels mark their keyboard access key with an underscore
+// ("_Quit"), and "__" is a literal underscore -- the same convention as GTK
+// mnemonics. This bar has no keyboard navigation, so the markers are just
+// dropped (they used to be drawn as-is).
+static void strip_access_keys(const char *in, char *out, size_t out_size) {
+    size_t o = 0;
+    for (size_t i = 0; in[i] && o + 1 < out_size; i++) {
+        if (in[i] == '_') {
+            if (in[i + 1] != '_') {
+                continue;
+            }
+            i++; // "__" -> "_"
+        }
+        out[o++] = in[i];
+    }
+    out[o] = '\0';
+}
+
 // Parses one child entry positioned with the read cursor already inside its
 // "ia{sv}av" struct (id not yet read). Leaves the cursor past the struct's
 // content on return (caller still owns exiting the struct/variant containers).
@@ -36,19 +54,31 @@ static void parse_entry(sd_bus_message *m, DbusMenuEntry *entry) {
                     const char *label = NULL;
                     sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &label);
                     if (label) {
-                        snprintf(entry->label, sizeof(entry->label), "%s", label);
+                        strip_access_keys(label, entry->label, sizeof(entry->label));
                     }
                 } else if (key && strcmp(key, "enabled") == 0 && strcmp(contents, "b") == 0) {
                     int enabled = 1;
                     sd_bus_message_read_basic(m, SD_BUS_TYPE_BOOLEAN, &enabled);
                     entry->enabled = enabled != 0;
+                } else if (key && strcmp(key, "toggle-type") == 0 && strcmp(contents, "s") == 0) {
+                    const char *toggle = NULL;
+                    sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &toggle);
+                    entry->toggle = !toggle                           ? DBUSMENU_TOGGLE_NONE
+                                    : strcmp(toggle, "checkmark") == 0 ? DBUSMENU_TOGGLE_CHECKMARK
+                                    : strcmp(toggle, "radio") == 0     ? DBUSMENU_TOGGLE_RADIO
+                                                                       : DBUSMENU_TOGGLE_NONE;
+                } else if (key && strcmp(key, "toggle-state") == 0 && strcmp(contents, "i") == 0) {
+                    int32_t state = 0;
+                    sd_bus_message_read_basic(m, SD_BUS_TYPE_INT32, &state);
+                    entry->toggled = state == 1;
+                } else if (key && strcmp(key, "children-display") == 0 && strcmp(contents, "s") == 0) {
+                    const char *display = NULL;
+                    sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &display);
+                    entry->has_submenu = display && strcmp(display, "submenu") == 0;
                 } else {
-                    // Every other property (icon-name, toggle-type, toggle-state,
-                    // children-display, ...) is intentionally unhandled -- this
-                    // matches the reference TrayContextMenu.qml, which doesn't
-                    // render icons or checkmarks for menu entries either, despite
-                    // real live data (confirmed via busctl) including a
-                    // toggle-type/toggle-state entry.
+                    // Every other property (icon-name, icon-data, shortcut,
+                    // visible, ...) is unhandled -- the dropdown draws no
+                    // per-entry icons or shortcut hints.
                     sd_bus_message_skip(m, contents);
                 }
                 sd_bus_message_exit_container(m); // variant

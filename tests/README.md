@@ -48,6 +48,7 @@ pass, 1 is fail, 77 is skipped (for example, no NVIDIA driver).
 | `test_network_data.py` | Interface, gateway, IP, MAC, MTU and DNS match `ip`/`/sys`/`resolv.conf`; rx/tx totals fall between the kernel counters read before and after; history grows one sample per poll. | Parsing regressions in `network_client.c`. |
 | `test_audio.py` | On a throwaway null sink: a meter press sets ~75 %, a drag ends at ~25 %, scroll steps +5 %, the mute chip toggles. The mic dropdown lists only non-monitor sources. The mixer grows when a `paplay` stream starts, its slider and mute chip work, and it shrinks when the stream ends. Never touches a real device's volume or the default device. | Broken device-volume controls, monitors back in the mic list, a mixer that doesn't resize. |
 | `test_media.py` | Against `lib/fake_mpris.py`: metadata (incl. album) and status are read right; the play/next/prev chips send PlayPause/Next/Previous; the popup shrinks (or closes) when the player quits. | Broken controls, a popup stuck at its open-time size. |
+| `test_tray.py` | Against `lib/fake_tray.py`: the fake's icon appears; its menu shows every entry with access-key underscores stripped, checkmark/radio state and the submenu marker; 3 separators make 4 cards on a grey border; a disabled entry is inert; a click sends that entry's `clicked` event and closes the menu. | Raw `_` labels, lost toggle state, a broken click path. |
 | `test_nvml_vs_smi.py` | Makes the same NVML calls as `sysmon_client.c` and compares the results with `nvidia-smi`: usage, temperature, memory, fan, power and P-state, plus the GPU dropdown's name, driver, power limit, max clock and per-process VRAM list. | Wrong units, memory read through the v1 call (which counts reserved memory), or a wrong process-info struct layout. |
 
 The tests were checked in both directions. Against the build from before these
@@ -62,7 +63,14 @@ the current source, rebuilding and running the test, which then failed:
 - a fixed 30-cell graph: `test_popup_graphs` (dots 47/77/23 px short);
 - catchers without viewporter: `test_popups` (+8.2 MB);
 - no monitor filter: `test_audio` (6 mic cards instead of 2);
-- no media recreate: `test_media` (popup stuck at 300 px).
+- no media recreate: `test_media` (popup stuck at 300 px);
+- no mixer recreate: `test_audio` (mixer stuck at 116 px);
+- raw DBusMenu labels: `test_tray` ("Show Notifications" not found).
+
+`test_audio`'s mixer check waits for its own stream by name and compares
+the popup's drawn card count with its row count, instead of expecting the
+count to change by exactly one: other apps' streams (a browser tab) come and
+go during the test, which made the first version fail about one run in three.
 
 `test_redraw.py` uses the real default sink, but it only ever sets the volume
 and mute to the values they already have.
@@ -98,6 +106,9 @@ starts with fresh starts.
   reader (`png_pixels()`) with the Catppuccin colours to compare against.
 - `fake_mpris.py`: an MPRIS player that only logs the calls it gets, so
   media tests never pause or skip a real one.
+- `fake_tray.py`: a StatusNotifierItem with a DBusMenu that only logs
+  clicks. It registers with the running watcher (usually your own bar), so
+  its grey icon shows in your tray for the ~20s the test runs.
 - `wlproxy.py`: a Unix-socket proxy that sits between the bar and the
   compositor. It also forwards the file descriptors Wayland passes over the
   socket (needed for shm buffers), so killing it simulates the compositor going

@@ -14,6 +14,8 @@
 #include "audio/pulse_client.h"
 #include "bar/popup_surface.h"
 #include "modules/media/media_popup.h"
+#include "modules/tray/tray.h"
+#include "modules/tray/tray_context_menu.h"
 #include "mpris/mpris_client.h"
 #include "network/network_client.h"
 #include "render/render.h"
@@ -326,6 +328,23 @@ static void cmd_menu(void) {
     cJSON_AddNumberToObject(o, "device_cards", device_popup_test_card_count());
     cJSON_AddNumberToObject(o, "mixer_rows", mixer_popup_test_row_count());
     cJSON_AddNumberToObject(o, "media_cards", media_popup_test_card_count());
+    int tray_entries = tray_context_menu_test_entry_count();
+    if (tray_entries >= 0) {
+        cJSON *list = cJSON_AddArrayToObject(o, "tray_entries");
+        for (int i = 0; i < tray_entries; i++) {
+            const DbusMenuEntry *e = tray_context_menu_test_entry(i);
+            cJSON *j = cJSON_CreateObject();
+            cJSON_AddStringToObject(j, "label", e->label);
+            cJSON_AddBoolToObject(j, "separator", e->is_separator);
+            cJSON_AddBoolToObject(j, "enabled", e->enabled);
+            cJSON_AddStringToObject(j, "toggle", e->toggle == DBUSMENU_TOGGLE_CHECKMARK ? "checkmark"
+                                                 : e->toggle == DBUSMENU_TOGGLE_RADIO   ? "radio"
+                                                                                        : "");
+            cJSON_AddBoolToObject(j, "toggled", e->toggled);
+            cJSON_AddBoolToObject(j, "submenu", e->has_submenu);
+            cJSON_AddItemToArray(list, j);
+        }
+    }
     reply(o);
 }
 
@@ -333,6 +352,8 @@ static void cmd_target(char *args) {
     // target device <part> <frac> <description...>
     // target mixer <part> <frac> <stream name...>
     // target media <button> <app name...>
+    // target traymenu <label...>
+    // target trayicon <output> <title...> (bar-surface coordinates)
     char *kind = strtok(args, " ");
     double x = 0, y = 0;
     bool found = false;
@@ -350,6 +371,17 @@ static void cmd_target(char *args) {
         char *button = strtok(NULL, " ");
         char *name = strtok(NULL, "");
         found = button && name && media_popup_test_target(name, button, &x, &y);
+    } else if (kind && strcmp(kind, "traymenu") == 0) {
+        char *label = strtok(NULL, "");
+        found = label && tray_context_menu_test_target(label, &x, &y);
+    } else if (kind && strcmp(kind, "trayicon") == 0) {
+        char *output_name = strtok(NULL, " ");
+        char *title = strtok(NULL, "");
+        Output *output = output_name ? find_output(output_name) : NULL;
+        double w = 0, h = 0;
+        found = output && title && tray_test_icon_rect(output, title, &x, &y, &w, &h);
+        x += w / 2.0;
+        y += h / 2.0;
     }
     if (!found) {
         reply_error("target not found");

@@ -8,11 +8,20 @@
 // dynamic growth (see e.g. modules/workspaces.c's MAX_TRACKED_OUTPUTS).
 #define MAX_MENU_ENTRIES 32
 
+typedef enum {
+    DBUSMENU_TOGGLE_NONE,
+    DBUSMENU_TOGGLE_CHECKMARK, // "toggle-type": "checkmark"
+    DBUSMENU_TOGGLE_RADIO,     // "toggle-type": "radio"
+} DbusMenuToggle;
+
 typedef struct {
     int id;
-    char label[128]; // empty for separators
+    char label[128]; // empty for separators; access-key underscores already stripped
     bool is_separator;
     bool enabled; // defaults true per the DBusMenu convention when absent from GetLayout
+    DbusMenuToggle toggle;
+    bool toggled;     // "toggle-state" == 1 (0 = off, -1 = indeterminate, shown as off)
+    bool has_submenu; // "children-display": "submenu" -- shown, but not openable yet
 } DbusMenuEntry;
 
 // Fetches the flat, non-recursive (GetLayout recursionDepth=1) top-level menu

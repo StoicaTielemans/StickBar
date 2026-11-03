@@ -5,6 +5,7 @@
 
 #include "bar/popup_surface.h"
 #include "config/config.h"
+#include "config/glyphs.h"
 #include "dbus/dbusmenu.h"
 #include "render/module_box.h"
 
@@ -12,24 +13,29 @@
 // MAX_TRACKED_OUTPUTS convention used by modules/workspaces.c and modules/tray/tray.c.
 #define MAX_TRACKED_OUTPUTS 8
 
-// Vertical/horizontal geometry constants, chosen to visually mirror the
-// reference TrayContextMenu.qml (values annotated with their QML counterpart)
-// even where the underlying layout mechanism differs (plain arithmetic here vs.
-// Qt's Column/anchors bindings there).
-#define ROW_PADDING_V 16.0    // matches `height: labelText.implicitHeight + 16`
-#define ROW_PADDING_H 24.0    // matches `labelText.implicitWidth + 24`
-#define ROW_SPACING 6.0       // matches the Column's `spacing: 6`
-#define OUTER_MARGIN 8.0      // matches `Config.bar.popupPadding`
-#define LEFT_TEXT_MARGIN 12.0 // matches `leftMargin: 12`
-// A separator contributes blank vertical spacing only, not a drawn rule line --
-// matches the reference's own `visible: !entry.isSeparator` (invisible-gap, not
-// chrome) exactly, per this project's stated goal of parity with that specific
-// reference rather than an unrequested visual improvement.
-#define SEPARATOR_HEIGHT 8.0
+// Layout tuning, local to this popup (see CLAUDE.md "Conventions"). Same
+// header/card language as the other dropdowns, kept neutral grey (overlay0
+// border, per explicit user request): the tray is the one module without an
+// accent colour of its own.
+#define OUTER_MARGIN 12.0
+#define HEADER_H 22.0
+#define HEADER_ICON 20.0 // tray icons are pre-scaled to BAR.height (20px)
+#define SECTION_GAP 10.0
+#define CARD_GAP 6.0
+#define CARD_PAD 3.0
+#define ROW_H 26.0
+#define ROW_PAD_X 10.0
+#define HOVER_BAR_W 3.0
+#define COL_GAP 8.0
+#define MIN_CONTENT_W 200.0
 
 typedef struct {
-    double y, h; // x is always OUTER_MARGIN, width is always g_menu.content_width
+    double y, h; // row rect, relative to the popup (x/w are the card's inner area)
 } RowLayout;
+
+typedef struct {
+    double y, h;
+} CardLayout;
 
 typedef struct {
     bool open;
@@ -38,9 +44,17 @@ typedef struct {
     PopupSurface *popup;
 
     DbusMenuEntry entries[MAX_MENU_ENTRIES];
-    RowLayout rows[MAX_MENU_ENTRIES];
+    RowLayout rows[MAX_MENU_ENTRIES]; // meaningful only for non-separator entries
     int entry_count;
     int hovered_index; // -1 if none
+
+    // Separators split the entries into groups, each drawn as its own card
+    // (a separator is the gap between two cards, not a drawn line).
+    CardLayout cards[MAX_MENU_ENTRIES];
+    int card_count;
+    int item_count;     // non-separator entries, for the header
+    bool any_toggle;    // reserve the toggle column on every row if any entry has one
+    char title[128];    // the item's name, snapshotted at open
 
     double content_width, popup_width, popup_height;
 
@@ -56,27 +70,99 @@ typedef struct {
 
 static MenuState g_menu = { .hovered_index = -1 };
 
+static double text_width(const char *text, int size, bool bold) {
+    double w, h;
+    module_box_measure_text(text, size, bold, &w, &h);
+    (void)h;
+    return w;
+}
+
+static double toggle_col_w(void) {
+    char buf[5];
+    glyph_utf8(GLYPH_ICON_CHECKBOX_ON, buf);
+    return text_width(buf, FONT.label, false) + COL_GAP;
+}
+
+static double chevron_w(void) {
+    char buf[5];
+    glyph_utf8(GLYPH_CHEVRON_RIGHT, buf);
+    return text_width(buf, FONT.xs, false);
+}
+
+static double card_inner_x(void) { return OUTER_MARGIN + CARD_PAD; }
+static double card_inner_w(void) { return g_menu.content_width - CARD_PAD * 2.0; }
+
+static void header_summary(char *out, size_t out_size) {
+    snprintf(out, out_size, "  ·  %d item%s", g_menu.item_count, g_menu.item_count == 1 ? "" : "s");
+}
+
+static void draw_row(cairo_t *cr, int i) {
+    DbusMenuEntry *entry = &g_menu.entries[i];
+    RowLayout *row = &g_menu.rows[i];
+    double x = card_inner_x(), w = card_inner_w();
+    // Disabled entries are dimmed and never highlight (they can't be clicked).
+    if (i == g_menu.hovered_index && entry->enabled) {
+        module_box_draw_rect(cr, x, row->y, w, row->h, COLORS.surface0, COLORS.mantle, 0.0);
+        module_box_draw_rect(cr, x, row->y, HOVER_BAR_W, row->h, COLORS.overlay2, COLORS.mantle, 0.0);
+    }
+    Color text_color = entry->enabled ? COLORS.text : COLORS.overlay0;
+    double tx = x + ROW_PAD_X;
+    if (g_menu.any_toggle) {
+        if (entry->toggle != DBUSMENU_TOGGLE_NONE) {
+            uint32_t glyph = entry->toggle == DBUSMENU_TOGGLE_RADIO
+                                 ? (entry->toggled ? GLYPH_ICON_RADIO_ON : GLYPH_ICON_RADIO_OFF)
+                                 : (entry->toggled ? GLYPH_ICON_CHECKBOX_ON : GLYPH_ICON_CHECKBOX_OFF);
+            char buf[5];
+            glyph_utf8(glyph, buf);
+            module_box_draw_text_left(cr, tx, row->y, row->h, buf, FONT.label, false,
+                                      entry->toggled && entry->enabled ? COLORS.text : COLORS.overlay0);
+        }
+        tx += toggle_col_w();
+    }
+    module_box_draw_text_left(cr, tx, row->y, row->h, entry->label, FONT.label, false, text_color);
+    if (entry->has_submenu) {
+        // Shown so the entry doesn't look like a plain action -- opening
+        // submenus isn't supported yet (see CLAUDE.md "Known limitations").
+        char buf[5];
+        glyph_utf8(GLYPH_CHEVRON_RIGHT, buf);
+        module_box_draw_text_left(cr, x + w - ROW_PAD_X - chevron_w(), row->y, row->h, buf, FONT.xs, false,
+                                  COLORS.overlay1);
+    }
+}
+
 static void draw_menu(cairo_t *cr, void *user_data) {
     (void)user_data;
 
     module_box_draw_rect(cr, 0, 0, g_menu.popup_width, g_menu.popup_height,
                           COLORS.mantle, COLORS.overlay0, (double)BAR.module_border_width);
 
+    // Header: the item's own tray icon, its name, and the entry count.
+    double x = OUTER_MARGIN, y = OUTER_MARGIN;
+    cairo_surface_t *icon = sni_item_icon_surface(g_menu.item);
+    if (icon) {
+        cairo_save(cr);
+        cairo_set_source_surface(cr, icon, x, y + (HEADER_H - HEADER_ICON) / 2.0);
+        cairo_paint(cr);
+        cairo_restore(cr);
+    } else {
+        module_box_draw_rect(cr, x, y + (HEADER_H - HEADER_ICON) / 2.0, HEADER_ICON, HEADER_ICON,
+                             COLORS.overlay0, COLORS.mantle, 0.0);
+    }
+    double tx = x + HEADER_ICON + 8.0;
+    module_box_draw_text_left(cr, tx, y, HEADER_H, g_menu.title, FONT.md, true, COLORS.text);
+    tx += text_width(g_menu.title, FONT.md, true);
+    char summary[48];
+    header_summary(summary, sizeof(summary));
+    module_box_draw_text_left(cr, tx, y, HEADER_H, summary, FONT.sm, false, COLORS.subtext0);
+
+    for (int c = 0; c < g_menu.card_count; c++) {
+        module_box_draw_rect(cr, OUTER_MARGIN, g_menu.cards[c].y, g_menu.content_width, g_menu.cards[c].h,
+                             COLORS.base, COLORS.surface1, 1.0);
+    }
     for (int i = 0; i < g_menu.entry_count; i++) {
-        DbusMenuEntry *entry = &g_menu.entries[i];
-        if (entry->is_separator) {
-            continue;
+        if (!g_menu.entries[i].is_separator) {
+            draw_row(cr, i);
         }
-        RowLayout *row = &g_menu.rows[i];
-
-        if (i == g_menu.hovered_index) {
-            module_box_draw_rect(cr, OUTER_MARGIN, row->y, g_menu.content_width, row->h,
-                                  COLORS.surface1, (Color){ 0, 0, 0, 0 }, 0.0);
-        }
-
-        Color text_color = entry->enabled ? COLORS.text : COLORS.overlay0;
-        module_box_draw_text_left(cr, OUTER_MARGIN + LEFT_TEXT_MARGIN, row->y, row->h,
-                                   entry->label, FONT.label, false, text_color);
     }
 }
 
@@ -86,41 +172,66 @@ static void redraw(void) {
     }
 }
 
-// Computes content_width/popup_width/popup_height and each row's (y, h) from
-// the already-fetched g_menu.entries -- must run before popup_surface_create(),
-// since (unlike the bar) a popup has no "ask the compositor for a width" option
-// and needs an explicit size up front.
+// Computes the cards, rows and popup size from the already-fetched
+// g_menu.entries -- must run before popup_surface_create(), since (unlike the
+// bar) a popup has no "ask the compositor for a width" option and needs an
+// explicit size up front. Separators split the entries into cards; leading,
+// trailing and repeated separators produce no empty card.
 static void compute_layout(void) {
-    double max_label_w = 0.0;
-    double row_heights[MAX_MENU_ENTRIES];
-
+    g_menu.item_count = 0;
+    g_menu.any_toggle = false;
+    double max_row_w = 0.0;
     for (int i = 0; i < g_menu.entry_count; i++) {
-        if (g_menu.entries[i].is_separator) {
-            row_heights[i] = SEPARATOR_HEIGHT;
+        DbusMenuEntry *entry = &g_menu.entries[i];
+        if (entry->is_separator) {
             continue;
         }
-        double w, h;
-        module_box_measure_text(g_menu.entries[i].label, FONT.label, false, &w, &h);
-        if (w > max_label_w) {
-            max_label_w = w;
+        g_menu.item_count++;
+        g_menu.any_toggle |= entry->toggle != DBUSMENU_TOGGLE_NONE;
+        double w = text_width(entry->label, FONT.label, false) + (entry->has_submenu ? COL_GAP + chevron_w() : 0.0);
+        if (w > max_row_w) {
+            max_row_w = w;
         }
-        row_heights[i] = h + ROW_PADDING_V;
     }
-
-    // Every row shares the same width (the widest label's), matching the
-    // reference's own Math.max(menuColumn.implicitWidth, ...) resolving to a
-    // uniform row width across all entries.
-    g_menu.content_width = max_label_w + ROW_PADDING_H;
+    double row_w = ROW_PAD_X * 2.0 + (g_menu.any_toggle ? toggle_col_w() : 0.0) + max_row_w + CARD_PAD * 2.0;
+    char summary[48];
+    header_summary(summary, sizeof(summary));
+    double header_w = HEADER_ICON + 8.0 + text_width(g_menu.title, FONT.md, true) + text_width(summary, FONT.sm, false);
+    g_menu.content_width = row_w > header_w ? row_w : header_w;
+    if (g_menu.content_width < MIN_CONTENT_W) {
+        g_menu.content_width = MIN_CONTENT_W;
+    }
     g_menu.popup_width = g_menu.content_width + OUTER_MARGIN * 2.0;
 
-    double y = OUTER_MARGIN;
+    double y = OUTER_MARGIN + HEADER_H + SECTION_GAP;
+    g_menu.card_count = 0;
+    bool in_card = false;
     for (int i = 0; i < g_menu.entry_count; i++) {
-        g_menu.rows[i].y = y;
-        g_menu.rows[i].h = row_heights[i];
-        y += row_heights[i];
-        if (i < g_menu.entry_count - 1) {
-            y += ROW_SPACING;
+        if (g_menu.entries[i].is_separator) {
+            if (in_card) {
+                CardLayout *card = &g_menu.cards[g_menu.card_count - 1];
+                card->h = y + CARD_PAD - card->y;
+                y = card->y + card->h + CARD_GAP;
+                in_card = false;
+            }
+            continue;
         }
+        if (!in_card) {
+            g_menu.cards[g_menu.card_count].y = y;
+            g_menu.card_count++;
+            y += CARD_PAD;
+            in_card = true;
+        }
+        g_menu.rows[i].y = y;
+        g_menu.rows[i].h = ROW_H;
+        y += ROW_H;
+    }
+    if (in_card) {
+        CardLayout *card = &g_menu.cards[g_menu.card_count - 1];
+        card->h = y + CARD_PAD - card->y;
+        y = card->y + card->h;
+    } else if (g_menu.card_count > 0) {
+        y -= CARD_GAP; // a trailing separator left one gap too many
     }
     g_menu.popup_height = y + OUTER_MARGIN;
 }
@@ -160,6 +271,7 @@ void tray_context_menu_open(Output *output, SniItem *item, double icon_x, double
     g_menu.hovered_index = -1;
     g_menu.item = item;
     g_menu.output = output;
+    snprintf(g_menu.title, sizeof(g_menu.title), "%s", sni_item_title(item)[0] ? sni_item_title(item) : "Menu");
 
     compute_layout();
 
@@ -229,9 +341,9 @@ bool tray_context_menu_is_catcher_surface(struct wl_surface *surface) {
 }
 
 // Finds which non-separator row (x, y) lands on, or -1 if it lands on the
-// border, a separator's blank gap, or outside every row entirely.
+// header, a gap between cards, or outside every row entirely.
 static int row_at(double x, double y) {
-    if (x < OUTER_MARGIN || x >= OUTER_MARGIN + g_menu.content_width) {
+    if (x < card_inner_x() || x >= card_inner_x() + card_inner_w()) {
         return -1;
     }
     for (int i = 0; i < g_menu.entry_count; i++) {
@@ -268,11 +380,30 @@ void tray_context_menu_handle_click(double x, double y) {
     DbusMenuEntry *entry = &g_menu.entries[idx];
     if (!entry->enabled) {
         // Matches the reference's click gate (`if (entry.enabled) { ... }`) --
-        // a disabled entry is still hover-highlightable (row_at() doesn't
-        // exclude it) but never triggers or closes the menu.
+        // a disabled entry never triggers or closes the menu (and isn't
+        // highlighted on hover, see draw_row()).
         return;
     }
 
     dbusmenu_trigger(sni_item_bus(g_menu.item), sni_item_bus_name(g_menu.item), sni_item_menu_path(g_menu.item), entry->id);
     tray_context_menu_close();
+}
+
+// ---- Test-control hooks (testing/test_control.c) ---------------------------------
+
+int tray_context_menu_test_entry_count(void) { return g_menu.open ? g_menu.entry_count : -1; }
+
+const DbusMenuEntry *tray_context_menu_test_entry(int index) {
+    return (g_menu.open && index >= 0 && index < g_menu.entry_count) ? &g_menu.entries[index] : NULL;
+}
+
+bool tray_context_menu_test_target(const char *label, double *x, double *y) {
+    for (int i = 0; g_menu.open && i < g_menu.entry_count; i++) {
+        if (!g_menu.entries[i].is_separator && strcmp(g_menu.entries[i].label, label) == 0) {
+            *x = card_inner_x() + card_inner_w() / 2.0;
+            *y = g_menu.rows[i].y + g_menu.rows[i].h / 2.0;
+            return true;
+        }
+    }
+    return false;
 }

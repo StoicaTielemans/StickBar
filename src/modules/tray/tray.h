@@ -2,6 +2,7 @@
 #define CUSTOMBAR_MODULES_TRAY_TRAY_H
 
 #include <cairo.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "wayland/context.h"
@@ -21,5 +22,9 @@ double tray_render(cairo_t *cr, Output *output, double right_edge_x, double box_
 // has-menu-overrides-button rule documented in tray.c, and dispatches
 // accordingly. No-op if it doesn't land on any icon.
 void tray_handle_click(Output *output, double x, double y, uint32_t button);
+
+// Test-control hook (testing/test_control.c): the last-drawn rect of the
+// icon whose item is titled `title`. Not used by the bar itself.
+bool tray_test_icon_rect(Output *output, const char *title, double *x, double *y, double *w, double *h);
 
 #endif

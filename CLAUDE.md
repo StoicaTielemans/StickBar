@@ -352,8 +352,9 @@ stickBar/
         ├── tray/
         │   ├── tray.c            icon row render + hit-rect recording + click
         │   │                     routing (Activate vs open-menu)
-        │   └── tray_context_menu.c   popup layer-surface + click-catchers +
-        │                         hover/click handling for the DBusMenu entries
+        │   └── tray_context_menu.c   DBusMenu dropdown: icon + title header,
+        │                         one card per separator group, per-row hover,
+        │                         checkmark/radio + submenu markers; grey border
         └── powermenu/            the logout/restart/shutdown overlay (see "Power
                                   menu" below) -- the bar's own leftmost item
                                   doubles as its click trigger, matching the
@@ -740,6 +741,30 @@ clear that way.
   items, `"type":"separator"` marks a separator, and `"enabled"` **defaults to
   `true` if the property is absent** (matters for correctness, not just a spec
   footnote — most real entries omit it).
+- **Redesigned tray menu (per explicit user request, the last popup in the
+  restyling pass)** -- same header/card language as the other dropdowns,
+  kept neutral grey (`overlay0` border, `overlay2` hover bar) per the user,
+  since the tray has no accent colour of its own.
+  - **Header**: the item's own tray icon (the pre-scaled 20px pixmap the bar
+    already holds), its name (SNI `Title`, now fetched, falling back to
+    `Id`) and the entry count.
+  - **Separators become cards**: each run of entries between separators is
+    a `base` card (leading/trailing/repeated separators make no empty
+    card). Steam's 16-entry menu reads as 4 cards.
+  - **Entries**: hover fills the row (`surface0`) with a 3px bar on the
+    left; disabled entries are dimmed and no longer highlight. Now parsed in
+    `dbus/dbusmenu.c`: `toggle-type`/`toggle-state` (drawn as checkbox /
+    radio glyphs, a column reserved only if any entry has one),
+    `children-display: submenu` (a `›` marker -- opening submenus still
+    isn't supported), and labels have their access-key underscores stripped
+    (`_Quit` -> `Quit`, `__` -> `_`); they used to be drawn as-is.
+  - Tested by `tests/test_tray.py` against `tests/lib/fake_tray.py`, a Gio
+    StatusNotifierItem + dbusmenu that only logs clicks. **It registers
+    asynchronously on purpose**: the watcher (this bar's
+    `sni_watcher_service.c`) fetches the item's properties *while handling*
+    `RegisterStatusNotifierItem`, so a client that blocks on that call
+    deadlocks until the D-Bus timeout -- which is also why a hung tray app
+    can freeze the bar (see "Known limitations").
 - **The has-menu-overrides-button click rule** (`modules/tray/tray.c`'s
   `tray_handle_click()`): re-reading the reference `Tray.qml`'s actual
   `onClicked` handler shows that if an item has a menu, **any** click — left or
@@ -2038,7 +2063,15 @@ this module never opens the DAC's HID device.
   just less likely to actually occur now that stickBar provides its own
   Watcher by default.
 - **Tray: no submenu/nested-menu support** — `GetLayout`'s recursion depth is
-  capped at 1, matching the reference's own flat rendering.
+  capped at 1, matching the reference's own flat rendering. Submenu entries
+  are marked with `›` but clicking one only sends its own `clicked` event.
+- **Tray: an unresponsive tray app can freeze the bar for up to 25s** — the
+  item's property fetch on registration (`sni_registry.c`'s GetAll) and the
+  menu fetch on right-click (`dbusmenu.c`'s AboutToShow/GetLayout) are
+  synchronous `sd_bus_call_method()`s with sd-bus's default 25s timeout,
+  inside the single-threaded event loop. Never seen with a real app; found
+  while writing `tests/lib/fake_tray.py`, whose first (blocking) version hung
+  exactly this way. Fix would be async calls or a short timeout.
 - **Tray: no tooltip support** — the SNI `ToolTip` property is never fetched.
 - **Tray: no scroll-wheel `Scroll()` support** — `wl_pointer`'s `axis_discrete`
   event is wired up project-wide now (see "PulseAudio / volume & mic" above),

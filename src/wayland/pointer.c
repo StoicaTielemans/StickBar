@@ -150,8 +150,8 @@ void pointer_dispatch_button(AppContext *app, uint32_t button, bool pressed) {
     // in whichever order happens to be written below.
     if (power_menu_is_menu_surface(app->pointer_over_surface)) {
         // Unlike every other popup here, the power menu's own full-screen
-        // surface doubles as its own click-catcher -- one call handles both
-        // "landed on a button" and "landed on the dimmed background" (see
+        // surface doubles as its own click-catcher -- one call handles
+        // "landed on a card", the panel, and the dimmed background (see
         // power_menu_handle_click()'s own doc comment).
         power_menu_handle_click(app->pointer_over_surface, app->pointer_x, app->pointer_y);
         return;

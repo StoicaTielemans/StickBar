@@ -7,7 +7,7 @@
 // (Wi-Fi vs. Ethernet detection), /sys/class/net/<iface>/{operstate,address,mtu,
 // speed,duplex,statistics/{rx,tx}_bytes}, and /etc/resolv.conf, plus a native
 // getifaddrs() lookup for the interface's own IPv4 address -- see
-// CLAUDE.md's "Network / Wi-Fi" section for why that's a getifaddrs() call
+// docs/modules/network.md for why that's a getifaddrs() call
 // rather than shelling out to `ip addr show` the way the reference
 // NetworkMonitor.qml does. No init() call is needed (unlike
 // sysmon/sysmon_client.h's sysmon_client_init()) -- the only delta-based

@@ -301,7 +301,7 @@ static void fetch_item_properties(SniItem *item) {
     // resolving IconName via icon_theme.c (IconThemePath override first, then
     // a pragmatic hicolor/pixmaps filesystem search). Only reached when
     // IconPixmap is genuinely absent, not for items like EasyEffects that
-    // *do* have one (see CLAUDE.md's "D-Bus / system tray" section on why that
+    // *do* have one (see docs/modules/tray.md on why that
     // one still renders dim rather than being routed through this fallback).
     if (!item->icon_surface && item->icon_name[0]) {
         item->icon_surface = icon_theme_lookup(item->icon_name, item->icon_theme_path, BAR.height);

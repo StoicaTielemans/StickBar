@@ -257,8 +257,8 @@ static bool node_is_active_stream(const PwNode *n) {
 // elimination. NOT independently verified against real webcam hardware or a
 // real portal screen-share session -- this development machine has neither
 // (no /dev/video* device, and driving the portal's screen picker needs
-// interactive UI a headless test can't provide) -- see CLAUDE.md's "Privacy
-// indicator" section for what to re-check first if this is ever wrong on
+// interactive UI a headless test can't provide) -- see
+// docs/modules/privacy.md for what to re-check first if this is ever wrong on
 // real hardware.
 static bool video_node_is_webcam(const PwNode *n) {
     PwLink *link = find_link_by_input_node(n->id);

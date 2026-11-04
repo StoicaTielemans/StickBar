@@ -396,8 +396,8 @@ static double content_width(void) {
 static void draw_popup(cairo_t *cr, void *user_data) {
     (void)user_data;
     // Fully repainted every time (opaque fill first), so the ping-ponged shm
-    // buffer's stale frame never shows through -- see CLAUDE.md's power-menu
-    // note on CAIRO_OPERATOR_SOURCE for the translucent case this avoids.
+    // buffer's stale frame never shows through -- see
+    // docs/modules/power-menu.md's note on CAIRO_OPERATOR_SOURCE for the translucent case this avoids.
     module_box_draw_rect(cr, 0, 0, g_popup.popup_width, g_popup.popup_height,
                           COLORS.mantle, COLORS.teal, (double)BAR.module_border_width);
     paint_content(cr, g_popup.popup_width - OUTER_MARGIN * 2.0);
@@ -439,7 +439,7 @@ void network_info_popup_open(Output *output, double box_x, double box_y, double 
 
     // Same TOP+RIGHT anchor+margin math (including the BAR.height
     // correction) as audio/device_popup.c and modules/tray/tray_context_menu.c
-    // -- see CLAUDE.md's "D-Bus / system tray" section for the reasoning.
+    // -- see docs/popups.md for the reasoning.
     // Right-anchored, unlike modules/cpu/cpu_popup.c's TOP+LEFT,
     // because the network widget lives in the bar's *right* region.
     int top_margin = (int)(box_y + box_h) - BAR.height;

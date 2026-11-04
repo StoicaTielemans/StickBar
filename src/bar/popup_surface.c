@@ -256,18 +256,22 @@ int popup_surface_catcher_count(void) {
 }
 
 void popup_surface_size(PopupSurface *surf, int *width, int *height) {
-    *width = surf->width;
-    *height = surf->height;
+    // A compositor-sized surface (requested 0x0: catchers, the power menu)
+    // only knows its size from the configure that allocated its buffers.
+    *width = surf->width > 0 ? surf->width : surf->buffers.width;
+    *height = surf->height > 0 ? surf->height : surf->buffers.height;
 }
 
 bool popup_surface_snapshot_png(PopupSurface *surf, const char *path) {
-    if (!surf->has_pending_draw || surf->width <= 0 || surf->height <= 0) {
+    int width, height;
+    popup_surface_size(surf, &width, &height);
+    if (!surf->has_pending_draw || width <= 0 || height <= 0) {
         return false;
     }
     // Runs the same cached draw callback the real buffer was painted with, into
     // a private image surface of the requested size -- so a test sees exactly
     // what the compositor was given, without capturing the screen.
-    cairo_surface_t *csurf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, surf->width, surf->height);
+    cairo_surface_t *csurf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
     cairo_t *cr = cairo_create(csurf);
     surf->pending_draw(cr, surf->pending_user_data);
     cairo_destroy(cr);

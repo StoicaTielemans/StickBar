@@ -1,7 +1,7 @@
 """Shared helpers for the live tests in tests/.
 
 Every test here runs a *second* stickBar instance next to whatever bar is already
-running (safe -- see CLAUDE.md's "Running alongside Quickshell is safe"), observes
+running (safe -- see "Running alongside Quickshell is safe" in docs/testing.md), observes
 it from the outside (/proc, WAYLAND_DEBUG output, exit status), then stops it.
 Nothing here patches or rebuilds the source, so the tests exercise exactly the
 binary that ships.
@@ -160,9 +160,11 @@ def pick_test_output():
 class ControlledBar:
     """A second bar instance on one monitor, driven over its stdin channel."""
 
-    def __init__(self, binary, output=None, wayland_debug=False, stderr_path=None):
+    def __init__(self, binary, output=None, wayland_debug=False, stderr_path=None, env_extra=None):
         self.output = output or pick_test_output()
         env = dict(os.environ, STICKBAR_TEST_CONTROL="1", STICKBAR_TEST_OUTPUT=self.output)
+        if env_extra:
+            env.update(env_extra)
         if wayland_debug:
             env["WAYLAND_DEBUG"] = "1"
         self._err = open(stderr_path, "w") if stderr_path else subprocess.DEVNULL
@@ -286,5 +288,6 @@ def close_rgb(a, b, tol=12):
 COLORS = {name: hex_rgb(v) for name, v in {
     "mantle": "181825", "base": "1e1e2e", "surface0": "313244", "surface1": "45475a",
     "peach": "fab387", "green": "a6e3a1", "yellow": "f9e2af", "teal": "94e2d5",
-    "sky": "89dceb", "blue": "89b4fa", "mauve": "cba6f7",
+    "sky": "89dceb", "blue": "89b4fa", "mauve": "cba6f7", "lavender": "b4befe", "overlay1": "7f849c",
+    "sapphire": "74c7ec", "red": "f38ba8", "maroon": "eba0ac",
 }.items()}

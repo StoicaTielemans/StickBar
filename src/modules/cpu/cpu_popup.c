@@ -95,7 +95,7 @@ static int graph_cells(double w) {
 }
 
 // Green -> yellow -> red; a function since COLORS isn't a compile-time
-// constant (see CLAUDE.md "Power menu").
+// constant (see docs/modules/power-menu.md).
 static void heat_gradient(Color out[3]) {
     out[0] = COLORS.green;
     out[1] = COLORS.yellow;
@@ -486,7 +486,7 @@ void cpu_popup_open(Output *output, double box_x, double box_y, double box_w, do
     g_popup.popup_height = paint_content(NULL, content_w);
 
     // TOP+LEFT, with the BAR.height correction every popup needs (see
-    // CLAUDE.md "D-Bus / system tray"): the box lives in the bar's left
+    // docs/popups.md): the box lives in the bar's left
     // region, so the popup grows rightward from the box's left edge -- a
     // right anchor would push it off the left of the screen.
     int top_margin = (int)(box_y + box_h) - BAR.height;

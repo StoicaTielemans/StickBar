@@ -36,6 +36,9 @@
 #define GLYPH_ICON_DEVICE_SELECTABLE  0xF0130u
 #define GLYPH_ICON_HEADPHONES         0xF02CBu
 
+// EQ dropdown header icon.
+#define GLYPH_ICON_EQUALIZER 0xF0EA2u // md-equalizer
+
 // System monitor icons -- the reference SystemMonitorWidget.qml uses a single
 // combined "system monitor" glyph for all three metrics; this project splits
 // CPU/GPU/memory into three separate modules (per explicit user request), so
@@ -87,6 +90,8 @@
 // against JetBrainsMonoNerdFont-Regular.ttf for glyph names containing
 // "webcam"/"monitor_share" -- same verification convention as every other
 // glyph in this file, not guessed from a Nerd Font cheat sheet.
+// Privacy dropdown header icon.
+#define GLYPH_ICON_PRIVACY 0xF0498u // md-shield
 #define GLYPH_ICON_WEBCAM      0xF05A0u // nf-md-webcam
 #define GLYPH_ICON_SCREENSHARE 0xF1483u // nf-md-monitor_share
 

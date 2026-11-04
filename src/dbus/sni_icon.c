@@ -49,7 +49,7 @@
 // renders bright/legible icons for the exact same SNI items) recolors this mask
 // using the IconName property via a real theme lookup instead of trusting the
 // pixmap's baked-in color. This project doesn't do theme lookups (see the
-// project CLAUDE.md's known limitations), so instead detect_symbolic_mask()
+// docs/limitations.md), so instead detect_symbolic_mask()
 // below applies a cheap heuristic directly on the pixmap bytes: if every
 // sufficiently-opaque pixel shares (approximately) one dim color, treat it as a
 // mask and recolor it to COLORS.text before premultiplying, leaving alpha (the

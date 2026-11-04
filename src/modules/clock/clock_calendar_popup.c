@@ -63,8 +63,8 @@ typedef struct {
     Output *output;
     PopupSurface *popup;
 
-    // Today's date, snapshotted when the popup opens (see CLAUDE.md's "Clock
-    // year-calendar popup" section for why it isn't kept live while open).
+    // Today's date, snapshotted when the popup opens (see
+    // docs/popups.md for why it isn't kept live while open).
     int year;
     int today_month0; // 0-11
     int today_mday;
@@ -378,8 +378,8 @@ void clock_calendar_popup_toggle(Output *output, double box_x, double box_y, dou
                             (CARD_ROWS - 1) * CARD_SPACING + OUTER_MARGIN;
 
     // Same anchor+margin math (including the BAR.height correction) as
-    // modules/tray/tray_context_menu.c -- see CLAUDE.md's "D-Bus / system
-    // tray" section for the reasoning. Right-anchored, unlike
+    // modules/tray/tray_context_menu.c -- see
+    // docs/popups.md for the reasoning. Right-anchored, unlike
     // modules/cpu/cpu_popup.c, because the clock lives in the bar's right
     // region, not the left.
     int top_margin = (int)(box_y + box_h) - BAR.height;

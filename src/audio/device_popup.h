@@ -22,7 +22,7 @@
 // tray_context_menu.c's own single-menu-at-a-time rule). Does *not* close the
 // tray's own context menu if that's open instead -- the two are independent
 // singletons; having both open at once is an undefended, rare v1 edge case,
-// see CLAUDE.md's "Known limitations".
+// see docs/popups.md.
 void device_popup_open(Output *output, bool is_sink, Color accent,
                         double box_x, double box_y, double box_w, double box_h);
 

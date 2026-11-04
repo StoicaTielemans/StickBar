@@ -419,7 +419,7 @@ void media_popup_tick(void) {
     // `Timer { interval: 1000; running: root.visible }` re-triggering
     // positionChanged() while the popup is on screen. Called once a second
     // from main.c's existing clock timerfd handler rather than a new timer
-    // of its own -- see CLAUDE.md's "Media (MPRIS)" section.
+    // of its own -- see docs/modules/media.md.
     for (int i = 0; i < g_popup.card_count; i++) {
         mpris_player_refresh_position(g_popup.cards[i].player);
     }
@@ -474,7 +474,7 @@ void media_popup_open(Output *output, Color accent, double box_x, double box_y, 
     }
 
     // Same top_margin math (including the BAR.height correction) as every
-    // other popup in this bar -- see CLAUDE.md's "D-Bus / system tray"
+    // other popup in this bar -- see docs/popups.md
     // for the reasoning. Anchored TOP+LEFT since the media widget lives in the bar's
     // center region -- see media_popup.h's own doc comment.
     g_popup.top_margin = (int)(box_y + box_h) - BAR.height;

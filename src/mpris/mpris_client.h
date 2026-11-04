@@ -71,7 +71,7 @@ int64_t mpris_player_position_us(MprisPlayer *player);
 // are expected to call this on a timer while showing a live position, same
 // "poll only while something's actually watching it" idea as the reference
 // MediaPopup.qml's own `Timer { running: root.visible }` re-triggering
-// positionChanged() -- see CLAUDE.md's "Media (MPRIS)" section.
+// positionChanged() -- see docs/modules/media.md.
 void mpris_player_refresh_position(MprisPlayer *player);
 
 // Fire-and-forget MPRIS method calls -- same sd_bus_send()-not-

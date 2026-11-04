@@ -80,7 +80,7 @@ static int graph_cells(double w) {
 }
 
 // Yellow (the module's accent) -> peach -> red as memory fills; a function
-// since COLORS isn't a compile-time constant (see CLAUDE.md "Power menu").
+// since COLORS isn't a compile-time constant (see docs/modules/power-menu.md).
 static void fill_gradient(Color out[3]) {
     out[0] = COLORS.yellow;
     out[1] = COLORS.peach;

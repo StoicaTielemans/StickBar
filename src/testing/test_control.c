@@ -13,7 +13,11 @@
 #include "audio/mixer_popup.h"
 #include "audio/pulse_client.h"
 #include "bar/popup_surface.h"
+#include "eq/eq_state.h"
+#include "modules/eq/eq_popup.h"
 #include "modules/media/media_popup.h"
+#include "modules/powermenu/power_menu.h"
+#include "modules/privacy/privacy_info_popup.h"
 #include "modules/tray/tray.h"
 #include "modules/tray/tray_context_menu.h"
 #include "mpris/mpris_client.h"
@@ -273,6 +277,18 @@ static cJSON *dump_media(void) {
     return o;
 }
 
+static cJSON *dump_eq(void) {
+    cJSON *o = ok_obj();
+    cJSON_AddBoolToObject(o, "available", eq_state_available());
+    cJSON_AddStringToObject(o, "profile", eq_state_profile());
+    cJSON_AddStringToObject(o, "gain", eq_state_gain());
+    cJSON_AddNumberToObject(o, "preamp", eq_state_preamp());
+    cJSON_AddBoolToObject(o, "enabled", eq_state_enabled());
+    cJSON_AddStringToObject(o, "pending", eq_state_pending_profile());
+    cJSON_AddNumberToObject(o, "curve_points", eq_state_curve_count());
+    return o;
+}
+
 // ---- Commands -----------------------------------------------------------------
 // Coordinates are surface-local pixels: bar-surface for `click`, popup-local
 // for the menu-* commands (what `target` returns).
@@ -328,6 +344,18 @@ static void cmd_menu(void) {
     cJSON_AddNumberToObject(o, "device_cards", device_popup_test_card_count());
     cJSON_AddNumberToObject(o, "mixer_rows", mixer_popup_test_row_count());
     cJSON_AddNumberToObject(o, "media_cards", media_popup_test_card_count());
+    cJSON_AddNumberToObject(o, "eq_cards", eq_popup_test_card_count());
+    cJSON_AddStringToObject(o, "power_last_action", power_menu_test_last_action());
+    int privacy_entries = privacy_info_popup_test_entry_count();
+    if (privacy_entries >= 0) {
+        cJSON *list = cJSON_AddArrayToObject(o, "privacy_entries");
+        for (int i = 0; i < privacy_entries; i++) {
+            cJSON *j = cJSON_CreateObject();
+            cJSON_AddStringToObject(j, "name", privacy_info_popup_test_entry_name(i));
+            cJSON_AddStringToObject(j, "category", privacy_info_popup_test_entry_category(i));
+            cJSON_AddItemToArray(list, j);
+        }
+    }
     int tray_entries = tray_context_menu_test_entry_count();
     if (tray_entries >= 0) {
         cJSON *list = cJSON_AddArrayToObject(o, "tray_entries");
@@ -352,6 +380,8 @@ static void cmd_target(char *args) {
     // target device <part> <frac> <description...>
     // target mixer <part> <frac> <stream name...>
     // target media <button> <app name...>
+    // target eq <profile>
+    // target power <logout|restart|shutdown|header|corner>
     // target traymenu <label...>
     // target trayicon <output> <title...> (bar-surface coordinates)
     char *kind = strtok(args, " ");
@@ -371,6 +401,12 @@ static void cmd_target(char *args) {
         char *button = strtok(NULL, " ");
         char *name = strtok(NULL, "");
         found = button && name && media_popup_test_target(name, button, &x, &y);
+    } else if (kind && strcmp(kind, "eq") == 0) {
+        char *profile = strtok(NULL, "");
+        found = profile && eq_popup_test_target(profile, &x, &y);
+    } else if (kind && strcmp(kind, "power") == 0) {
+        char *part = strtok(NULL, "");
+        found = part && power_menu_test_target(part, &x, &y);
     } else if (kind && strcmp(kind, "traymenu") == 0) {
         char *label = strtok(NULL, "");
         found = label && tray_context_menu_test_target(label, &x, &y);
@@ -497,6 +533,7 @@ static void dispatch(char *line) {
         else if (strcmp(rest, "net") == 0) reply(dump_net());
         else if (strcmp(rest, "audio") == 0) reply(dump_audio());
         else if (strcmp(rest, "media") == 0) reply(dump_media());
+        else if (strcmp(rest, "eq") == 0) reply(dump_eq());
         else reply_error("unknown dump section");
     } else {
         reply_error("unknown command");

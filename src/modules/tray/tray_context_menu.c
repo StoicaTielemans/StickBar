@@ -122,7 +122,7 @@ static void draw_row(cairo_t *cr, int i) {
     module_box_draw_text_left(cr, tx, row->y, row->h, entry->label, FONT.label, false, text_color);
     if (entry->has_submenu) {
         // Shown so the entry doesn't look like a plain action -- opening
-        // submenus isn't supported yet (see CLAUDE.md "Known limitations").
+        // submenus isn't supported yet (see docs/limitations.md).
         char buf[5];
         glyph_utf8(GLYPH_CHEVRON_RIGHT, buf);
         module_box_draw_text_left(cr, x + w - ROW_PAD_X - chevron_w(), row->y, row->h, buf, FONT.xs, false,

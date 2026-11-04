@@ -5,8 +5,8 @@
 
 /*
  * Read-only mirror of the TRN Black Pearl DAC's EQ, as last written/read by
- * the DacController project's blackpearl-eq.py script -- see CLAUDE.md's
- * "EQ (TRN Black Pearl)" section for the full writeup.
+ * the DacController project's blackpearl-eq.py script -- see
+ * docs/modules/eq.md for the full writeup.
  *
  * The bar deliberately never talks to the DAC itself: the script already
  * owns the DAC's HID protocol, and a second process issuing HID reads at the

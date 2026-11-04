@@ -29,7 +29,7 @@ PopupSurface *popup_surface_create(AppContext *app, Output *output, int width, i
 
 // A full-screen, fully transparent, LAYER_TOP click-catcher on `output` --
 // the dismiss-on-outside-click surface every popup creates one of per output
-// (see CLAUDE.md "D-Bus / system tray"). Already painted; the caller only
+// (see docs/popups.md). Already painted; the caller only
 // tracks and destroys it. Backed by a 1x1 buffer stretched with
 // wp_viewporter when the compositor has it (saving ~8 MB of shm per output
 // while a popup is open), else by a full-size transparent buffer.

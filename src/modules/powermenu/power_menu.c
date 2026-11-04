@@ -1,28 +1,40 @@
 #include "modules/powermenu/power_menu.h"
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "bar/popup_surface.h"
 #include "config/config.h"
 #include "config/glyphs.h"
 #include "hyprland/dispatch.h"
 #include "render/module_box.h"
+#include "testing/test_control.h"
 
 // Sized generously (this machine has 2 monitors), matching the same
 // MAX_TRACKED_OUTPUTS convention used by every other popup in this project.
 #define MAX_TRACKED_OUTPUTS 8
 
-// Deliberately smaller than the reference PowerButton.qml's own 180x180 --
-// matches this project's established "everywhere else runs noticeably more
-// compact than the reference's Qt-driven sizing" precedent (see
-// modules/media/media_popup.c's own thumbnail scale-down for the same
-// reasoning), even though a full-screen overlay has plenty of room to spare.
-#define BUTTON_SIZE 150.0
-#define BUTTON_SPACING 24.0 // matches PowerMenu.qml's own RowLayout spacing exactly
-#define ICON_LABEL_GAP 8.0  // matches PowerButton.qml's own ColumnLayout spacing exactly
+// Layout tuning, local to this popup (see CLAUDE.md "Conventions"). Header,
+// pill and card styling match the dropdowns on purpose: a fixed-size panel
+// centered on each output's dimmed background, three action cards in a row.
+#define CARD_W 116.0
+#define CARD_H 112.0
+#define CARD_GAP 8.0
+#define OUTER_MARGIN 12.0
+#define SECTION_GAP 10.0
+#define HEADER_H 22.0
+#define PILL_H 16.0
+#define PILL_PAD_X 7.0
+#define COL_GAP 10.0
+#define ICON_LABEL_GAP 4.0
+#define LABEL_DETAIL_GAP 2.0
+#define CONTENT_W (3.0 * CARD_W + 2.0 * CARD_GAP)
+#define PANEL_W (CONTENT_W + OUTER_MARGIN * 2.0)
+#define PANEL_H (OUTER_MARGIN + HEADER_H + SECTION_GAP + CARD_H + OUTER_MARGIN)
 
 typedef struct {
     double x, y, w, h;
@@ -41,6 +53,7 @@ typedef struct {
     Output *output;
     PopupSurface *surface;
     struct wl_surface *wl_surface;
+    ButtonRect panel;
     ButtonRect buttons[3];
 } OutputOverlay;
 
@@ -57,19 +70,63 @@ static AppContext *g_app = NULL;
 static OutputOverlay *g_hovered_overlay = NULL;
 static int g_hovered_button = -1;
 
+// Header text, read once at open: who's about to be logged out, and for how long
+// the machine has been up (empty if /proc/uptime couldn't be read: no pill).
+static char g_identity[128];
+static char g_uptime[32];
+
+// What the last card click would have run, on a test-control instance -- see
+// power_menu_handle_click().
+static const char *g_test_last_action = "";
+
 void power_menu_init(AppContext *app) {
     g_app = app;
 }
 
-static void compute_buttons(Output *output, ButtonRect out[3]) {
-    double total_w = 3.0 * BUTTON_SIZE + 2.0 * BUTTON_SPACING;
-    double start_x = ((double)output->width - total_w) / 2.0;
-    double y = ((double)output->height - BUTTON_SIZE) / 2.0;
+static void compute_layout(OutputOverlay *ov) {
+    // The surface's real size, not the output's: anchored to all four edges,
+    // it still stops at the bars' exclusive zones, so it's shorter than the
+    // output (and centering by output height would land low). The output's
+    // size is only the stand-in for before the first configure.
+    int surface_w = 0, surface_h = 0;
+    if (ov->surface) {
+        popup_surface_size(ov->surface, &surface_w, &surface_h);
+    }
+    if (surface_w <= 0 || surface_h <= 0) {
+        surface_w = ov->output->width;
+        surface_h = ov->output->height;
+    }
+    ov->panel = (ButtonRect){floor((surface_w - PANEL_W) / 2.0), floor((surface_h - PANEL_H) / 2.0), PANEL_W, PANEL_H};
     for (int i = 0; i < 3; i++) {
-        out[i].x = start_x + (double)i * (BUTTON_SIZE + BUTTON_SPACING);
-        out[i].y = y;
-        out[i].w = BUTTON_SIZE;
-        out[i].h = BUTTON_SIZE;
+        ov->buttons[i].x = ov->panel.x + OUTER_MARGIN + (double)i * (CARD_W + CARD_GAP);
+        ov->buttons[i].y = ov->panel.y + OUTER_MARGIN + HEADER_H + SECTION_GAP;
+        ov->buttons[i].w = CARD_W;
+        ov->buttons[i].h = CARD_H;
+    }
+}
+
+static void read_header_info(void) {
+    char host[64] = "";
+    gethostname(host, sizeof(host) - 1);
+    const char *user = getenv("USER");
+    snprintf(g_identity, sizeof(g_identity), "%s@%s", user ? user : "?", host);
+
+    g_uptime[0] = '\0';
+    FILE *f = fopen("/proc/uptime", "r");
+    double seconds = 0.0;
+    if (f) {
+        if (fscanf(f, "%lf", &seconds) == 1) {
+            long minutes = (long)(seconds / 60.0);
+            long hours = minutes / 60, days = hours / 24;
+            if (days > 0) {
+                snprintf(g_uptime, sizeof(g_uptime), "up %ldd %ldh", days, hours % 24);
+            } else if (hours > 0) {
+                snprintf(g_uptime, sizeof(g_uptime), "up %ldh %ldm", hours, minutes % 60);
+            } else {
+                snprintf(g_uptime, sizeof(g_uptime), "up %ldm", minutes);
+            }
+        }
+        fclose(f);
     }
 }
 
@@ -89,33 +146,65 @@ static void action_shutdown(void) {
     }
 }
 
-static void draw_button(cairo_t *cr, ButtonRect *rect, bool hovered, Color accent, uint32_t glyph_cp,
-                         const char *label) {
-    // Matches PowerButton.qml's own `color: hovered ? surface0 : mantle` +
-    // `border.color: accentColor` -- square corners (no radius, unlike this
-    // project's other bordered boxes, which is already the default here
-    // since module_box_draw_rect never rounds corners).
-    Color fill = hovered ? COLORS.surface0 : COLORS.mantle;
-    module_box_draw_rect(cr, rect->x, rect->y, rect->w, rect->h, fill, accent, (double)BAR.module_border_width);
+static double text_width(const char *text, int size, bool bold) {
+    double w, h;
+    module_box_measure_text(text, size, bold, &w, &h);
+    (void)h;
+    return w;
+}
+
+// Same language as the dropdowns' cards: `base` with a grey border, lightening
+// on hover -- plus the action's own colour on the border, so it's clear which
+// one a click would run.
+static void draw_card(cairo_t *cr, ButtonRect *rect, bool hovered, Color accent, uint32_t glyph_cp, const char *label,
+                      const char *detail) {
+    module_box_draw_rect(cr, rect->x, rect->y, rect->w, rect->h, hovered ? COLORS.surface0 : COLORS.base,
+                         hovered ? accent : COLORS.surface1, hovered ? 2.0 : 1.0);
 
     char glyph_buf[5];
     glyph_utf8(glyph_cp, glyph_buf);
 
-    double icon_w, icon_h;
-    module_box_measure_text(glyph_buf, FONT.display, false, &icon_w, &icon_h);
-    double label_w, label_h;
-    module_box_measure_text(label, FONT.heading, true, &label_w, &label_h);
-    (void)icon_w;
-    (void)label_w; // module_box_draw_text_centered() re-centers horizontally on its own
+    double unused, icon_h, label_h, detail_h;
+    module_box_measure_text(glyph_buf, FONT.display, false, &unused, &icon_h);
+    module_box_measure_text(label, FONT.label, true, &unused, &label_h);
+    module_box_measure_text(detail, FONT.xs, false, &unused, &detail_h);
 
-    // Icon-over-label stack, centered as a group within the button -- mirrors
-    // PowerButton.qml's own centered ColumnLayout.
-    double stack_h = icon_h + ICON_LABEL_GAP + label_h;
-    double stack_top = rect->y + (rect->h - stack_h) / 2.0;
+    // Icon-over-label-over-detail stack, centered as a group within the card.
+    double y = rect->y + (rect->h - (icon_h + ICON_LABEL_GAP + label_h + LABEL_DETAIL_GAP + detail_h)) / 2.0;
+    module_box_draw_text_centered(cr, rect->x, y, rect->w, icon_h, glyph_buf, FONT.display, false, accent);
+    y += icon_h + ICON_LABEL_GAP;
+    module_box_draw_text_centered(cr, rect->x, y, rect->w, label_h, label, FONT.label, true,
+                                  hovered ? accent : COLORS.text);
+    y += label_h + LABEL_DETAIL_GAP;
+    module_box_draw_text_centered(cr, rect->x, y, rect->w, detail_h, detail, FONT.xs, false, COLORS.overlay0);
+}
 
-    module_box_draw_text_centered(cr, rect->x, stack_top, rect->w, icon_h, glyph_buf, FONT.display, false, accent);
-    module_box_draw_text_centered(cr, rect->x, stack_top + icon_h + ICON_LABEL_GAP, rect->w, label_h, label,
-                                   FONT.heading, true, accent);
+static void draw_header(cairo_t *cr, ButtonRect *panel) {
+    double x = panel->x + OUTER_MARGIN, y = panel->y + OUTER_MARGIN;
+    double text_right = x + CONTENT_W;
+
+    if (g_uptime[0]) {
+        double pill_w = text_width(g_uptime, FONT.xs, true) + PILL_PAD_X * 2.0;
+        double pill_x = x + CONTENT_W - pill_w;
+        double pill_y = y + (HEADER_H - PILL_H) / 2.0;
+        module_box_draw_rect(cr, pill_x, pill_y, pill_w, PILL_H, COLORS.sapphire, COLORS.mantle, 0.0);
+        module_box_draw_text_centered(cr, pill_x, pill_y, pill_w, PILL_H, g_uptime, FONT.xs, true, COLORS.mantle);
+        text_right = pill_x - COL_GAP;
+    }
+
+    // Clipped short of the pill: a long hostname must not draw over it.
+    cairo_save(cr);
+    cairo_rectangle(cr, x, y, text_right - x, HEADER_H);
+    cairo_clip(cr);
+    char icon[5], summary[sizeof(g_identity) + 8];
+    glyph_utf8(GLYPH_ICON_SHUTDOWN, icon);
+    snprintf(summary, sizeof(summary), "  ·  %s", g_identity);
+    module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, COLORS.sapphire);
+    double tx = x + text_width(icon, FONT.heading, false) + 8.0;
+    module_box_draw_text_left(cr, tx, y, HEADER_H, "Power", FONT.md, true, COLORS.text);
+    tx += text_width("Power", FONT.md, true);
+    module_box_draw_text_left(cr, tx, y, HEADER_H, summary, FONT.sm, false, COLORS.subtext0);
+    cairo_restore(cr);
 }
 
 static void draw_overlay(cairo_t *cr, void *user_data) {
@@ -143,15 +232,21 @@ static void draw_overlay(cairo_t *cr, void *user_data) {
     cairo_paint(cr);
     cairo_restore(cr);
 
-    compute_buttons(ov->output, ov->buttons);
+    compute_layout(ov);
+
+    // Sapphire, the Arch logo box's colour: the module's accent on the
+    // border, like every other popup.
+    module_box_draw_rect(cr, ov->panel.x, ov->panel.y, ov->panel.w, ov->panel.h, COLORS.mantle, COLORS.sapphire,
+                         (double)BAR.module_border_width);
+    draw_header(cr, &ov->panel);
 
     bool this_hovered = ov == g_hovered_overlay;
-    draw_button(cr, &ov->buttons[0], this_hovered && g_hovered_button == 0, COLORS.yellow, GLYPH_ICON_LOGOUT,
-                "Logout");
-    draw_button(cr, &ov->buttons[1], this_hovered && g_hovered_button == 1, COLORS.sky, GLYPH_ICON_RESTART,
-                "Restart");
-    draw_button(cr, &ov->buttons[2], this_hovered && g_hovered_button == 2, COLORS.red, GLYPH_ICON_SHUTDOWN,
-                "Shutdown");
+    draw_card(cr, &ov->buttons[0], this_hovered && g_hovered_button == 0, COLORS.yellow, GLYPH_ICON_LOGOUT, "Logout",
+              "End this session");
+    draw_card(cr, &ov->buttons[1], this_hovered && g_hovered_button == 1, COLORS.sky, GLYPH_ICON_RESTART, "Restart",
+              "Reboot the machine");
+    draw_card(cr, &ov->buttons[2], this_hovered && g_hovered_button == 2, COLORS.red, GLYPH_ICON_SHUTDOWN, "Shutdown",
+              "Power off");
 }
 
 static void redraw_all(void) {
@@ -180,6 +275,8 @@ static void open_overlay(void) {
         return; // power_menu_init() was never called -- shouldn't happen
     }
 
+    read_header_info();
+
     g_overlay_count = 0;
     for (Output *o = g_app->outputs; o && g_overlay_count < MAX_TRACKED_OUTPUTS; o = o->next) {
         OutputOverlay *ov = &g_overlays[g_overlay_count];
@@ -199,7 +296,7 @@ static void open_overlay(void) {
         }
         ov->output = o;
         ov->wl_surface = popup_surface_wl_surface(ov->surface);
-        compute_buttons(o, ov->buttons);
+        compute_layout(ov);
         popup_surface_render_now(ov->surface, draw_overlay, ov);
         g_overlay_count++;
     }
@@ -278,11 +375,25 @@ void power_menu_handle_click(struct wl_surface *surface, double x, double y) {
     }
 
     int btn = button_at(ov, x, y);
+    // Inside the panel but not on a card (its header, the gaps) is absorbed,
+    // the same as a click on any dropdown's own surface.
+    ButtonRect *p = &ov->panel;
+    if (btn < 0 && x >= p->x && x < p->x + p->w && y >= p->y && y < p->y + p->h) {
+        return;
+    }
+
     // Matches the reference's own unconditional `PowerMenuState.close()`
     // before dispatching an action -- and also covers a click that landed on
     // the dimmed background (btn == -1), matching the reference's own
     // full-surface `onClicked: PowerMenuState.close()`.
     close_overlay();
+
+    // A test instance must never be able to end the session or the machine:
+    // it records what would have run instead (tests/test_power_menu.py).
+    if (test_control_enabled()) {
+        g_test_last_action = btn == 0 ? "logout" : btn == 1 ? "restart" : btn == 2 ? "shutdown" : "";
+        return;
+    }
 
     switch (btn) {
         case 0: action_logout(); break;
@@ -290,4 +401,29 @@ void power_menu_handle_click(struct wl_surface *surface, double x, double y) {
         case 2: action_shutdown(); break;
         default: break; // background click -- just closes
     }
+}
+
+// ---- Test-control hooks (testing/test_control.c) ---------------------------------
+
+const char *power_menu_test_last_action(void) { return g_test_last_action; }
+
+bool power_menu_test_target(const char *part, double *x, double *y) {
+    if (!g_open || g_overlay_count == 0) {
+        return false;
+    }
+    OutputOverlay *ov = &g_overlays[0];
+    int card = strcmp(part, "logout") == 0 ? 0 : strcmp(part, "restart") == 0 ? 1 : strcmp(part, "shutdown") == 0 ? 2 : -1;
+    if (card >= 0) {
+        *x = ov->buttons[card].x + CARD_W / 2.0;
+        *y = ov->buttons[card].y + CARD_H / 2.0;
+    } else if (strcmp(part, "corner") == 0) {
+        *x = ov->panel.x;
+        *y = ov->panel.y;
+    } else if (strcmp(part, "header") == 0) {
+        *x = ov->panel.x + PANEL_W / 2.0;
+        *y = ov->panel.y + OUTER_MARGIN + HEADER_H / 2.0;
+    } else {
+        return false;
+    }
+    return true;
 }

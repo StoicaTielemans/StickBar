@@ -109,7 +109,7 @@ static const char *pstate_word(int p, Color *fill) {
 
 // Shared by the meters and the usage graph: calm green filling toward hot
 // red. A function rather than a static table, since COLORS isn't a
-// compile-time constant (see CLAUDE.md "Power menu").
+// compile-time constant (see docs/modules/power-menu.md).
 static void heat_gradient(Color out[3]) {
     out[0] = COLORS.green;
     out[1] = COLORS.yellow;

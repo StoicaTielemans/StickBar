@@ -97,15 +97,6 @@ double privacy_render(cairo_t *cr, Output *output, double x, double box_top, dou
     return x + box_w + BAR.item_spacing;
 }
 
-static const char *category_header(PrivacyCategory category) {
-    switch (category) {
-    case PRIVACY_CATEGORY_MIC: return "MICROPHONE";
-    case PRIVACY_CATEGORY_WEBCAM: return "WEBCAM";
-    case PRIVACY_CATEGORY_SCREENSHARE: return "SCREEN SHARE";
-    }
-    return "";
-}
-
 void privacy_handle_click(Output *output, double x, double y, uint32_t button) {
     if (button != BTN_RIGHT) {
         return;
@@ -122,38 +113,5 @@ void privacy_handle_click(Output *output, double x, double y, uint32_t button) {
         return;
     }
 
-    // Grouped by category, in a fixed MIC/WEBCAM/SCREEN SHARE order --
-    // matches the fixed enum order, not the order entries happen to be
-    // stored in pipewire_client's node table.
-    char body[2048];
-    size_t len = 0;
-    body[0] = '\0';
-
-    int count = pipewire_client_entry_count();
-    for (int cat = PRIVACY_CATEGORY_MIC; cat <= PRIVACY_CATEGORY_SCREENSHARE; cat++) {
-        bool any_in_category = false;
-        for (int i = 0; i < count; i++) {
-            PrivacyCategory entry_category;
-            char app_name[128];
-            if (!pipewire_client_entry(i, &entry_category, app_name, sizeof(app_name))) {
-                continue;
-            }
-            if (entry_category != (PrivacyCategory)cat) {
-                continue;
-            }
-            if (!any_in_category) {
-                if (len > 0 && len < sizeof(body) - 1) {
-                    len += (size_t)snprintf(body + len, sizeof(body) - len, "\n");
-                }
-                len += (size_t)snprintf(body + len, sizeof(body) - len, "%s:\n", category_header((PrivacyCategory)cat));
-                any_in_category = true;
-            }
-            len += (size_t)snprintf(body + len, sizeof(body) - len, "  %s\n", app_name);
-            if (len >= sizeof(body) - 1) {
-                break;
-            }
-        }
-    }
-
-    privacy_info_popup_open(output, body, rect->x, rect->y, rect->w, rect->h);
+    privacy_info_popup_open(output, rect->x, rect->y, rect->w, rect->h);
 }

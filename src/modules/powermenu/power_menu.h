@@ -16,7 +16,8 @@
 // at startup, before power_menu_toggle() can ever be triggered.
 void power_menu_init(AppContext *app);
 
-// Opens the full-screen logout/restart/shutdown overlay if it's currently
+// Opens the logout/restart/shutdown overlay (a dimmed full-screen surface per
+// output, each with a centered panel in the dropdowns' style) if it's currently
 // closed, or closes it if it's already open -- matches the reference
 // PowerMenuState.toggle() semantics exactly. This is the *only* entry point
 // (no separate _open()/_close() pair exposed) since both of this bar's own
@@ -30,14 +31,22 @@ bool power_menu_is_menu_surface(struct wl_surface *surface);
 // The overlay's own full-screen surface doubles as its own click target --
 // unlike every other popup in this project, there's no separate invisible
 // click-catcher surface underneath a smaller menu surface, since the
-// overlay already covers the whole output by itself. Landing on a button
-// triggers that action and closes the menu; landing anywhere else on the
-// overlay (the dimmed background) just closes it, matching the reference's
-// own full-surface `MouseArea { onClicked: PowerMenuState.close() }`.
+// overlay already covers the whole output by itself. Landing on a card
+// triggers that action and closes the menu; landing elsewhere on the panel is
+// absorbed; landing on the dimmed background just closes it, matching the
+// reference's own full-surface `MouseArea { onClicked: PowerMenuState.close() }`.
+// On a test-control instance the action is only recorded, never run.
 void power_menu_handle_click(struct wl_surface *surface, double x, double y);
 
 // Updates which button (if any) is hover-highlighted and redraws if it
 // changed, matching PowerButton.qml's own hover state.
 void power_menu_handle_motion(struct wl_surface *surface, double x, double y);
+
+// Test-control hooks (testing/test_control.c): what the last card click would
+// have run ("" if none), and where a part of the first overlay's panel is,
+// surface-local: "logout"/"restart"/"shutdown" (card centre), "header" (a point
+// in the header), "corner" (the panel's top-left).
+const char *power_menu_test_last_action(void);
+bool power_menu_test_target(const char *part, double *x, double *y);
 
 #endif

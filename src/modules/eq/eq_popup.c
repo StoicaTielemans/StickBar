@@ -29,43 +29,60 @@ typedef struct {
 } EqProfileEntry;
 
 static const EqProfileEntry PROFILES[] = {
-    { "zero2",      "Zero:2 IEM - low gain" },
-    { "dt990",      "DT 990 - full EQ, more bass" },
-    { "dt990-loud", "DT 990 - treble fix, louder" },
-    { "flat-high",  "Flat EQ - high gain" },
-    { "flat-low",   "Flat EQ - low gain" },
+    { "zero2",      "Zero:2 IEM · low gain" },
+    { "dt990",      "DT 990 · full EQ, more bass" },
+    { "dt990-loud", "DT 990 · treble fix, louder" },
+    { "flat-high",  "Flat EQ · high gain" },
+    { "flat-low",   "Flat EQ · low gain" },
 };
 #define PROFILE_COUNT ((int)(sizeof(PROFILES) / sizeof(PROFILES[0])))
 
-// Geometry constants local to this widget (see CLAUDE.md "Conventions").
-#define OUTER_MARGIN 8.0       // matches Config.bar.popupPadding, same as every other popup
-#define SECTION_GAP 8.0        // between header, graph, and the profile rows
-#define ROW_SPACING 6.0
-#define ROW_INNER_SPACING 10.0
-#define GRAPH_W 300.0
-#define GRAPH_H 120.0
-#define DB_LABEL_W 28.0        // left column for the "+6"/"-6" grid labels
+// Layout tuning, local to this popup (see CLAUDE.md "Conventions"). Header,
+// pill and card styling match the other dropdowns on purpose. Everything is
+// a fixed size (nothing here depends on the state's text), so a state change
+// only ever repaints the existing surface -- the size never changes.
+#define CONTENT_W 340.0
+#define OUTER_MARGIN 12.0
+#define SECTION_GAP 10.0
+#define HEADER_H 22.0
+#define PILL_H 16.0
+#define PILL_PAD_X 7.0
+#define CARD_PAD 8.0
+#define CARD_GAP 6.0
+#define GRAPH_LABEL_H 14.0
+#define GRAPH_TOP_GAP 8.0      // leaves room for the top dB label, centred on the graph's top edge
+#define GRAPH_H 110.0
+#define DB_LABEL_W 24.0        // left column for the "+6"/"-6" grid labels
 #define FREQ_LABEL_GAP 2.0     // between the graph's bottom edge and the Hz labels
+#define AXIS_LABEL_H 12.0
+#define SECTION_LABEL_H 14.0
+#define SECTION_LABEL_GAP 4.0
+#define PROFILE_CARD_H 30.0
+#define COL_GAP 10.0
 // The graph's dB span: at least +/-12 dB, growing in 6 dB grid steps to fit
 // heavier EQs (e.g. the bass-v preset's +19 dB) without clipping them.
 #define GRAPH_MIN_RANGE_DB 12.0
 #define GRAPH_STEP_DB 6.0
 
-typedef struct {
-    double y, h;
-} RowLayout;
+// Derived geometry: a straight stack, top to bottom.
+#define POPUP_W (CONTENT_W + OUTER_MARGIN * 2.0)
+#define INNER_X (OUTER_MARGIN + CARD_PAD)
+#define INNER_W (CONTENT_W - CARD_PAD * 2.0)
+#define GRAPH_CARD_Y (OUTER_MARGIN + HEADER_H + SECTION_GAP)
+#define GRAPH_CARD_H \
+    (CARD_PAD + GRAPH_LABEL_H + GRAPH_TOP_GAP + GRAPH_H + FREQ_LABEL_GAP + AXIS_LABEL_H + CARD_PAD)
+#define GRAPH_X (INNER_X + DB_LABEL_W)
+#define GRAPH_Y (GRAPH_CARD_Y + CARD_PAD + GRAPH_LABEL_H + GRAPH_TOP_GAP)
+#define GRAPH_W (INNER_W - DB_LABEL_W)
+#define SECTION_LABEL_Y (GRAPH_CARD_Y + GRAPH_CARD_H + SECTION_GAP)
+#define PROFILES_Y (SECTION_LABEL_Y + SECTION_LABEL_H + SECTION_LABEL_GAP)
+#define POPUP_H \
+    (PROFILES_Y + PROFILE_COUNT * PROFILE_CARD_H + (PROFILE_COUNT - 1) * CARD_GAP + OUTER_MARGIN)
 
 typedef struct {
     bool open;
     Output *output;
     PopupSurface *popup;
-
-    char header[160];
-    double header_y, header_h;
-    double graph_x, graph_y;
-    double freq_label_h;
-    RowLayout rows[PROFILE_COUNT];
-    double marker_col_w, content_width, popup_width, popup_height;
     int hovered_index;
 
     PopupSurface *catchers[MAX_TRACKED_OUTPUTS];
@@ -75,56 +92,75 @@ typedef struct {
 
 static EqPopupState g_popup = { .hovered_index = -1 };
 
-static void build_header(char *out, size_t out_size) {
-    if (!eq_state_available()) {
-        snprintf(out, out_size, "No EQ state yet - run blackpearl-eq.py state");
-        return;
-    }
-    const char *profile = eq_state_profile()[0] ? eq_state_profile() : "custom EQ";
-    const char *gain = eq_state_gain()[0] ? eq_state_gain() : "?";
-    snprintf(out, out_size, "%s  |  %s gain  |  preamp %+.0f dB%s", profile, gain,
-             eq_state_preamp(), eq_state_enabled() ? "" : "  |  EQ OFF");
+static double profile_card_y(int i) {
+    return PROFILES_Y + i * (PROFILE_CARD_H + CARD_GAP);
 }
 
-static void compute_layout(void) {
-    build_header(g_popup.header, sizeof(g_popup.header));
-
+static double text_width(const char *text, int size, bool bold) {
     double w, h;
-    module_box_measure_text(g_popup.header, FONT.md, true, &w, &h);
-    g_popup.header_y = OUTER_MARGIN;
-    g_popup.header_h = h;
+    module_box_measure_text(text, size, bold, &w, &h);
+    (void)h;
+    return w;
+}
 
-    g_popup.graph_x = OUTER_MARGIN + DB_LABEL_W;
-    g_popup.graph_y = g_popup.header_y + g_popup.header_h + SECTION_GAP;
-    module_box_measure_text("10k", FONT.xs, false, &w, &g_popup.freq_label_h);
+static void draw_text_right(cairo_t *cr, double right_x, double y, double h, const char *text, int size, bool bold,
+                            Color color) {
+    module_box_draw_text_left(cr, right_x - text_width(text, size, bold), y, h, text, size, bold, color);
+}
 
-    char buf[5];
-    double mw1, mh1, mw2, mh2;
-    glyph_utf8(GLYPH_ICON_DEVICE_DEFAULT, buf);
-    module_box_measure_text(buf, FONT.heading, false, &mw1, &mh1);
-    glyph_utf8(GLYPH_ICON_DEVICE_SELECTABLE, buf);
-    module_box_measure_text(buf, FONT.heading, false, &mw2, &mh2);
-    g_popup.marker_col_w = mw1 > mw2 ? mw1 : mw2;
-    double row_h = mh1 > mh2 ? mh1 : mh2;
-    module_box_measure_text("Ag", FONT.label, false, &w, &h);
-    if (h > row_h) row_h = h;
+// ---- Painting ----------------------------------------------------------------
 
-    // Content width is the graph's (plus its dB label column) -- the header
-    // and rows are short enough to fit within it at these font sizes.
-    g_popup.content_width = DB_LABEL_W + GRAPH_W;
-    module_box_measure_text(g_popup.header, FONT.md, true, &w, &h);
-    if (w > g_popup.content_width) {
-        g_popup.content_width = w;
+// The pill: whether the EQ is actually doing anything right now. Applying
+// beats the rest, since that's what the user just asked for.
+static const char *pill_word(Color *fill) {
+    if (eq_state_pending_profile()[0]) {
+        *fill = COLORS.yellow;
+        return "applying";
     }
-
-    double y = g_popup.graph_y + GRAPH_H + FREQ_LABEL_GAP + g_popup.freq_label_h + SECTION_GAP;
-    for (int i = 0; i < PROFILE_COUNT; i++) {
-        g_popup.rows[i].y = y;
-        g_popup.rows[i].h = row_h;
-        y += row_h + (i < PROFILE_COUNT - 1 ? ROW_SPACING : 0.0);
+    if (!eq_state_available()) {
+        *fill = COLORS.overlay1;
+        return "no data";
     }
-    g_popup.popup_width = g_popup.content_width + OUTER_MARGIN * 2.0;
-    g_popup.popup_height = y + OUTER_MARGIN;
+    if (!eq_state_enabled()) {
+        *fill = COLORS.overlay1;
+        return "off";
+    }
+    *fill = COLORS.green;
+    return "on";
+}
+
+static void paint_header(cairo_t *cr) {
+    double x = OUTER_MARGIN, y = OUTER_MARGIN;
+
+    Color fill;
+    const char *word = pill_word(&fill);
+    double pill_w = text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
+    double pill_x = x + CONTENT_W - pill_w;
+    double pill_y = y + (HEADER_H - PILL_H) / 2.0;
+
+    // Clipped short of the pill: the preset name comes from the state file,
+    // so an unusually long one must not draw over it.
+    cairo_save(cr);
+    cairo_rectangle(cr, x, y, pill_x - COL_GAP - x, HEADER_H);
+    cairo_clip(cr);
+    char icon[5];
+    glyph_utf8(GLYPH_ICON_EQUALIZER, icon);
+    module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, COLORS.lavender);
+    double tx = x + text_width(icon, FONT.heading, false) + 8.0;
+    const char *title = !eq_state_available()      ? "No EQ state yet"
+                        : eq_state_profile()[0]    ? eq_state_profile()
+                                                   : "custom EQ";
+    module_box_draw_text_left(cr, tx, y, HEADER_H, title, FONT.md, true, COLORS.text);
+    if (eq_state_gain()[0]) {
+        char summary[48];
+        snprintf(summary, sizeof(summary), "  ·  %s gain", eq_state_gain());
+        tx += text_width(title, FONT.md, true);
+        module_box_draw_text_left(cr, tx, y, HEADER_H, summary, FONT.sm, false, COLORS.subtext0);
+    }
+    cairo_restore(cr);
+
+    module_box_draw_rect(cr, pill_x, pill_y, pill_w, PILL_H, fill, COLORS.mantle, 0.0);
+    module_box_draw_text_centered(cr, pill_x, pill_y, pill_w, PILL_H, word, FONT.xs, true, COLORS.mantle);
 }
 
 static void stroke_line(cairo_t *cr, double x0, double y0, double x1, double y1, Color c) {
@@ -135,16 +171,28 @@ static void stroke_line(cairo_t *cr, double x0, double y0, double x1, double y1,
     cairo_stroke(cr);
 }
 
-// Background, dB grid (every GRAPH_STEP_DB, 0 dB brighter) with labels on the
-// left, decade frequency grid (100 Hz / 1 kHz / 10 kHz) with labels below,
-// then the curve itself on top.
-static void draw_graph(cairo_t *cr) {
-    double gx = g_popup.graph_x, gy = g_popup.graph_y;
+// A `base` card holding a label row (preamp, peak/min), then the dB grid
+// (every GRAPH_STEP_DB, 0 dB brighter) with labels on the left, the decade
+// frequency grid (100 Hz / 1 kHz / 10 kHz) with labels below, and the curve.
+static void paint_graph_card(cairo_t *cr) {
+    double gx = GRAPH_X, gy = GRAPH_Y;
     double range = eq_curve_range_db(GRAPH_MIN_RANGE_DB, GRAPH_STEP_DB);
     double mid_y = gy + GRAPH_H / 2.0;
     double px_per_db = (GRAPH_H / 2.0) / range;
 
-    module_box_draw_rect(cr, gx, gy, GRAPH_W, GRAPH_H, COLORS.base, (Color){ 0, 0, 0, 0 }, 0.0);
+    module_box_draw_rect(cr, OUTER_MARGIN, GRAPH_CARD_Y, CONTENT_W, GRAPH_CARD_H, COLORS.base, COLORS.surface1, 1.0);
+
+    double label_y = GRAPH_CARD_Y + CARD_PAD;
+    if (eq_state_available()) {
+        char preamp[32], extent[48];
+        snprintf(preamp, sizeof(preamp), "preamp %+.1f dB", eq_state_preamp());
+        snprintf(extent, sizeof(extent), "peak %+.1f  min %+.1f dB", eq_state_peak_db(), eq_state_min_db());
+        module_box_draw_text_left(cr, INNER_X, label_y, GRAPH_LABEL_H, preamp, FONT.sm, false, COLORS.subtext0);
+        draw_text_right(cr, INNER_X + INNER_W, label_y, GRAPH_LABEL_H, extent, FONT.xs, false, COLORS.overlay0);
+    } else {
+        module_box_draw_text_left(cr, INNER_X, label_y, GRAPH_LABEL_H, "run blackpearl-eq.py state", FONT.sm, false,
+                                  COLORS.subtext0);
+    }
 
     for (double db = -range; db <= range + 0.001; db += GRAPH_STEP_DB) {
         // +0.5: land 1px lines on a pixel row (see eq_curve.c's zero line).
@@ -157,9 +205,7 @@ static void draw_graph(cairo_t *cr) {
         if (fabs(db) < 0.001) {
             snprintf(label, sizeof(label), "0");
         }
-        double lw, lh;
-        module_box_measure_text(label, FONT.xs, false, &lw, &lh);
-        module_box_draw_text_left(cr, gx - 4.0 - lw, y - lh / 2.0, lh, label, FONT.xs, false, COLORS.overlay1);
+        draw_text_right(cr, gx - 4.0, y - AXIS_LABEL_H / 2.0, AXIS_LABEL_H, label, FONT.xs, false, COLORS.overlay0);
     }
 
     static const double DECADES[] = { 100.0, 1000.0, 10000.0 };
@@ -167,57 +213,52 @@ static void draw_graph(cairo_t *cr) {
     for (int i = 0; i < 3; i++) {
         double x = floor(eq_curve_freq_to_x(DECADES[i], gx, GRAPH_W)) + 0.5;
         stroke_line(cr, x, gy, x, gy + GRAPH_H, COLORS.surface0);
-        double lw, lh;
-        module_box_measure_text(DECADE_LABELS[i], FONT.xs, false, &lw, &lh);
-        module_box_draw_text_left(cr, x - lw / 2.0, gy + GRAPH_H + FREQ_LABEL_GAP, lh,
-                                   DECADE_LABELS[i], FONT.xs, false, COLORS.overlay1);
+        double lw = text_width(DECADE_LABELS[i], FONT.xs, false);
+        module_box_draw_text_left(cr, x - lw / 2.0, gy + GRAPH_H + FREQ_LABEL_GAP, AXIS_LABEL_H, DECADE_LABELS[i],
+                                  FONT.xs, false, COLORS.overlay0);
     }
 
     Color accent = eq_state_enabled() ? COLORS.lavender : COLORS.overlay0;
     eq_curve_draw(cr, gx, gy, GRAPH_W, GRAPH_H, range, accent, 2.0, true, COLORS.surface2);
 }
 
-static void draw_row(cairo_t *cr, int i) {
-    RowLayout *row = &g_popup.rows[i];
+// One card per profile, the same language as the audio device cards: the
+// active one has the accent border and name, a hovered one lightens to show
+// it's clickable, and a small tag says what a click does or is doing.
+static void paint_profile_card(cairo_t *cr, int i) {
     const char *name = PROFILES[i].name;
     bool active = strcmp(eq_state_profile(), name) == 0;
     bool pending = strcmp(eq_state_pending_profile(), name) == 0;
+    bool hovered = i == g_popup.hovered_index;
+    double y = profile_card_y(i);
 
-    if (i == g_popup.hovered_index) {
-        module_box_draw_rect(cr, OUTER_MARGIN, row->y, g_popup.content_width, row->h,
-                              COLORS.surface1, (Color){ 0, 0, 0, 0 }, 0.0);
+    module_box_draw_rect(cr, OUTER_MARGIN, y, CONTENT_W, PROFILE_CARD_H, hovered ? COLORS.surface0 : COLORS.base,
+                         active ? COLORS.lavender : COLORS.surface1, active ? 2.0 : 1.0);
+
+    module_box_draw_text_left(cr, INNER_X, y, PROFILE_CARD_H, name, FONT.label, true,
+                              active ? COLORS.lavender : COLORS.text);
+
+    const char *tag = pending ? "applying..." : active ? "active" : hovered ? "apply" : "";
+    Color tag_color = pending ? COLORS.yellow : active ? COLORS.lavender : COLORS.overlay0;
+    if (tag[0]) {
+        double tag_x = INNER_X + text_width(name, FONT.label, true) + COL_GAP;
+        module_box_draw_text_left(cr, tag_x, y, PROFILE_CARD_H, tag, FONT.xs, true, tag_color);
     }
 
-    // Same filled/hollow marker glyph pair audio/device_popup.c uses for
-    // "current default device" vs. "selectable", for the same meaning here.
-    char glyph_buf[5];
-    glyph_utf8(active ? GLYPH_ICON_DEVICE_DEFAULT : GLYPH_ICON_DEVICE_SELECTABLE, glyph_buf);
-    module_box_draw_text_left(cr, OUTER_MARGIN, row->y, row->h, glyph_buf, FONT.heading, false, COLORS.lavender);
-
-    double name_x = OUTER_MARGIN + g_popup.marker_col_w + ROW_INNER_SPACING;
-    module_box_draw_text_left(cr, name_x, row->y, row->h, name, FONT.label, active,
-                               active ? COLORS.lavender : COLORS.text);
-
-    // Right-aligned description, replaced by a status while applying --
-    // reuses draw_text_left with a precomputed x, same trick device_popup.c
-    // uses for its own right-aligned percent column.
-    const char *right = pending ? "applying..." : PROFILES[i].description;
-    double rw, rh;
-    module_box_measure_text(right, FONT.sm, false, &rw, &rh);
-    (void)rh;
-    module_box_draw_text_left(cr, OUTER_MARGIN + g_popup.content_width - rw, row->y, row->h, right, FONT.sm,
-                               false, pending ? COLORS.yellow : COLORS.subtext0);
+    draw_text_right(cr, INNER_X + INNER_W, y, PROFILE_CARD_H, PROFILES[i].description, FONT.sm, false,
+                    COLORS.subtext0);
 }
 
 static void draw_popup(cairo_t *cr, void *user_data) {
     (void)user_data;
-    module_box_draw_rect(cr, 0, 0, g_popup.popup_width, g_popup.popup_height,
-                          COLORS.mantle, COLORS.lavender, (double)BAR.module_border_width);
-    module_box_draw_text_left(cr, OUTER_MARGIN, g_popup.header_y, g_popup.header_h, g_popup.header,
-                               FONT.md, true, COLORS.lavender);
-    draw_graph(cr);
+    module_box_draw_rect(cr, 0, 0, POPUP_W, POPUP_H, COLORS.mantle, COLORS.lavender,
+                         (double)BAR.module_border_width);
+    paint_header(cr);
+    paint_graph_card(cr);
+    module_box_draw_text_left(cr, OUTER_MARGIN, SECTION_LABEL_Y, SECTION_LABEL_H, "PROFILES", FONT.xs, true,
+                              COLORS.overlay0);
     for (int i = 0; i < PROFILE_COUNT; i++) {
-        draw_row(cr, i);
+        paint_profile_card(cr, i);
     }
 }
 
@@ -231,10 +272,6 @@ void eq_popup_refresh_if_open(void) {
     if (!g_popup.open) {
         return;
     }
-    // Only the header text can change with the state (the popup's own size
-    // is fixed by GRAPH_W), so no surface resize is needed -- just a rebuild
-    // of the header string and a redraw.
-    build_header(g_popup.header, sizeof(g_popup.header));
     redraw();
 }
 
@@ -265,19 +302,17 @@ void eq_popup_open(Output *output, double box_x, double box_y, double box_w, dou
 
     g_popup.output = output;
     g_popup.hovered_index = -1;
-    compute_layout();
 
     // Same TOP+RIGHT anchor+margin math (including the BAR.height
-    // correction) as audio/device_popup.c -- see CLAUDE.md's "D-Bus /
-    // system tray" section for the reasoning.
+    // correction) as audio/device_popup.c -- see
+    // docs/popups.md for the reasoning.
     int top_margin = (int)(box_y + box_h) - BAR.height;
     int right_margin = output->width - (int)(box_x + box_w);
     if (right_margin < 0) {
         right_margin = 0;
     }
 
-    g_popup.popup = popup_surface_create(output->app, output, (int)ceil(g_popup.popup_width),
-                                          (int)ceil(g_popup.popup_height), top_margin, right_margin, 0, 0,
+    g_popup.popup = popup_surface_create(output->app, output, (int)POPUP_W, (int)POPUP_H, top_margin, right_margin, 0, 0,
                                           ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
                                           ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY);
     if (!g_popup.popup) {
@@ -317,12 +352,13 @@ bool eq_popup_is_catcher_surface(struct wl_surface *surface) {
     return false;
 }
 
-static int row_at(double x, double y) {
-    if (x < OUTER_MARGIN || x >= OUTER_MARGIN + g_popup.content_width) {
+static int card_at(double x, double y) {
+    if (x < OUTER_MARGIN || x >= OUTER_MARGIN + CONTENT_W) {
         return -1;
     }
     for (int i = 0; i < PROFILE_COUNT; i++) {
-        if (y >= g_popup.rows[i].y && y < g_popup.rows[i].y + g_popup.rows[i].h) {
+        double card_y = profile_card_y(i);
+        if (y >= card_y && y < card_y + PROFILE_CARD_H) {
             return i;
         }
     }
@@ -333,7 +369,7 @@ void eq_popup_handle_motion(double x, double y) {
     if (!g_popup.open) {
         return;
     }
-    int idx = row_at(x, y);
+    int idx = card_at(x, y);
     if (idx != g_popup.hovered_index) {
         g_popup.hovered_index = idx;
         redraw();
@@ -344,15 +380,33 @@ void eq_popup_handle_click(double x, double y) {
     if (!g_popup.open) {
         return;
     }
-    int idx = row_at(x, y);
+    int idx = card_at(x, y);
     if (idx < 0) {
         return; // header/graph area -- read-only, absorbed
     }
-    // Deliberately stays open (like audio/device_popup.c): the row flips to
-    // "applying..." now, and the graph redraws with the new curve once the
+    // Deliberately stays open (like audio/device_popup.c): the card and the
+    // pill flip to "applying" now, and the graph redraws with the new curve once the
     // script's state-file write arrives via main.c's inotify branch.
     eq_state_apply_profile(PROFILES[idx].name);
     redraw();
     // The bar box's own label also switches to "NAME..." while pending.
     output_mark_all_dirty(g_popup.output->app);
+}
+
+// ---- Test-control hooks (testing/test_control.c) ---------------------------------
+
+int eq_popup_test_card_count(void) { return g_popup.open ? PROFILE_COUNT : -1; }
+
+bool eq_popup_test_target(const char *profile, double *x, double *y) {
+    if (!g_popup.open) {
+        return false;
+    }
+    for (int i = 0; i < PROFILE_COUNT; i++) {
+        if (strcmp(PROFILES[i].name, profile) == 0) {
+            *x = OUTER_MARGIN + CONTENT_W / 2.0;
+            *y = profile_card_y(i) + PROFILE_CARD_H / 2.0;
+            return true;
+        }
+    }
+    return false;
 }

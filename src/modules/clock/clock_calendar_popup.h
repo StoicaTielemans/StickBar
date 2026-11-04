@@ -12,7 +12,7 @@
 // current year; the header's arrows then flip years --
 // mirrors the reference ClockWidget.qml's `yearOpen = !yearOpen` toggle on
 // click, translated to this project's established right-click-opens-dropdown
-// convention (see CLAUDE.md's "System monitor (CPU/GPU/memory)" section for
+// convention (see docs/popups.md for
 // why right-click, not left, is this project's answer to a module with no
 // obvious primary left-click action). `box_x/y/w/h` is the clock box's own
 // screen-space rect, as recorded by clock_render(). Right-anchored the same

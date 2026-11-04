@@ -117,7 +117,7 @@ static int create_sysmon_timer(void) {
 // Delivers SIGUSR1 through a signalfd (registered on the same epoll loop as
 // everything else) rather than a classic signal() handler -- this is the
 // Hyprland-keybind trigger for the power menu (`pkill -SIGUSR1 -x stickBar`
-// or equivalent; see CLAUDE.md's "Power menu" section for the exact keybind
+// or equivalent; see README.md's "Power menu keybind" for the exact keybind
 // line), and unlike g_should_exit's flip-a-flag-and-let-the-main-loop-notice
 // approach, signalfd lets this be handled as just another readable fd with
 // no async-signal-safety concerns at all, since nothing runs until the main

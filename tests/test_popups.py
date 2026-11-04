@@ -15,8 +15,8 @@ Plus, across the run:
   - the CPU/GPU/memory dropdowns replace each other (they open at one spot);
   - catchers are 1x1 buffers stretched with wp_viewporter, and opening a
     dropdown costs little memory (it used to add ~8 MB per output in
-    full-size transparent catcher buffers -- see CLAUDE.md "D-Bus / system
-    tray").
+    full-size transparent catcher buffers -- see
+    docs/popups.md).
 """
 
 import re
@@ -35,6 +35,7 @@ POPUPS = [
     ("mem", "right", "yellow"),
     ("network", "right", "teal"),
     ("clock", "right", "mauve"),
+    ("eq", "right", "lavender"),
     ("volume", "right", "sky"),
     ("volume", "middle", "sky"),  # the per-app mixer
     ("mic", "right", "blue"),

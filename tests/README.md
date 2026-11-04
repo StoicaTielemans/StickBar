@@ -5,7 +5,8 @@ These tests run against a real Wayland session (Hyprland). Each one starts a
 observes it from the outside: `/proc`, `WAYLAND_DEBUG` output, and exit status.
 Then it stops that instance. The tests don't patch or rebuild the source, so
 they check the exact binary you run. They use only the Python standard library
-(`test_media.py`'s fake player also needs PyGObject, and skips without it).
+(`test_media.py`'s and `test_tray.py`'s fakes also need PyGObject, and skip
+without it).
 
 The dropdown tests drive the bar through its **test-control channel**
 (`src/testing/test_control.c`, enabled only by `STICKBAR_TEST_CONTROL=1`):
@@ -42,14 +43,16 @@ pass, 1 is fail, 77 is skipped (for example, no NVIDIA driver).
 | `test_no_subprocess.py` | The bar spawns no child processes over 12s. It samples `/proc` every 3ms, which covers two 5s polls. | Running `nvidia-smi` every 5s again. |
 | `test_redraw.py` | At least a quarter of commits (and at least 3) damage less than 2000px. 40 PulseAudio events that set the volume and mute to their current values cause no extra commits. | Full-bar redraws on every clock tick, and commits for frames that didn't change. |
 | `test_stdin_intact.py` | After startup, fd 0 is still the stdin pipe the bar was given. | `shm_buffer.c` closing fd 0 for every surface: a zeroed `ShmBuffers` has `fd == 0`, and the old `fd >= 0` check closed it (stdin, or another surface's memfd). |
-| `test_popups.py` | Each dropdown (CPU, GPU, memory, network, calendar, volume, mixer, mic, media) opens from an injected click with exactly one catcher, draws the module's accent border on a mantle background, and closes from a catcher click. The CPU/GPU/memory dropdowns replace each other; catchers use `wp_viewport`; an open dropdown adds under 4 MB RSS. | Leaked catchers, a dropdown that doesn't open or close, full-size catcher buffers (~8 MB per output). |
+| `test_popups.py` | Each dropdown (CPU, GPU, memory, network, calendar, EQ, volume, mixer, mic, media) opens from an injected click with exactly one catcher, draws the module's accent border on a mantle background, and closes from a catcher click. The CPU/GPU/memory dropdowns replace each other; catchers use `wp_viewport`; an open dropdown adds under 4 MB RSS. | Leaked catchers, a dropdown that doesn't open or close, full-size catcher buffers (~8 MB per output). |
 | `test_popup_graphs.py` | In a PNG of the open memory/CPU/GPU dropdown, the newest graph dots sit within 14 px of the card's right border. | The fixed 5-minute graph centred in a wider card (dots ended 47-77 px short). |
 | `test_sysmon_data.py` | Memory (apps/free/available/shared/swap, PSI, zram) and CPU (model, threads, cores, max clock, P/E split, uptime) match `/proc` and sysfs. A 400 MB child shows up in the top apps at ≥ 95 % of that, and 2 busy loops show as `sh` at ~2/threads of the CPU. | Wrong meminfo fields, RSS-instead-of-private memory, a broken process-percent formula. |
 | `test_network_data.py` | Interface, gateway, IP, MAC, MTU and DNS match `ip`/`/sys`/`resolv.conf`; rx/tx totals fall between the kernel counters read before and after; history grows one sample per poll. | Parsing regressions in `network_client.c`. |
 | `test_audio.py` | On a throwaway null sink: a meter press sets ~75 %, a drag ends at ~25 %, scroll steps +5 %, the mute chip toggles. The mic dropdown lists only non-monitor sources. The mixer grows when a `paplay` stream starts, its slider and mute chip work, and it shrinks when the stream ends. Never touches a real device's volume or the default device. | Broken device-volume controls, monitors back in the mic list, a mixer that doesn't resize. |
 | `test_media.py` | Against `lib/fake_mpris.py`: metadata (incl. album) and status are read right; the play/next/prev chips send PlayPause/Next/Previous; the popup shrinks (or closes) when the player quits. | Broken controls, a popup stuck at its open-time size. |
+| `test_eq.py` | With a scratch `XDG_CACHE_HOME` and `lib/fake_eq_script.py` as `BLACKPEARL_EQ_SCRIPT` (the real script and the DAC are never touched): the active profile's card has the accent border and hovering lightens a card; a click runs `profile NAME`, the pill goes yellow, and the state write moves the border and turns the pill green at the same popup size; EQ off and no state file both give a grey pill. | A broken profile click path, a pill or border that doesn't follow the state. |
 | `test_tray.py` | Against `lib/fake_tray.py`: the fake's icon appears; its menu shows every entry with access-key underscores stripped, checkmark/radio state and the submenu marker; 3 separators make 4 cards on a grey border; a disabled entry is inert; a click sends that entry's `clicked` event and closes the menu. | Raw `_` labels, lost toggle state, a broken click path. |
-| `test_power_menu.py` | Every thread of the bar has SIGUSR1 in `SigBlk`; SIGUSR1 (the Hyprland keybind's signal, sent to the test instance's pid only) opens and closes the overlay, and a burst of them leaves the bar running; an Arch-logo click opens it, a background click closes it. The Logout/Restart/Shutdown buttons are never clicked. | SIGUSR1 blocked only after NVML started its threads, so the keybind killed the bar (exit by signal 10). |
+| `test_power_menu.py` | Every thread of the bar has SIGUSR1 in `SigBlk`; SIGUSR1 (the Hyprland keybind's signal, sent to the test instance's pid only) opens and closes the overlay, and a burst of them leaves the bar running; an Arch-logo click opens it, a background click closes it. The panel is centered on its surface; a hovered card takes its action's colour; a header click is absorbed; each card picks its own action. A test-control instance only records the action, and also has a fake `systemctl` and a dead Hyprland socket, so nothing can really run; the real calls aren't covered. | SIGUSR1 blocked only after NVML started its threads, so the keybind killed the bar (exit by signal 10). A panel centered by output height, not surface height. |
+| `test_privacy.py` | A `parecord` on a throwaway null sink's monitor (no real mic): the box appears, the dropdown lists it under MICROPHONE with the maroon border and pill, a catcher click closes it, and the box collapses when the stream ends. Your own bar shows the indicator for those seconds too. | A dropdown missing its stream, a box that never collapses. |
 | `test_nvml_vs_smi.py` | Makes the same NVML calls as `sysmon_client.c` and compares the results with `nvidia-smi`: usage, temperature, memory, fan, power and P-state, plus the GPU dropdown's name, driver, power limit, max clock and per-process VRAM list. | Wrong units, memory read through the v1 call (which counts reserved memory), or a wrong process-info struct layout. |
 
 The tests were checked in both directions. Against the build from before these
@@ -66,7 +69,11 @@ the current source, rebuilding and running the test, which then failed:
 - no monitor filter: `test_audio` (6 mic cards instead of 2);
 - no media recreate: `test_media` (popup stuck at 300 px);
 - no mixer recreate: `test_audio` (mixer stuck at 116 px);
+- no accent border on the active profile card: `test_eq` (border stayed
+  `surface1`);
 - raw DBusMenu labels: `test_tray` ("Show Notifications" not found);
+- the power panel centered by output height: `test_power_menu` (456 px above,
+  416 below);
 - SIGUSR1 blocked late, as before the fix: `test_power_menu` (the bar died
   of signal 10; an NVML thread, `cuda00001c00008`, didn't block it).
 

@@ -21,8 +21,7 @@ void sysmon_client_shutdown(void);
 
 // Re-reads /proc/stat, /proc/meminfo, /sys/class/thermal/thermal_zone1/temp,
 // /proc/cpuinfo, /proc/loadavg, and the GPU's stats via in-process NVML calls
-// (no subprocess -- see CLAUDE.md's "System monitor (CPU/GPU/memory)"
-// section). Call once at startup and then on every tick of a 5-second timerfd that main.c owns and drives directly,
+// (no subprocess -- see docs/modules/sysmon.md). Call once at startup and then on every tick of a 5-second timerfd that main.c owns and drives directly,
 // same convention as the clock's own timerfd -- no epoll-fd ownership is
 // needed here, unlike audio/pulse_client.c or dbus/dbus_loop.c, since
 // nothing in this module has state pushed to it asynchronously between polls.

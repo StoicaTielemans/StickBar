@@ -34,7 +34,7 @@ void module_box_measure_text(const char *text, int font_size_px, bool bold,
 // Sizing a box from the logical width alone left part of that glyph's own
 // ink landing outside its box, invisible against the matching background
 // color -- a real bug, not hypothetical (see arch_logo.c's own doc comment
-// for the exact numbers and CLAUDE.md's "Power menu" section for the full
+// for the exact numbers and BUG.md's "Arch logo cut off" for the full
 // writeup).
 void module_box_measure_text_ink(const char *text, int font_size_px, bool bold,
                                   double *out_w, double *out_h);

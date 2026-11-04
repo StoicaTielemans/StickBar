@@ -1,0 +1,228 @@
+# Architecture
+
+## File layout
+
+One subdirectory per concern, and one directory per bar widget under `modules/` —
+this is a deliberate, explicit choice (see "Conventions" in [`CLAUDE.md`](../CLAUDE.md)), not the minimum
+viable structure for a project this size.
+
+```
+stickBar/
+├── meson.build
+├── protocols/
+│   └── wlr-layer-shell-unstable-v1.xml   # vendored
+├── docs/                         topic documentation, indexed from CLAUDE.md
+├── tests/                        live regression tests + perf_compare.py (see
+│                                 docs/testing.md and tests/README.md)
+└── src/
+    ├── main.c                    entry point: wires everything up, owns the epoll
+    │                             loop, owns teardown
+    ├── config/
+    │   ├── config.h / config.c   full Catppuccin Mocha palette + bar geometry/font
+    │   │                         constants, ported from the Quickshell config.js
+    │   └── glyphs.h / glyphs.c   Nerd Font icon codepoints + kanji numeral table,
+    │                             plus glyph_utf8() to encode them at runtime
+    ├── wayland/
+    │   ├── context.h             AppContext + Output structs shared across every
+    │   │                         wayland/* and bar/* file (see "Core data model" below)
+    │   ├── registry.c            wl_registry global binding + the connect/roundtrip
+    │   │                         sequence
+    │   ├── event_loop.c          epoll setup + the wl_display prepare_read dance
+    │   ├── output.c              wl_output tracking, geometry/mode/scale/done/name/
+    │   │                         description handling, per-output index assignment
+    │   ├── pointer.c             wl_seat -> wl_pointer, enter/motion/button routing
+    │   └── shm_buffer.c          memfd-backed double-buffered wl_shm pool
+    ├── testing/
+    │   └── test_control.c        STICKBAR_TEST_CONTROL=1 stdin command channel
+    │                             for tests/ (injected clicks, data dumps, popup
+    │                             PNG snapshots); inert otherwise
+    ├── bar/
+    │   ├── bar_surface.c         per-output zwlr_layer_surface_v1 lifecycle +
+    │   │                         frame-callback-throttled redraw (lives forever,
+    │   │                         one per output)
+    │   └── popup_surface.c       generic *transient* layer-surface: explicit
+    │                             anchor/margin/size, single-shot render (no
+    │                             frame-callback throttling), created per-open and
+    │                             destroyed on close -- every dropdown, click-catcher
+    │                             and the power menu (see docs/popups.md)
+    ├── render/
+    │   ├── render.c              top-level per-output draw dispatch + background
+    │   ├── module_box.c          shared cairo/pango helpers: bordered box chrome,
+    │   │                         centered text, left-aligned text (added for the
+    │   │                         tray's menu rows) -- used by every widget
+    │   ├── braille_graph.c       btop-style braille-dot history graph (pure
+    │   │                         cairo), used by the network/CPU/GPU/memory
+    │                             dropdowns
+    │   └── meter_bar.c           segmented "how full" bar (btop's ▰▰▱▱ meters),
+    │                             pure cairo, used by the CPU/GPU/memory dropdowns
+    ├── hyprland/
+    │   ├── ipc_request.c         request socket (.socket.sock): one connection per
+    │                             command, cJSON parsing helper
+    │   ├── ipc_events.c          event socket (.socket2.sock): persistent
+    │   │                         connection, line framing, event->refresh trigger
+    │   └── dispatch.c            click-to-focus dispatch with the classic->Lua
+    │                             fallback quirk (see docs/modules/hyprland.md)
+    ├── dbus/                     D-Bus plumbing for the system tray (see
+    │                             docs/modules/tray.md)
+    │   ├── dbus_loop.c           sd_bus connection + generic epoll integration
+    │   ├── sni_watcher_service.c attempts to *become* the StatusNotifierWatcher;
+    │   │                         tried first
+    │   ├── sni_watcher.c         StatusNotifierWatcher Host (client) registration;
+    │   │                         fallback used only if _service.c's claim fails
+    │   ├── sni_registry.c        tracked-item table, property fetch, per-item
+    │   │                         signal subscriptions
+    │   ├── sni_icon.c            pure IconPixmap -> cairo_surface_t* conversion
+    │   │                         (no D-Bus types in this file, deliberately)
+    │   ├── icon_theme.c          fallback PNG icon lookup for items with no usable
+    │   │                         IconPixmap -- also no D-Bus types
+    │   └── dbusmenu.c            com.canonical.dbusmenu client: GetLayout parsing,
+    │                             Event("clicked",...) triggering
+    ├── audio/                    PulseAudio-protocol plumbing for volume/mic (see
+    │                             docs/modules/audio.md)
+    │   ├── pulse_client.c        pa_threaded_mainloop connection, live sink/source/
+    │   │                         stream cache, get+set, eventfd notification
+    │   ├── device_popup.c        shared sink/source dropdown (volume and mic)
+    │   └── mixer_popup.c         per-app volume mixer (middle-click on the volume box)
+    ├── sysmon/                   /proc + NVML plumbing for CPU/GPU/memory (see
+    │                             docs/modules/sysmon.md)
+    │   └── sysmon_client.c       the 5s poll, plain synchronous accessors, and the
+    │                             dropdown-only details (process scans, PSI, zram,
+    │                             clocks)
+    ├── mpris/                    MPRIS plumbing for the media module (see
+    │                             docs/modules/media.md), on dbus/'s shared session-bus connection
+    │   └── mpris_client.c        tracked-player table, subscriptions, fire-and-forget
+    │                             controls, on-demand Position, duplicate hiding
+    ├── network/                  plumbing for the network module (see
+    │                             docs/modules/network.md), on sysmon's shared 5s timerfd
+    │   └── network_client.c      /proc, /sys, resolv.conf and getifaddrs() reads
+    ├── pipewire/                 stream-graph monitor for the privacy module (see
+    │                             docs/modules/privacy.md)
+    │   └── pipewire_client.c     pw_thread_loop, node/link tables, eventfd notification
+    ├── eq/                       DAC EQ plumbing for the EQ module (see
+    │                             docs/modules/eq.md), on its own inotify fd
+    │   ├── eq_state.c            state.json load + inotify watch + background
+    │   │                         `blackpearl-eq.py profile NAME` launcher
+    │   └── eq_curve.c            pure cairo curve drawing, shared by the bar box and
+    │                             dropdown
+    └── modules/                  each box's render + hit-rect + click handling; which
+                                  button does what is in docs/popups.md
+        ├── workspaces/
+        │   └── workspaces.c      occupied/focused set computation, kanji pills
+        ├── cpu/                  cpu.c (box), cpu_popup.c (dropdown)
+        ├── gpu/                  gpu.c (box, NVIDIA only), gpu_popup.c (dropdown)
+        ├── mem/                  mem.c (box), mem_popup.c (dropdown)
+        ├── privacy/              privacy.c (box), privacy_info_popup.c (dropdown)
+        ├── clock/                clock.c (timerfd-driven box),
+        │                         clock_calendar_popup.c (year calendar)
+        ├── volume/               volume.c (default-sink box)
+        ├── mic/                  mic.c (default-source box)
+        ├── media/                media.c (active-player box, centered in the bar),
+        │                         media_popup.c (dropdown)
+        ├── network/              network.c (default-route box), network_info_popup.c
+        ├── eq/                   eq.c (mini-curve + profile box, between volume and
+        │                         network), eq_popup.c (dropdown)
+        ├── tray/                 tray.c (icon row, Activate vs open-menu routing),
+        │                         tray_context_menu.c (DBusMenu dropdown)
+        └── powermenu/            arch_logo.c (leftmost bar item), power_menu.c (the
+                                  overlay, see docs/modules/power-menu.md)
+```
+
+## Core data model
+
+- **`AppContext`** (`wayland/context.h`) is the one struct almost everything holds a
+  pointer to: the Wayland display/registry, bound globals (compositor, shm, seat,
+  layer_shell), the pointer, and the `Output` linked list. `main.c` owns the single
+  instance on its stack.
+- **`Output`** (also `wayland/context.h`) is one tracked monitor. It carries a
+  `wl_output*`, a `wl_surface*` (set by `bar_surface.c` once created — this is how
+  `wayland/pointer.c` matches a `wl_pointer.enter`'s surface back to an `Output` by
+  plain pointer comparison, no lookup table needed), an `index` (0-based, assigned by
+  **binding order**, not by Hyprland's own monitor id/name — this is what
+  `modules/workspaces` uses to assign each output its 5-wide workspace-id range: index
+  0 -> ids 1-5, index N -> ids `[5N+1, 5N+5]`), and a `bar_surface` pointer that's
+  `NULL` until the output's Wayland `done` event fires.
+- **`BarSurface`** (opaque outside `bar/bar_surface.c`) is the real per-output
+  render target: its `wl_surface`, `zwlr_layer_surface_v1`, double-buffered shm
+  pool, `configured`/`dirty` flags, and pending frame callback. Everything else
+  interacts with it only through `bar_surface_create()` / `_destroy()` /
+  `_mark_dirty()`.
+- Dependency direction is intentionally one-way: `wayland/*` doesn't depend on
+  `bar/*`, `render/*`, or `modules/*`; `bar/bar_surface.c` depends on
+  `render/render.h`; `render/render.c` depends on `modules/*`. `wayland/pointer.c`
+  is the one exception: it calls directly into each module's and popup's
+  click/motion/scroll handlers -- a flat list of explicit call sites, not a generic
+  dispatch table (at N=11 clickable bar-surface modules plus 7 popup kinds, still
+  cheap enough that the indirection wouldn't pay for itself).
+- **`AppContext.pointer_over` vs `pointer_over_surface`**: `pointer_over_surface`
+  is the raw `wl_surface*` currently under the pointer, always kept up to date.
+  `pointer_over` is the `Output*` it resolves to *if* it's one of the bar's own
+  surfaces — `NULL` for any popup or click-catcher surface, since those are
+  never stored on any `Output` (only `bar_surface.c`-owned surfaces are).
+  `pointer.c`'s button handler checks each popup kind's surfaces in turn, each via
+  its own `_is_menu_surface()` / `_is_catcher_surface()` pair (they're disjoint, so
+  the order among them doesn't matter), *then* falls back to the `Output`-keyed
+  path -- a popup/catcher surface never matches an `Output`, so checking the popup
+  kinds first is required, not just tidier.
+
+## Redraw path (`bar/bar_surface.c`)
+
+Every `output_mark_all_dirty()` call still means "something may have changed,"
+but a frame only reaches the compositor if it actually differs:
+
+- **Two private CPU-side frames per bar surface (`prev`/`next`)**, besides the
+  two shm buffers. `prev` is exactly what was last committed; the shm buffers
+  can't serve that role because they ping-pong with the compositor, so the
+  one you get back holds a frame from *two* commits ago.
+- **Skip if identical**: each redraw draws into `next` and compares it to
+  `prev`. No difference → no attach/commit/frame callback at all. This is
+  the one check that covers every redraw source (Hyprland events that don't
+  change a pill, PipeWire graph churn, 5s polls landing on the same numbers,
+  `pactl` setting a volume to its current value — the last one confirmed: 40
+  such calls produced zero extra commits).
+- **Damage is the bounding box of changed pixels**, not the whole surface —
+  a clock tick damages 8x10 px (the seconds digit), a volume change ~32x11.
+  Confirmed via `WAYLAND_DEBUG=1` (`grep damage_buffer`).
+- **The 1s clock tick is clock-only**: `output_mark_all_clock_dirty()` →
+  `render_output_clock_only()` copies `prev` into `next` and repaints only the
+  clock's box (clipped, at its last recorded rect from `clock_last_rect()`).
+  It falls back to a full `render_output()` if a full redraw is also pending,
+  there's no previous frame, or the clock box came out a different width (the
+  boxes to its left would need to move). Any full redraw request wins over a
+  clock-only one.
+- **The clock timer is aligned to wall-clock seconds** (`arm_clock_timer()` in
+  `main.c`): a `CLOCK_REALTIME` timerfd armed with `TFD_TIMER_ABSTIME` for the
+  next whole second, 1s interval. `TFD_TIMER_CANCEL_ON_SET` makes a
+  wall-clock *set* (NTP step, manual change, resume from suspend) fail the
+  next `read()` with `ECANCELED`, and the loop re-arms to re-align. The `ECANCELED` re-arm path wasn't
+  exercised live (it needs root to set the clock).
+
+## Performance (measured)
+
+Measured on this machine (2x 1920x1080 outputs) with fresh instances of the
+build before and after NVML + the redraw path above, run side by side:
+
+| | before | after |
+|---|---|---|
+| CPU, incl. spawned children | ~1.2% | ~0.3% |
+| `nvidia-smi` processes per minute | 12 | 0 |
+| Whole 5s sysmon poll (CPU+mem+GPU) | 15-45ms+ (`nvidia-smi`) | ~0.7-1.5ms |
+| Private memory (`Private_Dirty`) | ~6 MB | ~26 MB |
+| RSS at startup | ~29 MB | ~55 MB |
+| Commits/min (both outputs) | ~160 | ~155 |
+| Pixels damaged/min | ~6.2M | ~0.5M |
+
+- **GPU**: the bar itself does no GPU work (cairo draws on the CPU into
+  `wl_shm`; Hyprland composites), and NVML only reads stats -- `stickBar`
+  never appears in `nvidia-smi`'s process list and holds no VRAM.
+- **Almost all of the memory increase is NVML** (see [modules/sysmon.md](modules/sysmon.md));
+  the redraw path's `prev`/`next` frames add ~0.6 MB for two outputs.
+- Commits barely drop because the clock really does change every second on
+  both outputs; the win is that each commit damages a few dozen pixels
+  instead of the whole bar.
+- How these were measured, to redo it: CPU from `/proc/<pid>/stat`
+  utime+stime **plus cutime+cstime** (the old build's `nvidia-smi` CPU only
+  shows up in the latter -- leaving it out made the old build look ~3x
+  cheaper than it was); memory from `/proc/<pid>/smaps_rollup`; commits and
+  damage by counting `wl_surface#N.commit` / `damage_buffer(...)` lines under
+  `WAYLAND_DEBUG=1`. RSS of a long-running instance drifts down over hours as
+  untouched pages get reclaimed, so compare fresh starts against fresh starts.

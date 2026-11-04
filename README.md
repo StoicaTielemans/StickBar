@@ -59,7 +59,7 @@ cairo/pangocairo — no GTK, no other UI toolkit.
 
 For a much more detailed writeup of how each module works internally —
 including known limitations and deliberate deviations from the reference
-Quickshell bar — see [`CLAUDE.md`](./CLAUDE.md).
+Quickshell bar — see [`docs/`](./docs), indexed from [`CLAUDE.md`](./CLAUDE.md).
 
 ## Requirements
 
@@ -146,4 +146,4 @@ what's missing or unpolished:
   not verified against real Wi-Fi hardware (the development machine only has
   Ethernet).
 
-See `CLAUDE.md` for the full, module-by-module list.
+See [`docs/limitations.md`](./docs/limitations.md) for the full list.

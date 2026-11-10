@@ -347,6 +347,10 @@ int main(void) {
     bool wayland_lost = false;
 
     while (!g_should_exit) {
+        // Everything the last iteration's events marked dirty, drawn once.
+        // Before wayland_dispatch_prepare(), which flushes the commits out.
+        output_flush_dirty(&app);
+
         // Must be called immediately before epoll_wait() on every iteration -- see
         // wayland/event_loop.c for why a plain wl_display_dispatch() can't be used
         // here instead. A false return means the connection is already dead.
@@ -426,34 +430,37 @@ int main(void) {
                     timer_fd_drain(dbus_timeout_fd);
                 }
                 dbus_loop_pump(bus, epoll_fd, dbus_fd, dbus_timeout_fd);
-                // Cheap no-op unless the media popup is actually open (see
-                // media_popup_refresh_if_open()'s own doc comment). The bar
-                // widget itself doesn't need an equivalent unconditional
-                // output_mark_all_dirty() call here -- unlike pulse_client's
-                // notify-fd below (only ever signaled on an actual cache
-                // change), this fd is ready on *any* D-Bus activity, most of
-                // which doesn't touch tray or MPRIS state, so each module's
-                // own signal handler (sni_registry.c's, mpris_client.c's)
-                // already calls output_mark_all_dirty() itself, granularly,
-                // only when something actually changed.
-                media_popup_refresh_if_open();
+                // This fd is ready on *any* D-Bus activity, most of which
+                // touches neither the tray nor MPRIS. Each module's own signal
+                // handler (sni_registry.c's, mpris_client.c's) marks the bar
+                // dirty itself, only when something it shows changed; the
+                // media dropdown -- a full re-layout -- likewise only when an
+                // MPRIS player's shown state did.
+                static unsigned seen_mpris_changes = 0;
+                if (mpris_change_count() != seen_mpris_changes) {
+                    seen_mpris_changes = mpris_change_count();
+                    media_popup_refresh_if_open();
+                }
             } else if (pulse_fd >= 0 && fd == pulse_fd) {
                 // The cache itself is already updated by the time this fires
                 // (pulse_client's background thread writes to it before
-                // signaling) -- pump() just drains the eventfd counter.
-                pulse_client_pump();
+                // signaling). The dropdowns show most of it, so they refresh
+                // on every pump; the bar only when its boxes' values changed.
+                bool bar_changed = pulse_client_pump();
                 device_popup_refresh_if_open();
                 mixer_popup_refresh_if_open();
-                output_mark_all_dirty(&app);
+                if (bar_changed) {
+                    output_mark_all_dirty(&app);
+                }
             } else if (pipewire_fd >= 0 && fd == pipewire_fd) {
-                // Same shape as the pulse_fd branch above: this fd is only
-                // ever signaled on an actual node/link graph change, so an
-                // unconditional redraw here (rather than each module calling
-                // it granularly, the dbus_fd branch's approach) is correct.
-                pipewire_client_pump();
-                // Players' playback streams may have come or gone.
-                media_popup_streams_changed();
-                output_mark_all_dirty(&app);
+                // Signaled on every graph change; only some of them matter.
+                unsigned changed = pipewire_client_pump();
+                if (changed & PIPEWIRE_PLAYBACK_CHANGED) {
+                    media_popup_streams_changed(); // re-match players to streams
+                }
+                if (changed & PIPEWIRE_PRIVACY_CHANGED) {
+                    output_mark_all_dirty(&app);
+                }
             } else if (visualizer_fd >= 0 && fd == visualizer_fd) {
                 // Each graph lives on its own small subsurface in the media
                 // dropdown, so a frame never touches the popup's own pixels.

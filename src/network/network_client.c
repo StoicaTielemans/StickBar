@@ -40,14 +40,35 @@ static History2 g_hist; // a = rx, b = tx
 static char g_dns_servers[MAX_DNS_SERVERS][64];
 static int g_dns_count = 0;
 
-static double read_stat_bytes(const char *iface, const char *stat_name) {
-    char path[256];
-    snprintf(path, sizeof(path), "/sys/class/net/%s/statistics/%s", iface, stat_name);
-    char buf[64];
-    if (!file_read_trimmed(path, buf, sizeof(buf)) || buf[0] == '\0') {
-        return -1.0;
+// `iface`'s total received/transmitted bytes, both from one read of
+// /proc/net/dev -- the two /sys/class/net/<iface>/statistics/{rx,tx}_bytes
+// files this used to read cost ~93us each in kernel time (measured), the
+// whole /proc/net/dev about the same as one of them. False if the interface
+// isn't listed.
+static bool read_dev_counters(const char *iface, double *rx, double *tx) {
+    char buf[8192];
+    if (!file_read_trimmed("/proc/net/dev", buf, sizeof(buf))) {
+        return false;
     }
-    return atof(buf);
+    size_t len = strlen(iface);
+    for (char *line = strchr(buf, '\n'); line; line = strchr(line, '\n')) {
+        line++;
+        while (*line == ' ') {
+            line++;
+        }
+        if (strncmp(line, iface, len) != 0 || line[len] != ':') {
+            continue;
+        }
+        // "<iface>: rx_bytes packets errs drop fifo frame compressed multicast tx_bytes ..."
+        unsigned long long r, t;
+        if (sscanf(line + len + 1, "%llu %*u %*u %*u %*u %*u %*u %*u %llu", &r, &t) == 2) {
+            *rx = (double)r;
+            *tx = (double)t;
+            return true;
+        }
+        return false;
+    }
+    return false;
 }
 
 // /proc/net/route's Destination/Gateway columns are 8-hex-digit big fields
@@ -177,6 +198,40 @@ static void refresh_ip_address(const char *iface) {
     freeifaddrs(ifaddr);
 }
 
+void network_client_refresh_details(void) {
+    const char *iface = g_interface_name;
+    if (!iface[0]) {
+        return;
+    }
+    char path[256];
+    char buf[128];
+
+    snprintf(path, sizeof(path), "/sys/class/net/%s/address", iface);
+    file_read_trimmed(path, g_mac_address, sizeof(g_mac_address));
+
+    snprintf(path, sizeof(path), "/sys/class/net/%s/mtu", iface);
+    file_read_trimmed(path, g_mtu, sizeof(g_mtu));
+
+    // "speed" doesn't exist (or reads back <= 0) for most Wi-Fi interfaces --
+    // matches the reference's own `speed > 0 ? String(speed) : ""` check.
+    snprintf(path, sizeof(path), "/sys/class/net/%s/speed", iface);
+    if (file_read_trimmed(path, buf, sizeof(buf)) && atoi(buf) > 0) {
+        // Explicit ".*s" precision (not a plain "%s") so gcc's
+        // -Wformat-truncation can statically verify this can't overflow
+        // g_link_speed, even though `buf` (128 bytes) is wider -- the speed
+        // value itself is always a short integer string in practice.
+        snprintf(g_link_speed, sizeof(g_link_speed), "%.*s", (int)sizeof(g_link_speed) - 1, buf);
+    } else {
+        g_link_speed[0] = '\0';
+    }
+
+    snprintf(path, sizeof(path), "/sys/class/net/%s/duplex", iface);
+    file_read_trimmed(path, g_duplex, sizeof(g_duplex));
+
+    refresh_dns_servers();
+    refresh_ip_address(iface);
+}
+
 void network_client_poll(void) {
     char iface[64] = "";
     char gw_hex[32] = "";
@@ -212,35 +267,16 @@ void network_client_poll(void) {
     file_read_trimmed(path, buf, sizeof(buf));
     g_connected = strcmp(buf, "up") == 0;
 
-    g_is_wifi = check_is_wifi(iface);
-
-    snprintf(path, sizeof(path), "/sys/class/net/%s/address", iface);
-    file_read_trimmed(path, g_mac_address, sizeof(g_mac_address));
-
-    snprintf(path, sizeof(path), "/sys/class/net/%s/mtu", iface);
-    file_read_trimmed(path, g_mtu, sizeof(g_mtu));
-
-    // "speed" doesn't exist (or reads back <= 0) for most Wi-Fi interfaces --
-    // matches the reference's own `speed > 0 ? String(speed) : ""` check.
-    snprintf(path, sizeof(path), "/sys/class/net/%s/speed", iface);
-    if (file_read_trimmed(path, buf, sizeof(buf)) && atoi(buf) > 0) {
-        // Explicit ".*s" precision (not a plain "%s") so gcc's
-        // -Wformat-truncation can statically verify this can't overflow
-        // g_link_speed, even though `buf` (128 bytes) is wider -- the speed
-        // value itself is always a short integer string in practice.
-        snprintf(g_link_speed, sizeof(g_link_speed), "%.*s", (int)sizeof(g_link_speed) - 1, buf);
-    } else {
-        g_link_speed[0] = '\0';
+    // Wi-Fi vs. Ethernet is a property of the interface, so it can only
+    // change along with it; the dropdown-only details get a fresh read then
+    // too (and whenever the dropdown opens or refreshes).
+    if (iface_changed) {
+        g_is_wifi = check_is_wifi(iface);
+        network_client_refresh_details();
     }
 
-    snprintf(path, sizeof(path), "/sys/class/net/%s/duplex", iface);
-    file_read_trimmed(path, g_duplex, sizeof(g_duplex));
-
-    refresh_dns_servers();
-    refresh_ip_address(iface);
-
-    double rx = read_stat_bytes(iface, "rx_bytes");
-    double tx = read_stat_bytes(iface, "tx_bytes");
+    double rx = -1.0, tx = -1.0;
+    read_dev_counters(iface, &rx, &tx);
     double now = monotonic_seconds();
 
     if (g_prev_rx >= 0.0 && g_prev_sample_time > 0.0 && rx >= 0.0 && tx >= 0.0) {

@@ -203,6 +203,16 @@ stickBar/
 Every `output_mark_all_dirty()` call still means "something may have changed,"
 but a frame only reaches the compositor if it actually differs:
 
+- **Marking only sets flags; `main.c` draws once per event-loop iteration**
+  (`output_flush_dirty()`, right before waiting for events). So a wakeup that
+  delivers several changes -- a burst of MPRIS or tray signals, each marking the
+  bar dirty -- costs one render, not one per signal.
+- **Most event sources mark the bar dirty only when what it shows changed**:
+  pulse (default sink/source volume and mute), PipeWire (the privacy flags),
+  Hyprland (occupied/focused workspaces), MPRIS (a player's shown state). The
+  pixel comparison below would drop an unchanged frame anyway, but only after
+  laying out and drawing it.
+
 - **Two private CPU-side frames per bar surface (`prev`/`next`)**, besides the
   two shm buffers. `prev` is exactly what was last committed; the shm buffers
   can't serve that role because they ping-pong with the compositor, so the
@@ -258,6 +268,13 @@ build before and after NVML + the redraw path above, run side by side:
 - Commits barely drop because the clock really does change every second on
   both outputs; the win is that each commit damages a few dozen pixels
   instead of the whole bar.
+- **Code cleanup pass** (release build vs. the visualizer commit `cfaf902`, same
+  run, `tests/perf_compare.py`): idle CPU 0.14% -> 0.08%, memory and commits
+  unchanged. Most of it is the Pango layout cache in `render/module_box.c` (every
+  text measure/draw used to create and shape a fresh layout, ~30-45 per output per
+  full redraw for ~13 distinct strings). Under event bursts, from the change-gated
+  redraws above: 300 no-op pulse volume events 660ms -> 30ms of CPU, 20 PipeWire
+  graph changes 130ms -> 10ms.
 - How these were measured, to redo it: CPU from `/proc/<pid>/stat`
   utime+stime **plus cutime+cstime** (the old build's `nvidia-smi` CPU only
   shows up in the latter -- leaving it out made the old build look ~3x

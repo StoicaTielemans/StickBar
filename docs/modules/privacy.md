@@ -61,6 +61,12 @@ and `modules/privacy/privacy.c` + `privacy_info_popup.c` are the bar-facing half
   media dropdown captures a player's playback stream as a running
   `Stream/Input/Audio` node, which would otherwise show a mic icon naming
   stickBar whenever the dropdown is open during playback. See [media.md](media.md).
+- **`pipewire_client_pump()` computes the three flags once per notification** (one
+  locked scan) and caches them; the bar is redrawn only when they changed
+  (`PIPEWIRE_PRIVACY_CHANGED`), and `privacy.c` reads the cache instead of three
+  locked scans per frame. Most graph changes are sinks, filters, links or the
+  visualizer's own captures: measured, 20 null-sink add/removes cost 130ms of CPU
+  before, 10ms after.
 - **Playback streams (`Stream/Output/Audio`) and Client objects are tracked too**,
   only for the media visualizer's player <-> stream matching
   (`pipewire_find_playback_for_pid()`); every privacy accessor matches

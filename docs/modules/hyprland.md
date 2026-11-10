@@ -18,7 +18,8 @@ IPC library — just raw AF_UNIX sockets + cJSON:
   `destroyworkspace[v2]`), it calls `workspaces_refresh()` (a fresh
   `j/workspaces` + `j/activeworkspace` query — no incremental delta tracking,
   deliberately, since re-querying is cheap at this event rate) and marks every
-  output dirty. If the connection drops (EOF/error), `ipc_events.c` returns `false`
+  output dirty only if the occupied set or the focused workspace changed (most
+  window events change neither). If the connection drops (EOF/error), `ipc_events.c` returns `false`
   and **does not retry itself** — `main.c` owns the "attempt exactly one reconnect,
   then give up on live workspace updates for this run" policy, so that policy
   lives in one place instead of being split across files.

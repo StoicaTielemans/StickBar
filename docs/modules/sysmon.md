@@ -15,9 +15,12 @@ dropdown, rather than one shared tooltip for all three.
   use) — matches the reference `SystemMonitor.qml`'s own `Timer { interval:
   5000 }` exactly. `sysmon/sysmon_client.c` has no persistent connection or
   background thread of any kind; every poll just re-reads `/proc/stat`,
-  `/proc/meminfo`, `/sys/class/thermal/thermal_zone1/temp`, `/proc/cpuinfo`,
-  and `/proc/loadavg` from scratch (all cheap: small pseudo-files, no syscalls
-  beyond open/read/close) plus a handful of in-process NVML calls for the GPU
+  `/proc/meminfo` and `/sys/class/thermal/thermal_zone1/temp` from scratch (small
+  pseudo-files; single-value ones via `util/file.c`'s open/read, no stdio buffer)
+  plus a handful of in-process NVML calls for the GPU. The load averages and
+  the `/proc/cpuinfo` clock average (28 KB, only a fallback for when per-core
+  `cpufreq` isn't exposed) are dropdown-only, read in
+  `sysmon_cpu_refresh_details()`
   (see below). No locking anywhere in this file, unlike `pulse_client.c` —
   everything runs on the main thread, so there's no concurrent writer to
   guard against. (NVML starts two idle threads of its own inside the

@@ -251,33 +251,16 @@ bool visualizer_init(void) {
         return true;
     }
 
-    pw_init(NULL, NULL); // refcounted -- pipewire_client.c calls it too
-    g_pw_inited = true;
-    g_loop = pw_thread_loop_new("stickBar-visualizer", NULL);
-    g_context = g_loop ? pw_context_new(pw_thread_loop_get_loop(g_loop), NULL, 0) : NULL;
-    if (!g_context || pw_thread_loop_start(g_loop) < 0) {
-        fprintf(stderr, "stickBar: couldn't set up the visualizer's PipeWire thread -- disabled for this run\n");
-        visualizer_shutdown();
-        return false;
-    }
-    // One connection for every slot's stream (pw_stream_new_simple() would
-    // open a separate one per stream).
-    pw_thread_loop_lock(g_loop);
-    g_core = pw_context_connect(g_context, NULL, 0);
-    pw_thread_loop_unlock(g_loop);
-    if (!g_core) {
-        fprintf(stderr, "stickBar: visualizer couldn't connect to PipeWire -- disabled for this run\n");
-        visualizer_shutdown();
-        return false;
-    }
-
-    // No streams yet: each slot's is created the first time it's turned on,
-    // so a bar whose media dropdown is never opened never captures anything.
+    // Nothing PipeWire yet: the thread, context and connection are made on
+    // the first capture (ensure_connected()), so a bar whose media dropdown is never
+    // opened with something playing never has any of them -- a thread, a
+    // PipeWire context and its plugins, a socket.
     g_available = true;
     return true;
 }
 
-void visualizer_shutdown(void) {
+// Tears down everything PipeWire: the streams, the connection, the thread.
+static void disconnect_pipewire(void) {
     if (g_loop) {
         pw_thread_loop_lock(g_loop);
         for (int i = 0; i < VISUALIZER_MAX_SOURCES; i++) {
@@ -298,13 +281,44 @@ void visualizer_shutdown(void) {
         pw_thread_loop_destroy(g_loop);
         g_loop = NULL;
     }
-    if (g_timer_fd >= 0) {
-        close(g_timer_fd);
-        g_timer_fd = -1;
-    }
     if (g_pw_inited) {
         pw_deinit();
         g_pw_inited = false;
+    }
+}
+
+// Sets up the PipeWire thread and its one connection for every slot's
+// stream (pw_stream_new_simple() would open a separate one per stream).
+// False -- and the visualizer disabled for the rest of the run, so the
+// dropdown drops its graph rows -- if that fails.
+static bool ensure_connected(void) {
+    if (g_core) {
+        return true;
+    }
+    pw_init(NULL, NULL); // refcounted -- pipewire_client.c calls it too
+    g_pw_inited = true;
+    g_loop = pw_thread_loop_new("stickBar-visualizer", NULL);
+    g_context = g_loop ? pw_context_new(pw_thread_loop_get_loop(g_loop), NULL, 0) : NULL;
+    if (g_context && pw_thread_loop_start(g_loop) == 0) {
+        pw_thread_loop_lock(g_loop);
+        g_core = pw_context_connect(g_context, NULL, 0);
+        pw_thread_loop_unlock(g_loop);
+    }
+    if (!g_core) {
+        fprintf(stderr, "stickBar: visualizer couldn't connect to PipeWire -- disabled for this run\n");
+        disconnect_pipewire();
+        g_available = false; // the dropdown lays out without graph rows from now on
+        return false;
+    }
+    return true;
+}
+
+
+void visualizer_shutdown(void) {
+    disconnect_pipewire();
+    if (g_timer_fd >= 0) {
+        close(g_timer_fd);
+        g_timer_fd = -1;
     }
     g_available = false;
     g_timer_armed = false;
@@ -354,19 +368,16 @@ void visualizer_set_source(int slot, uint32_t target_serial, bool active) {
     if (active == s->active && !retarget) {
         return;
     }
+    if (active && !ensure_connected()) {
+        return;
+    }
 
     pw_thread_loop_lock(g_loop);
+    // Off means gone, not paused: a paused stream would stay a node in the
+    // PipeWire graph (and linked to its target) for as long as the bar runs.
+    destroy_stream(s);
     if (active) {
-        if (retarget) {
-            destroy_stream(s);
-        }
-        if (!s->stream) {
-            create_stream(s, target_serial); // connects active
-        } else {
-            pw_stream_set_active(s->stream, true);
-        }
-    } else if (s->stream) {
-        pw_stream_set_active(s->stream, false);
+        create_stream(s, target_serial); // connects active
     }
     // Either way, the old window is no longer this slot's current audio:
     // without new samples it would stay frozen in the rings, and the graph

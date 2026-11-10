@@ -2,13 +2,16 @@
 #define CUSTOMBAR_MODULES_WORKSPACES_WORKSPACES_H
 
 #include <cairo.h>
+#include <stdbool.h>
 
 #include "wayland/context.h"
 
 // Re-queries Hyprland's current workspace/focus state (via hyprland/ipc_request.c)
 // and caches it for rendering. Call once at startup, and again whenever
 // hyprland/ipc_events.c sees an event that could have changed occupancy or focus.
-void workspaces_refresh(void);
+// Returns true if the occupied set or the focused workspace changed -- what the
+// pills show -- so the caller redraws only then.
+bool workspaces_refresh(void);
 
 // Draws `output`'s workspace pills (only occupied-or-focused ids within that
 // output's assigned range, see workspaces.c) left-to-right starting at (x, box_top),

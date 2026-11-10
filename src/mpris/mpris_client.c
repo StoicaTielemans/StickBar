@@ -315,7 +315,9 @@ static bool player_entry(sd_bus_message *m, const char *key, const char *content
 // per change. Acceptable here since PropertiesChanged fires relatively
 // rarely (track changes, play/pause, not a hot path), same tradeoff
 // dbus/sni_registry.c's refresh_icon() already makes for NewIcon.
-static void fetch_player_properties(MprisPlayer *item) {
+// GetAll on the Player interface, plus (with_identity) the root interface's
+// Identity -- once when the player appears; Identity doesn't change.
+static void fetch_player_properties(MprisPlayer *item, bool with_identity) {
     sd_bus_error err = SD_BUS_ERROR_NULL;
     sd_bus_message *reply = NULL;
     int rc = sd_bus_call_method(item->bus, item->bus_name, MPRIS_OBJECT_PATH,
@@ -331,6 +333,9 @@ static void fetch_player_properties(MprisPlayer *item) {
     dbus_dict_walk(reply, player_entry, item);
     sd_bus_message_unref(reply);
     sd_bus_error_free(&err);
+    if (!with_identity) {
+        return;
+    }
 
     // Identity lives on the root org.mpris.MediaPlayer2 interface, not
     // Player -- fetched as a second, separate call. Best-effort: a player
@@ -352,6 +357,76 @@ static void fetch_player_properties(MprisPlayer *item) {
     }
 }
 
+// Bumped whenever anything a player shows changes, or players come and go --
+// see mpris_change_count().
+static unsigned g_change_count = 0;
+
+// Something visible changed: redraw the bar, and let the dropdown know.
+static void players_changed(void) {
+    g_change_count++;
+    if (g_app) {
+        output_mark_all_dirty(g_app);
+    }
+}
+
+// What a player shows, for telling whether a PropertiesChanged changed any of
+// it (players also send it for volume, rate, shuffle, ... which nothing here
+// displays).
+typedef struct {
+    char status[16], title[256], artist[256], album[256];
+    bool can_go_next, can_go_previous;
+    int64_t length_us;
+} PlayerView;
+
+static void player_view(const MprisPlayer *p, PlayerView *v) {
+    memcpy(v->status, p->status, sizeof(v->status));
+    memcpy(v->title, p->title, sizeof(v->title));
+    memcpy(v->artist, p->artist, sizeof(v->artist));
+    memcpy(v->album, p->album, sizeof(v->album));
+    v->can_go_next = p->can_go_next;
+    v->can_go_previous = p->can_go_previous;
+    v->length_us = p->length_us;
+}
+
+static bool player_view_equal(const PlayerView *a, const PlayerView *b) {
+    return strcmp(a->status, b->status) == 0 && strcmp(a->title, b->title) == 0 &&
+           strcmp(a->artist, b->artist) == 0 && strcmp(a->album, b->album) == 0 &&
+           a->can_go_next == b->can_go_next && a->can_go_previous == b->can_go_previous &&
+           a->length_us == b->length_us;
+}
+
+// PropertiesChanged(s interface, a{sv} changed, as invalidated): the new
+// values are right there in the signal, so it's parsed directly -- this used
+// to make two *blocking* round trips to the player (GetAll + Get(Identity))
+// per signal, which browsers send for every volume/rate/metadata tweak, and a
+// hung player could stall the whole bar for sd-bus's 25s timeout. Only
+// properties sent as "invalidated" (name only, no value) need a GetAll.
+static void apply_properties_changed(sd_bus_message *m, MprisPlayer *item) {
+    const char *iface = NULL;
+    if (sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &iface) < 0 || !iface ||
+        strcmp(iface, MPRIS_PLAYER_INTERFACE) != 0) {
+        return; // the root interface (Identity etc.), or another one: nothing shown changes
+    }
+    PlayerView before, after;
+    player_view(item, &before);
+    dbus_dict_walk(m, player_entry, item);
+    bool invalidated = false;
+    if (sd_bus_message_enter_container(m, SD_BUS_TYPE_ARRAY, "s") > 0) {
+        const char *name = NULL;
+        while (sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &name) > 0) {
+            invalidated = true;
+        }
+        sd_bus_message_exit_container(m);
+    }
+    if (invalidated) {
+        fetch_player_properties(item, false);
+    }
+    player_view(item, &after);
+    if (!player_view_equal(&before, &after)) {
+        players_changed();
+    }
+}
+
 static int on_player_signal(sd_bus_message *m, void *userdata, sd_bus_error *ret_error) {
     (void)ret_error;
     MprisPlayer *item = userdata;
@@ -363,10 +438,7 @@ static int on_player_signal(sd_bus_message *m, void *userdata, sd_bus_error *ret
     }
     const char *member = sd_bus_message_get_member(m);
     if (member && strcmp(member, "PropertiesChanged") == 0) {
-        fetch_player_properties(item);
-        if (g_app) {
-            output_mark_all_dirty(g_app);
-        }
+        apply_properties_changed(m, item);
     }
     return 0;
 }
@@ -404,7 +476,7 @@ static void add_player(sd_bus *bus, const char *bus_name) {
         sd_bus_creds_unref(creds);
     }
 
-    fetch_player_properties(item);
+    fetch_player_properties(item, true);
 
     // member=NULL subscribes to every signal from the Properties interface at
     // this player's object path (in practice, only PropertiesChanged) --
@@ -416,9 +488,7 @@ static void add_player(sd_bus *bus, const char *bus_name) {
     sd_bus_match_signal(bus, &item->signal_slot, item->bus_name, MPRIS_OBJECT_PATH,
                          "org.freedesktop.DBus.Properties", NULL, on_player_signal, item);
 
-    if (g_app) {
-        output_mark_all_dirty(g_app);
-    }
+    players_changed();
 }
 
 static void remove_player(const char *bus_name) {
@@ -430,9 +500,7 @@ static void remove_player(const char *bus_name) {
         sd_bus_slot_unref(item->signal_slot);
     }
     memset(item, 0, sizeof(*item)); // in_use = false
-    if (g_app) {
-        output_mark_all_dirty(g_app);
-    }
+    players_changed();
 }
 
 // Fires for every bus-name ownership change on the whole session bus, not
@@ -498,4 +566,8 @@ void mpris_client_init(sd_bus *bus, AppContext *app) {
     // `slot` is intentionally left unref'd for the rest of the process's
     // life, same convention as every other long-lived subscription in this
     // codebase (dbus/sni_watcher.c's registered_slot, etc.).
+}
+
+unsigned mpris_change_count(void) {
+    return g_change_count;
 }

@@ -32,9 +32,8 @@ the identical 5000ms interval).
   not just a stylistic port choice. `NetworkMonitor.qml` only re-runs its own `ip
   addr` subprocess when the interface actually changes (its own `ifaceChanged`
   gate, since a subprocess spawn is comparatively expensive and the IP rarely
-  changes once assigned); `getifaddrs()` is a single syscall over already
-  kernel-resident data, cheap enough to just call on every 5-second poll with no
-  equivalent change-gating needed, and it sidesteps interpolating a kernel-
+  changes once assigned); `getifaddrs()` is a single libc call over already
+  kernel-resident data, and it sidesteps interpolating a kernel-
   reported interface name into a shell command string entirely (not a real
   attack surface in practice — interface names are kernel/udev-controlled, not
   user input — but a plain libc call needs no such reasoning about safety at
@@ -55,6 +54,15 @@ the identical 5000ms interval).
   timer that runs anyway. Cleared when the default-route interface changes or
   disappears (same rule as the rate reset).
 - **DNS servers**: every `nameserver` line in `/etc/resolv.conf`.
+- **The 5s poll reads only what the bar box shows**: the default route and gateway,
+  `operstate`, and the rx/tx counters -- both from one read of `/proc/net/dev`
+  (the two `/sys/class/net/<iface>/statistics/*_bytes` files it used to read cost
+  ~93µs each in kernel time, the whole `/proc/net/dev` about one of them).
+  Wi-Fi vs. Ethernet is read only when the interface changes. The dropdown-only
+  details (MAC, MTU, speed, duplex, IP via `getifaddrs()`, DNS) are read by
+  `network_client_refresh_details()`: when the interface changes, and when the
+  dropdown opens or refreshes -- so an IP change from a DHCP renewal shows at the
+  dropdown's next open/refresh, not in the bar (which doesn't show it).
 - **The bar widget (`modules/network/network.c`) shows the connection-state icon
   plus a live rx/tx rate** (`↓12.3 KB/s ↑4.5 KB/s`, or `Disconnected` when the
   interface is down but still has a default route, matching the reference's own

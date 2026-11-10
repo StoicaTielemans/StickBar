@@ -28,11 +28,15 @@ bool pulse_client_init(void);
 void pulse_client_shutdown(void);
 
 // An eventfd, signaled from the background thread every time the locally
-// cached sink/source state changes (volume, mute, device list, or default
-// device). Register this on the caller's epoll instance; on readiness, call
-// pulse_client_pump() (drains the eventfd) and then redraw.
+// cached sink/source/stream state changes (volume, mute, device list, default
+// device, app streams). Register this on the caller's epoll instance; on
+// readiness, call pulse_client_pump().
 int pulse_client_notify_fd(void);
-void pulse_client_pump(void);
+
+// Drains the eventfd. Returns true if what the bar's volume/mic boxes show
+// (the default sink's and source's volume and mute) changed since the last
+// pump -- the dropdowns, which show much more, refresh on every pump anyway.
+bool pulse_client_pump(void);
 
 // --- Default sink (speaker) ---
 // All of these read/mutate the locally cached snapshot under the same lock the

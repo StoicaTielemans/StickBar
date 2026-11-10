@@ -127,8 +127,9 @@ bool hyprland_events_pump(HyprlandEvents *ev, AppContext *app) {
     if (workspaces_changed) {
         // Re-query rather than trying to apply each event as an incremental delta
         // -- simpler and plenty cheap at the rate these events actually occur.
-        workspaces_refresh();
-        output_mark_all_dirty(app);
+        if (workspaces_refresh()) {
+            output_mark_all_dirty(app);
+        }
     }
 
     return true;

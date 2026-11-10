@@ -21,6 +21,12 @@
 // adding a second poll source for an identical cadence.
 void network_client_poll(void);
 
+// Re-reads the details only the dropdown shows (MAC, MTU, link speed, duplex,
+// IP address, DNS servers). The 5s poll does this only when the interface
+// changes -- the bar box shows none of it -- so the dropdown calls it when it
+// opens and on each refresh while open.
+void network_client_refresh_details(void);
+
 bool network_connected(void);
 bool network_is_wifi(void);
 const char *network_interface_name(void); // "" if no default route at all

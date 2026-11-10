@@ -32,6 +32,9 @@ void sysmon_client_poll(void);
 // --- CPU ---
 double sysmon_cpu_percent(void);
 int sysmon_cpu_temp_c(void);
+// These two are dropdown-only, refreshed by sysmon_cpu_refresh_details():
+// the /proc/cpuinfo clock average (0 when per-core cpufreq values exist --
+// it's only their fallback) and the load averages.
 double sysmon_cpu_freq_ghz(void);
 const char *sysmon_cpu_load_avg(void); // "N.NN N.NN N.NN" (1/5/15 min), stable buffer
 int sysmon_cpu_core_count(void);

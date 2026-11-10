@@ -78,6 +78,18 @@ static int g_notify_fd = -1;
 
 static PwNode g_nodes[MAX_PW_NODES];
 static PwClient g_clients[MAX_PW_CLIENTS];
+
+// Bumped (under the lock) whenever something a player <-> playback stream
+// match depends on changes: a playback stream appearing, going, or starting /
+// stopping, or a client's pid becoming known. pipewire_client_pump() reports
+// it, so the media dropdown only re-matches when it could make a difference.
+static unsigned g_playback_gen = 0;
+
+// Main thread only: the privacy state as of the last pump. Cached so the bar
+// is redrawn only when it actually changed, and so privacy.c's per-frame reads
+// don't each take the lock and scan every node.
+static bool g_mic_active = false, g_webcam_active = false, g_screenshare_active = false;
+static unsigned g_seen_playback_gen = 0;
 static PwLink g_links[MAX_PW_LINKS];
 
 // Wakes up the main epoll loop to re-read the cache and redraw. Safe to call
@@ -159,6 +171,9 @@ static void node_info_cb(void *data, const struct pw_node_info *info) {
     bool was_running = node->running;
     node->running = info->state == PW_NODE_STATE_RUNNING;
     if (node->running != was_running) {
+        if (strcmp(node->media_class, "Stream/Output/Audio") == 0) {
+            g_playback_gen++;
+        }
         notify_dirty();
     }
 }
@@ -176,7 +191,8 @@ static void client_info_cb(void *data, const struct pw_client_info *info) {
     const char *pid = spa_dict_lookup(info->props, PW_KEY_APP_PROCESS_ID);
     if (pid && pid[0]) {
         client->pid = atoi(pid);
-        notify_dirty(); // a stream may now match a player
+        g_playback_gen++; // a stream may now match a player
+        notify_dirty();
     }
 }
 
@@ -243,6 +259,9 @@ static void handle_node_global(uint32_t id, const struct spa_dict *props) {
     bool is_audio_input = !is_own_visualizer && strcmp(node->media_class, "Stream/Input/Audio") == 0;
     bool is_video_input = strcmp(node->media_class, "Stream/Input/Video") == 0;
     bool is_audio_output = strcmp(node->media_class, "Stream/Output/Audio") == 0;
+    if (is_audio_output) {
+        g_playback_gen++;
+    }
     if (is_audio_input || is_video_input || is_audio_output) {
         node->is_tracked_stream = true;
         struct pw_proxy *proxy = pw_registry_bind(g_registry, id, PW_TYPE_INTERFACE_Node, PW_VERSION_NODE, 0);
@@ -300,6 +319,9 @@ static void registry_event_global_remove(void *data, uint32_t id) {
         if (g_nodes[i].in_use && g_nodes[i].id == id) {
             if (g_nodes[i].proxy) {
                 pw_proxy_destroy(g_nodes[i].proxy);
+            }
+            if (strcmp(g_nodes[i].media_class, "Stream/Output/Audio") == 0) {
+                g_playback_gen++;
             }
             memset(&g_nodes[i], 0, sizeof(g_nodes[i]));
             notify_dirty();
@@ -475,53 +497,49 @@ int pipewire_client_notify_fd(void) {
     return g_notify_fd;
 }
 
-void pipewire_client_pump(void) {
+unsigned pipewire_client_pump(void) {
     notify_fd_drain(g_notify_fd);
-}
-
-bool pipewire_client_mic_active(void) {
-    if (!g_loop) return false;
+    if (!g_loop) {
+        return 0;
+    }
+    // One scan for all three categories, under one lock.
+    bool mic = false, webcam = false, screenshare = false;
     pw_thread_loop_lock(g_loop);
-    bool active = false;
-    for (int i = 0; i < MAX_PW_NODES && !active; i++) {
+    for (int i = 0; i < MAX_PW_NODES; i++) {
         PwNode *n = &g_nodes[i];
-        if (node_is_active_stream(n) && strcmp(n->media_class, "Stream/Input/Audio") == 0) {
-            active = true;
+        if (!node_is_active_stream(n)) {
+            continue;
+        }
+        if (strcmp(n->media_class, "Stream/Input/Audio") == 0) {
+            mic = true;
+        } else if (strcmp(n->media_class, "Stream/Input/Video") == 0) {
+            if (video_node_is_webcam(n)) {
+                webcam = true;
+            } else {
+                screenshare = true;
+            }
         }
     }
+    unsigned playback_gen = g_playback_gen;
     pw_thread_loop_unlock(g_loop);
-    return active;
+
+    unsigned changed = 0;
+    if (mic != g_mic_active || webcam != g_webcam_active || screenshare != g_screenshare_active) {
+        changed |= PIPEWIRE_PRIVACY_CHANGED;
+    }
+    if (playback_gen != g_seen_playback_gen) {
+        changed |= PIPEWIRE_PLAYBACK_CHANGED;
+    }
+    g_mic_active = mic;
+    g_webcam_active = webcam;
+    g_screenshare_active = screenshare;
+    g_seen_playback_gen = playback_gen;
+    return changed;
 }
 
-bool pipewire_client_webcam_active(void) {
-    if (!g_loop) return false;
-    pw_thread_loop_lock(g_loop);
-    bool active = false;
-    for (int i = 0; i < MAX_PW_NODES && !active; i++) {
-        PwNode *n = &g_nodes[i];
-        if (node_is_active_stream(n) && strcmp(n->media_class, "Stream/Input/Video") == 0 &&
-            video_node_is_webcam(n)) {
-            active = true;
-        }
-    }
-    pw_thread_loop_unlock(g_loop);
-    return active;
-}
-
-bool pipewire_client_screenshare_active(void) {
-    if (!g_loop) return false;
-    pw_thread_loop_lock(g_loop);
-    bool active = false;
-    for (int i = 0; i < MAX_PW_NODES && !active; i++) {
-        PwNode *n = &g_nodes[i];
-        if (node_is_active_stream(n) && strcmp(n->media_class, "Stream/Input/Video") == 0 &&
-            !video_node_is_webcam(n)) {
-            active = true;
-        }
-    }
-    pw_thread_loop_unlock(g_loop);
-    return active;
-}
+bool pipewire_client_mic_active(void) { return g_mic_active; }
+bool pipewire_client_webcam_active(void) { return g_webcam_active; }
+bool pipewire_client_screenshare_active(void) { return g_screenshare_active; }
 
 int pipewire_client_entry_count(void) {
     if (!g_loop) return 0;

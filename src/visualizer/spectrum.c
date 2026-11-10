@@ -136,10 +136,22 @@ void spectrum_analyze(const float *samples, float rate) {
     g_rate = rate;
 }
 
-void spectrum_bands(int count, float *out) {
+// Each band's bin range and tilt depend only on the band count and sample
+// rate, so they're worked out once (powf/log2f per band per frame before).
+#define MAX_BANDS 128
+
+typedef struct {
+    unsigned lo, hi; // FFT bins, inclusive
+    float tilt_db;   // added to the band's level, see TILT_DB_PER_OCTAVE
+} Band;
+
+static Band g_bands[MAX_BANDS];
+static int g_band_count = 0;
+static float g_band_rate = 0.0f;
+
+static void layout_bands(int count) {
     const float bin_hz = g_rate / (float)SPECTRUM_FFT_SIZE;
     const unsigned max_bin = SPECTRUM_FFT_SIZE / 2 - 1;
-
     for (int b = 0; b < count; b++) {
         float lo_hz = BAND_LO_HZ * powf(BAND_HI_HZ / BAND_LO_HZ, (float)b / count);
         float hi_hz = BAND_LO_HZ * powf(BAND_HI_HZ / BAND_LO_HZ, (float)(b + 1) / count);
@@ -148,21 +160,31 @@ void spectrum_bands(int count, float *out) {
         if (lo < 1) lo = 1; // bin 0 is DC, not sound
         if (hi > max_bin) hi = max_bin;
         if (hi < lo) hi = lo;
+        float center_hz = sqrtf(lo_hz * hi_hz);
+        g_bands[b] = (Band){lo, hi, TILT_DB_PER_OCTAVE * log2f(center_hz / TILT_PIVOT_HZ)};
+    }
+    g_band_count = count;
+    g_band_rate = g_rate;
+}
 
+void spectrum_bands(int count, float *out) {
+    if (count > MAX_BANDS) {
+        count = MAX_BANDS;
+    }
+    if (count != g_band_count || g_rate != g_band_rate) {
+        layout_bands(count);
+    }
+    for (int b = 0; b < count; b++) {
         // Peak, not average, over the band's bins: the low bands span one or
         // two bins and the high ones dozens, and averaging would make a single
         // tone in a wide band look much quieter than the same tone in a narrow
         // one. (Even at 11.7Hz bins the very lowest columns can share a bin
         // and move together -- the FFT's resolution limit, same as in cava.)
         float peak = 0.0f;
-        for (unsigned k = lo; k <= hi; k++) {
+        for (unsigned k = g_bands[b].lo; k <= g_bands[b].hi; k++) {
             if (g_mag[k] > peak) peak = g_mag[k];
         }
-
-        float db = 20.0f * log10f(peak + 1e-9f);
-        float center_hz = sqrtf(lo_hz * hi_hz);
-        db += TILT_DB_PER_OCTAVE * log2f(center_hz / TILT_PIVOT_HZ);
-
+        float db = 20.0f * log10f(peak + 1e-9f) + g_bands[b].tilt_db;
         float level = (db - FLOOR_DB) / (CEIL_DB - FLOOR_DB);
         out[b] = level < 0.0f ? 0.0f : level > 1.0f ? 1.0f : level;
     }

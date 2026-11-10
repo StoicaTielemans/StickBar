@@ -91,6 +91,7 @@ typedef struct {
 typedef struct {
     StripSurface *strip;
     bool shown;
+    double placed_y;     // where the strip was last placed (valid while shown)
     VisFrame drawn;
     MprisPlayer *player; // whose stream `target` was resolved for
     uint32_t target;     // object.serial of its playback stream, or VISUALIZER_TARGET_MIX
@@ -618,9 +619,21 @@ static void update_graphs(void) {
                 continue;
             }
         }
-        strip_surface_place(g->strip, (int)vis_panel_x(), (int)card->vis_y, (int)inner_w(), (int)VIS_ROW_H);
-        compute_frame(i, &g->drawn);
-        strip_surface_draw(g->strip, paint_strip, &g->drawn);
+        // A relayout happens at least once a second while open (the
+        // timeline); a graph that's already shown at the same spot with the
+        // same dots doesn't need touching -- its own frames come from
+        // media_popup_visualizer_frame().
+        VisFrame f;
+        compute_frame(i, &f);
+        bool moved = !g->shown || g->placed_y != card->vis_y;
+        if (moved) {
+            strip_surface_place(g->strip, (int)vis_panel_x(), (int)card->vis_y, (int)inner_w(), (int)VIS_ROW_H);
+            g->placed_y = card->vis_y;
+        }
+        if (moved || memcmp(&f, &g->drawn, sizeof(f)) != 0) {
+            g->drawn = f;
+            strip_surface_draw(g->strip, paint_strip, &g->drawn);
+        }
         g->shown = true;
     }
 }

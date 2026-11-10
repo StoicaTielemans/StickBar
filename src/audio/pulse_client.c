@@ -426,10 +426,20 @@ int pulse_client_notify_fd(void) {
     return g_notify_fd;
 }
 
-void pulse_client_pump(void) {
+bool pulse_client_pump(void) {
     // Any number of notify_dirty() calls since the last pump collapse into
-    // one drain, and so one redraw.
+    // one drain.
     notify_fd_drain(g_notify_fd);
+
+    // What the bar shows: the default sink's and source's volume and mute.
+    // Most notifications (another app's stream, a non-default device, a
+    // sink going idle) change none of it -- only the dropdowns care.
+    static int last[4] = {-1, -1, -1, -1};
+    int now[4] = {pulse_default_sink_volume_percent(), pulse_default_sink_muted(),
+                  pulse_default_source_volume_percent(), pulse_default_source_muted()};
+    bool changed = memcmp(now, last, sizeof(now)) != 0;
+    memcpy(last, now, sizeof(now));
+    return changed;
 }
 
 int pulse_default_sink_volume_percent(void) {

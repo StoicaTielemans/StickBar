@@ -143,6 +143,14 @@ void output_mark_all_dirty(AppContext *app) {
     }
 }
 
+void output_flush_dirty(AppContext *app) {
+    for (Output *output = app->outputs; output; output = output->next) {
+        if (output->bar_surface) {
+            bar_surface_flush(output->bar_surface);
+        }
+    }
+}
+
 void output_mark_all_clock_dirty(AppContext *app) {
     for (Output *output = app->outputs; output; output = output->next) {
         if (output->bar_surface) {

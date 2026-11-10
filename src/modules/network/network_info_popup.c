@@ -320,6 +320,7 @@ static void draw_popup(cairo_t *cr, void *user_data) {
 }
 
 void network_info_popup_open(Output *output, double box_x, double box_y, double box_w, double box_h) {
+    network_client_refresh_details(); // the 5s poll keeps only what the bar box shows
     network_info_popup_close(); // at most one network info popup open at a time
 
     g_popup.host.output = output;
@@ -343,6 +344,7 @@ void network_info_popup_refresh_if_open(void) {
     if (!g_popup.host.open) {
         return;
     }
+    network_client_refresh_details();
     popup_surface_render_now(g_popup.host.popup, draw_popup, NULL);
 }
 

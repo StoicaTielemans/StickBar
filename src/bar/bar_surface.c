@@ -283,23 +283,28 @@ void bar_surface_destroy(BarSurface *surf) {
     free(surf);
 }
 
-// Shared tail of both mark functions: render now if nothing's holding us back.
-static void render_if_possible(BarSurface *surf) {
+// Marking only records what's dirty; the render happens in
+// bar_surface_flush(), once per event-loop iteration. It used to render right
+// away, so one wakeup that delivered several changes (a burst of MPRIS or tray
+// property signals, each marking the bar dirty) re-laid-out and diffed the
+// whole bar once per signal.
+void bar_surface_mark_dirty(BarSurface *surf) {
+    surf->dirty_full = true;
+}
+
+void bar_surface_mark_clock_dirty(BarSurface *surf) {
+    surf->dirty_clock = true;
+}
+
+void bar_surface_flush(BarSurface *surf) {
+    if (!surf->dirty_full && !surf->dirty_clock) {
+        return;
+    }
     if (!surf->configured || !surf->prev || !surf->next) {
-        return; // nothing to draw yet; layer_surface_configure() triggers the first render
+        return; // nothing to draw yet; layer_surface_configure() marks it dirty when it can
     }
     if (surf->frame_callback) {
         return; // frame_done() will notice the dirty flag and redraw when it fires
     }
     do_render(surf);
-}
-
-void bar_surface_mark_dirty(BarSurface *surf) {
-    surf->dirty_full = true;
-    render_if_possible(surf);
-}
-
-void bar_surface_mark_clock_dirty(BarSurface *surf) {
-    surf->dirty_clock = true;
-    render_if_possible(surf);
 }

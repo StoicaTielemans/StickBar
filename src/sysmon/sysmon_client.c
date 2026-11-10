@@ -272,32 +272,33 @@ static void poll_cpu(void) {
         g_cpu_temp_c = (int)lround((double)milli_c / 1000.0);
     }
 
-    FILE *cf = fopen("/proc/cpuinfo", "r");
-    if (cf) {
-        double sum = 0.0;
-        int count = 0;
-        while (fgets(line, sizeof(line), cf)) {
-            if (strncmp(line, "cpu MHz", 7) != 0) {
-                continue;
-            }
-            char *colon = strchr(line, ':');
-            if (colon) {
-                sum += atof(colon + 1);
-                count++;
-            }
-        }
-        fclose(cf);
-        g_cpu_freq_ghz = count > 0 ? (sum / count) / 1000.0 : 0.0;
-    }
+    // The load averages and the /proc/cpuinfo clock average are dropdown-only
+    // -- see sysmon_cpu_refresh_details(). Reading them here meant parsing
+    // the whole 28 KB /proc/cpuinfo every 5s for a fallback value.
+}
 
-    FILE *lf = fopen("/proc/loadavg", "r");
-    if (lf) {
-        double a = 0, b = 0, c = 0;
-        if (fscanf(lf, "%lf %lf %lf", &a, &b, &c) == 3) {
-            snprintf(g_load_avg, sizeof(g_load_avg), "%.2f %.2f %.2f", a, b, c);
-        }
-        fclose(lf);
+// The average "cpu MHz" over all cores from /proc/cpuinfo -- only a fallback,
+// for when cpufreq's per-core scaling_cur_freq isn't exposed.
+static double cpuinfo_avg_ghz(void) {
+    FILE *cf = fopen("/proc/cpuinfo", "r");
+    if (!cf) {
+        return 0.0;
     }
+    char line[256];
+    double sum = 0.0;
+    int count = 0;
+    while (fgets(line, sizeof(line), cf)) {
+        if (strncmp(line, "cpu MHz", 7) != 0) {
+            continue;
+        }
+        char *colon = strchr(line, ':');
+        if (colon) {
+            sum += atof(colon + 1);
+            count++;
+        }
+    }
+    fclose(cf);
+    return count > 0 ? (sum / count) / 1000.0 : 0.0;
 }
 
 static long long parse_meminfo_field(const char *text, const char *key) {
@@ -765,17 +766,24 @@ static void sample_cpu_processes(void) {
 }
 
 void sysmon_cpu_refresh_details(void) {
+    bool have_core_freqs = false;
     for (int i = 0; i < g_core_count; i++) {
         char path[96];
         snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", i);
         long khz = 0;
         g_core_ghz[i] = file_read_long(path, &khz) ? khz / 1e6 : 0.0;
+        have_core_freqs |= g_core_ghz[i] > 0.0;
     }
+    g_cpu_freq_ghz = have_core_freqs ? 0.0 : cpuinfo_avg_ghz();
 
-    // 4th field of /proc/loadavg is "running/total" scheduling entities.
+    // /proc/loadavg: the 1/5/15-minute averages, then "running/total"
+    // scheduling entities.
     FILE *f = fopen("/proc/loadavg", "r");
     if (f) {
-        if (fscanf(f, "%*f %*f %*f %d/%d", &g_tasks_running, &g_tasks_total) != 2) {
+        double a = 0, b = 0, c = 0;
+        if (fscanf(f, "%lf %lf %lf %d/%d", &a, &b, &c, &g_tasks_running, &g_tasks_total) == 5) {
+            snprintf(g_load_avg, sizeof(g_load_avg), "%.2f %.2f %.2f", a, b, c);
+        } else {
             g_tasks_running = g_tasks_total = 0;
         }
         fclose(f);

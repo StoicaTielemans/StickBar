@@ -17,10 +17,11 @@ BarSurface *bar_surface_create(AppContext *app, Output *output);
 
 void bar_surface_destroy(BarSurface *surf);
 
-// Marks this bar surface as needing a redraw. If no frame callback is currently
-// pending, this renders+commits immediately and requests a new callback; otherwise
-// the flag is picked up when the pending callback's `done` fires, so redraws never
-// happen faster than the compositor is asking for.
+// Marks this bar surface as needing a redraw. Nothing is drawn until
+// bar_surface_flush() (main.c calls output_flush_dirty() once per event-loop
+// iteration), so any number of marks in one wakeup cost one render. If a frame
+// callback is pending then, the flag is picked up when its `done` fires
+// instead, so redraws never happen faster than the compositor is asking for.
 //
 // Whether the frame actually reaches the compositor depends on whether it differs
 // from the last one committed -- an unchanged frame is dropped (see do_render()).
@@ -30,5 +31,9 @@ void bar_surface_mark_dirty(BarSurface *surf);
 // once-a-second tick). Everything else is reused from the last committed frame;
 // falls back to a full redraw on its own if that isn't possible.
 void bar_surface_mark_clock_dirty(BarSurface *surf);
+
+// Renders and commits whatever is marked dirty, if the surface can take a
+// frame now.
+void bar_surface_flush(BarSurface *surf);
 
 #endif

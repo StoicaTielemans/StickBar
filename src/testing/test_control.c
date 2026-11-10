@@ -580,6 +580,7 @@ static void dispatch(char *line) {
         } else if (strcmp(rest, "poll") == 0) {
             sysmon_client_poll();
             network_client_poll();
+            network_client_refresh_details(); // what an open dropdown would read
         } else {
             reply_error("unknown refresh target");
             return;

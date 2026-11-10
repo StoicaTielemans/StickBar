@@ -25,4 +25,8 @@ void output_mark_all_dirty(AppContext *app);
 // (see bar_surface_mark_clock_dirty()).
 void output_mark_all_clock_dirty(AppContext *app);
 
+// Draws every output whose bar was marked dirty since the last flush -- once
+// per event-loop iteration, from main.c, right before waiting for events.
+void output_flush_dirty(AppContext *app);
+
 #endif

@@ -19,12 +19,17 @@ bool pipewire_client_init(void);
 void pipewire_client_shutdown(void);
 
 // An eventfd, signaled from the background thread every time the locally
-// cached node/link graph changes in a way that could affect the visible
-// mic/webcam/screen-share state. Register this on the caller's epoll
-// instance; on readiness, call pipewire_client_pump() (drains the eventfd)
-// and then redraw.
+// cached node/link/client graph changes. Register this on the caller's epoll
+// instance; on readiness, call pipewire_client_pump().
 int pipewire_client_notify_fd(void);
-void pipewire_client_pump(void);
+
+// Drains the eventfd, refreshes the cached privacy state, and reports what
+// changed since the last pump -- most graph changes (sinks, filters, links,
+// the visualizer's own captures) change neither, and then nothing needs
+// redrawing.
+#define PIPEWIRE_PRIVACY_CHANGED 1u  // mic/webcam/screen-share in use
+#define PIPEWIRE_PLAYBACK_CHANGED 2u // playback streams or their clients' pids
+unsigned pipewire_client_pump(void);
 
 typedef enum {
     PRIVACY_CATEGORY_MIC,
@@ -42,6 +47,7 @@ typedef enum {
 // heuristic and its documented caveat -- this half is reasoned from
 // PipeWire's own node-role conventions, not independently verified against
 // real webcam hardware or a real screen-share session on this machine).
+// As of the last pipewire_client_pump() -- cached, so cheap to call per frame.
 bool pipewire_client_mic_active(void);
 bool pipewire_client_webcam_active(void);
 bool pipewire_client_screenshare_active(void);

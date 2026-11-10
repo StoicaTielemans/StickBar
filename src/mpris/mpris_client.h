@@ -92,4 +92,9 @@ void mpris_player_toggle_playing(MprisPlayer *player);
 void mpris_player_next(MprisPlayer *player);
 void mpris_player_previous(MprisPlayer *player);
 
+// Bumped every time something a player shows changes, or players come and
+// go -- so a consumer (the media dropdown) can tell whether a D-Bus wakeup
+// touched anything it displays, without comparing it all itself.
+unsigned mpris_change_count(void);
+
 #endif

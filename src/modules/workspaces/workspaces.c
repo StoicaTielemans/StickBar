@@ -3,6 +3,7 @@
 #include <cJSON.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "config/config.h"
 #include "config/glyphs.h"
@@ -55,7 +56,10 @@ static bool is_occupied(int id) {
     return false;
 }
 
-void workspaces_refresh(void) {
+bool workspaces_refresh(void) {
+    int old_ids[MAX_OCCUPIED_IDS];
+    int old_count = g_occupied_count, old_focused = g_focused_id;
+    memcpy(old_ids, g_occupied_ids, sizeof(int) * (size_t)old_count);
     g_occupied_count = 0;
     g_focused_id = -1;
 
@@ -85,6 +89,11 @@ void workspaces_refresh(void) {
         }
         cJSON_Delete(active);
     }
+
+    // Most events that trigger a refresh (a window opening on an already
+    // occupied workspace, a title change) change neither.
+    return g_focused_id != old_focused || g_occupied_count != old_count ||
+           memcmp(old_ids, g_occupied_ids, sizeof(int) * (size_t)old_count) != 0;
 }
 
 // Finds (or lazily allocates) this output's hit-rect tracking slot.

@@ -41,19 +41,20 @@ userdata pointer, `in_use`-gated iteration, `_count()`/`_get(index)` accessors).
   practice is only ever `PropertiesChanged`) — same "match broadly, dispatch by
   member name inside the callback" convention `sni_registry.c`'s own per-item
   subscription already uses.
-- **On `PropertiesChanged`, the whole `Player`-interface property set is re-fetched
-  via a fresh `GetAll` call, rather than parsing the signal's own incremental
-  changed-properties payload.** Simpler and more robust than tracking partial
-  updates, at the cost of one extra round trip per change — the same tradeoff
-  `sni_registry.c`'s `refresh_icon()` already makes for `NewIcon` (re-fetch the one
-  property that matters rather than parse what the signal handed over). Acceptable
-  here since `PropertiesChanged` fires relatively rarely (track changes, play/pause
-  toggles), not on a hot path.
+- **`PropertiesChanged` is applied from the signal itself**: its changed-properties
+  dictionary goes through the same `dbus/dbus_dict.c` walker and `player_entry()`
+  as `GetAll`; only names sent as "invalidated" (no value) trigger a `GetAll`. It
+  used to re-fetch with a blocking `GetAll` + `Get(Identity)` per signal -- browsers
+  send it for every volume/rate/metadata tweak, and a hung player could stall the
+  whole bar for sd-bus's 25s timeout. The bar is marked dirty (and
+  `mpris_change_count()` bumped, which is what refreshes an open media dropdown)
+  only if something shown changed: status, title, artist, album, length, or the
+  prev/next capabilities.
 - **`Identity` (the player's own display name, used as a title fallback) lives on the
-  root `org.mpris.MediaPlayer2` interface, not `Player`** — fetched as a second,
-  separate `sd_bus_get_property()` call after the `Player` GetAll. Best-effort: a
-  player that fails to answer it just keeps whatever identity string (possibly
-  empty) it already had, rather than treating the whole property fetch as failed.
+  root `org.mpris.MediaPlayer2` interface, not `Player`** — fetched once, with a
+  separate `sd_bus_get_property()` call, when the player appears (it doesn't
+  change). Best-effort: a player that fails to answer it just keeps an empty
+  identity.
 - **`xesam:artist` is an array of strings per spec** (a track can have multiple
   credited artists) — only the first is kept, matching `trackText()`'s own
   single-artist display. The D-Bus reader still drains every remaining array entry
@@ -173,12 +174,16 @@ frequency band, soft faded ends.
   `pipewire.sec.pid`, which for everything going through pipewire-pulse is the
   daemon's own pid (seen live: Steam, browsers, the bar's own libpulse client
   all showed pid 1515). Prefers a running stream (Spotify keeps an idle one).
-  Re-resolved on open, when a card's player changes, and on every PipeWire graph
-  change (`media_popup_streams_changed()`), never per frame. No match -> the card
+  Re-resolved on open, when a card's player changes, and when PipeWire reports a
+  playback stream or a client pid changed (`PIPEWIRE_PLAYBACK_CHANGED` ->
+  `media_popup_streams_changed()`), never per frame. No match -> the card
   shows the default output's mix (`VISUALIZER_TARGET_MIX`, the sink monitor with
   `stream.capture.sink`).
-- **Capture** (`visualizer/visualizer.c`): one `pw_thread_loop` + core, one
-  `pw_stream` per slot, stereo F32 FL/FR at 48kHz, `node.passive`. Per-app
+- **Capture** (`visualizer/visualizer.c`): one `pw_thread_loop` + core, connected
+  on the first capture (a bar whose dropdown is never opened during playback has no
+  visualizer thread or connection at all), then kept. One `pw_stream` per active
+  slot, destroyed when the slot turns off (not paused: a paused stream stays a node
+  in the graph). Stereo F32 FL/FR at 48kHz, `node.passive`. Per-app
   streams set `target.object` to the node's `object.serial` **plus
   `node.dont-fallback`/`node.dont-reconnect`**: without them, a target that's gone
   (the app closed its stream between tracks) makes the session manager link a

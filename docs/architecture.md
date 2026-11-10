@@ -58,6 +58,8 @@ stickBar/
     │   │                         a cache of shaped Pango layouts, ellipsis
     │   │                         truncation -- all text goes through here
     │   ├── color.h               Color helpers: set source, alpha, 3-stop gradient
+    │   ├── box_rects.c           where each bar box was last drawn, per output: the
+    │   │                         click hit-test and dropdown anchor every module uses
     │   ├── braille_graph.c       btop-style braille-dot history graph (pure
     │   │                         cairo), used by the network/CPU/GPU/memory
     │   │                         dropdowns; plus a lit-sprite + column-rect path

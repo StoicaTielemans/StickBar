@@ -332,3 +332,14 @@ void module_box_truncate_to_width(const char *text, double max_w, int font_size_
     memcpy(out, hit->result, n);
     out[n] = '\0';
 }
+
+double module_box_label(cairo_t *cr, BoxRectTable *rects, Output *output, ModuleBoxAnchor anchor, double edge_x,
+                        double box_top, double box_height, const char *label, Color accent) {
+    double box_w = module_box_text_width(label, FONT.label, true) + BAR.module_padding;
+    double box_x = anchor == MODULE_BOX_FROM_LEFT ? edge_x : edge_x - box_w;
+    module_box_draw_rect(cr, box_x, box_top, box_w, box_height, COLORS.mantle, accent,
+                         (double)BAR.module_border_width);
+    module_box_draw_text_centered(cr, box_x, box_top, box_w, box_height, label, FONT.label, true, accent);
+    box_rect_set(rects, output, box_x, box_top, box_w, box_height);
+    return anchor == MODULE_BOX_FROM_LEFT ? box_x + box_w + BAR.item_spacing : box_x - BAR.item_spacing;
+}

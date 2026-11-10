@@ -70,6 +70,35 @@ static void record_right(OutputRects *r, const char *module, double x_in, double
     record(r, module, left, x_in - left);
 }
 
+// The bar's two side regions, in drawing order. Each render function takes
+// the x to start at (its left edge for the left region, its right edge for
+// the right one) and returns where the next module goes; a collapsed module
+// returns its input unchanged.
+typedef struct {
+    const char *name; // for render_module_rect() / the test-control channel
+    double (*render)(cairo_t *cr, Output *output, double x, double box_top, double box_height);
+} RegionModule;
+
+// Left region: matches the reference bar's actual leftLayout order --
+// ArchLogoWidget (the power-menu trigger), then HyprlandWindows
+// (workspaces), then SystemMonitorWidget's CPU/GPU/MEM stats, split into
+// three separate modules per explicit user request but kept in that same
+// relative left-to-right order.
+static const RegionModule LEFT_REGION[] = {
+    {"arch", arch_logo_render}, {"workspaces", workspaces_render}, {"cpu", cpu_render},
+    {"gpu", gpu_render},        {"mem", mem_render},               {"privacy", privacy_render},
+};
+
+// Right region: matches the reference Bar.qml's actual rightLayout order,
+// Mic, Volume, Network, Clock, Tray -- Tray is rightmost, drawn first
+// here since this works right-to-left. The DAC EQ module (no reference
+// counterpart -- a StickBar-only addition) sits between Volume and Network,
+// keeping all the audio widgets together.
+static const RegionModule RIGHT_REGION[] = {
+    {"tray", tray_render}, {"clock", clock_render}, {"network", network_render},
+    {"eq", eq_render},     {"volume", volume_render}, {"mic", mic_render},
+};
+
 bool render_module_rect(Output *output, const char *module, double *x, double *y, double *w, double *h) {
     if (strcmp(module, "media") == 0) {
         return media_last_rect(output, x, y, w, h);
@@ -104,41 +133,21 @@ void render_output(cairo_t *cr, Output *output, int width, int height) {
     color_set_source(cr, COLORS.mantle);
     cairo_paint(cr);
 
-    // Left region: matches the reference bar's actual leftLayout order --
-    // ArchLogoWidget (the power-menu trigger), then HyprlandWindows
-    // (workspaces), then SystemMonitorWidget's CPU/GPU/MEM stats, split into
-    // three separate modules per explicit user request but kept in that same
-    // relative left-to-right order.
-    double arch_logo_right_x = arch_logo_render(cr, output, 0.0, 0.0, (double)height);
-    double workspaces_right_x = workspaces_render(cr, output, arch_logo_right_x, 0.0, (double)height);
-    double cpu_right_x = cpu_render(cr, output, workspaces_right_x, 0.0, (double)height);
-    double gpu_right_x = gpu_render(cr, output, cpu_right_x, 0.0, (double)height);
-    double mem_right_x = mem_render(cr, output, gpu_right_x, 0.0, (double)height);
-    double left_region_end_x = privacy_render(cr, output, mem_right_x, 0.0, (double)height);
-    record_left(rects, "arch", 0.0, arch_logo_right_x);
-    record_left(rects, "workspaces", arch_logo_right_x, workspaces_right_x);
-    record_left(rects, "cpu", workspaces_right_x, cpu_right_x);
-    record_left(rects, "gpu", cpu_right_x, gpu_right_x);
-    record_left(rects, "mem", gpu_right_x, mem_right_x);
-    record_left(rects, "privacy", mem_right_x, left_region_end_x);
+    // Left region (see LEFT_REGION).
+    double left_region_end_x = 0.0;
+    for (size_t i = 0; i < sizeof(LEFT_REGION) / sizeof(LEFT_REGION[0]); i++) {
+        double next_x = LEFT_REGION[i].render(cr, output, left_region_end_x, 0.0, (double)height);
+        record_left(rects, LEFT_REGION[i].name, left_region_end_x, next_x);
+        left_region_end_x = next_x;
+    }
 
-    // Right region: matches the reference Bar.qml's actual rightLayout order,
-    // Mic, Volume, Network, Clock, Tray -- Tray is rightmost, drawn first
-    // here since this loop works right-to-left. The DAC EQ module (no
-    // reference counterpart -- a StickBar-only addition) sits between Volume
-    // and Network, keeping all the audio widgets together.
-    double tray_left_x = tray_render(cr, output, (double)width, 0.0, (double)height);
-    double clock_left_x = clock_render(cr, output, tray_left_x, 0.0, (double)height);
-    double network_left_x = network_render(cr, output, clock_left_x, 0.0, (double)height);
-    double eq_left_x = eq_render(cr, output, network_left_x, 0.0, (double)height);
-    double volume_left_x = volume_render(cr, output, eq_left_x, 0.0, (double)height);
-    double right_region_start_x = mic_render(cr, output, volume_left_x, 0.0, (double)height);
-    record_right(rects, "tray", (double)width, tray_left_x);
-    record_right(rects, "clock", tray_left_x, clock_left_x);
-    record_right(rects, "network", clock_left_x, network_left_x);
-    record_right(rects, "eq", network_left_x, eq_left_x);
-    record_right(rects, "volume", eq_left_x, volume_left_x);
-    record_right(rects, "mic", volume_left_x, right_region_start_x);
+    // Right region, right to left (see RIGHT_REGION).
+    double right_region_start_x = (double)width;
+    for (size_t i = 0; i < sizeof(RIGHT_REGION) / sizeof(RIGHT_REGION[0]); i++) {
+        double next_x = RIGHT_REGION[i].render(cr, output, right_region_start_x, 0.0, (double)height);
+        record_right(rects, RIGHT_REGION[i].name, right_region_start_x, next_x);
+        right_region_start_x = next_x;
+    }
 
     // Center region: matches the reference bar's own centerLayout, which
     // holds only the media widget, horizontally centered

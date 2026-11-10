@@ -38,6 +38,7 @@ const BarGeometry BAR = {
     .height = 20,
     .item_spacing = 6,
     .module_border_width = 2,
+    .module_padding = 12,
 };
 
 const FontConfig FONT = {

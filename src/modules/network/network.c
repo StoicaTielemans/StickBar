@@ -7,35 +7,11 @@
 #include "config/glyphs.h"
 #include "modules/network/network_info_popup.h"
 #include "network/network_client.h"
+#include "render/box_rects.h"
 #include "render/module_box.h"
 
-// How many different Output pointers we keep the box's hit-rect for -- sized
-// generously (this machine has 2 monitors), matching every other per-output
-// hit-rect table in this project.
-#define MAX_TRACKED_OUTPUTS 8
-
-typedef struct {
-    Output *output; // NULL if this slot is unused
-    double x, y, w, h;
-} OutputBoxRect;
-
-static OutputBoxRect g_rects[MAX_TRACKED_OUTPUTS];
-
-static OutputBoxRect *rect_for_output(Output *output) {
-    OutputBoxRect *free_slot = NULL;
-    for (int i = 0; i < MAX_TRACKED_OUTPUTS; i++) {
-        if (g_rects[i].output == output) {
-            return &g_rects[i];
-        }
-        if (!free_slot && g_rects[i].output == NULL) {
-            free_slot = &g_rects[i];
-        }
-    }
-    if (free_slot) {
-        free_slot->output = output;
-    }
-    return free_slot;
-}
+// Where this box was last drawn, per output (render/box_rects.h).
+static BoxRectTable g_rects;
 
 // Matches NetworkWidget.qml's icon() exactly: no default route at all, then
 // disconnected/connected each split on Wi-Fi vs. Ethernet.
@@ -76,42 +52,16 @@ double network_render(cairo_t *cr, Output *output, double right_edge_x, double b
         snprintf(label, sizeof(label), "%s Disconnected", icon_buf);
     }
 
-    double text_w, text_h;
-    module_box_measure_text(label, FONT.label, true, &text_w, &text_h);
-    (void)text_h;
-
-    // Matches this project's other module boxes' `implicitWidth: label + 12`
-    // convention.
-    double box_w = text_w + 12.0;
-    double box_x = right_edge_x - box_w;
-
-    module_box_draw_rect(cr, box_x, box_top, box_w, box_height,
-                          COLORS.mantle, COLORS.teal, (double)BAR.module_border_width);
-    module_box_draw_text_centered(cr, box_x, box_top, box_w, box_height, label, FONT.label, true, COLORS.teal);
-
-    OutputBoxRect *rect = rect_for_output(output);
-    if (rect) {
-        rect->x = box_x;
-        rect->y = box_top;
-        rect->w = box_w;
-        rect->h = box_height;
-    }
-
-    return box_x - BAR.item_spacing;
+    return module_box_label(cr, &g_rects, output, MODULE_BOX_FROM_RIGHT, right_edge_x, box_top, box_height, label,
+                            COLORS.teal);
 }
 
 void network_handle_click(Output *output, double x, double y, uint32_t button) {
     if (button != BTN_RIGHT) {
         return;
     }
-    OutputBoxRect *rect = NULL;
-    for (int i = 0; i < MAX_TRACKED_OUTPUTS; i++) {
-        if (g_rects[i].output == output) {
-            rect = &g_rects[i];
-            break;
-        }
-    }
-    if (!rect || x < rect->x || x >= rect->x + rect->w || y < rect->y || y >= rect->y + rect->h) {
+    const BoxRect *rect = box_rect_hit(&g_rects, output, x, y);
+    if (!rect) {
         return;
     }
 

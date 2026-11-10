@@ -7,12 +7,8 @@
 #include "eq/eq_curve.h"
 #include "eq/eq_state.h"
 #include "modules/eq/eq_popup.h"
+#include "render/box_rects.h"
 #include "render/module_box.h"
-
-// How many different Output pointers we keep the box's hit-rect for -- sized
-// generously (this machine has 2 monitors), matching every other per-output
-// hit-rect table in this project.
-#define MAX_TRACKED_OUTPUTS 8
 
 // Sparkline geometry, local to this widget (see CLAUDE.md "Conventions").
 // 34px wide is enough to read the shape (bass shelf vs. treble cuts) at a
@@ -26,28 +22,8 @@
 #define SPARK_MIN_RANGE_DB 6.0
 #define SPARK_RANGE_STEP_DB 6.0
 
-typedef struct {
-    Output *output; // NULL if this slot is unused
-    double x, y, w, h;
-} OutputBoxRect;
-
-static OutputBoxRect g_rects[MAX_TRACKED_OUTPUTS];
-
-static OutputBoxRect *rect_for_output(Output *output) {
-    OutputBoxRect *free_slot = NULL;
-    for (int i = 0; i < MAX_TRACKED_OUTPUTS; i++) {
-        if (g_rects[i].output == output) {
-            return &g_rects[i];
-        }
-        if (!free_slot && g_rects[i].output == NULL) {
-            free_slot = &g_rects[i];
-        }
-    }
-    if (free_slot) {
-        free_slot->output = output;
-    }
-    return free_slot;
-}
+// Where this box was last drawn, per output (render/box_rects.h).
+static BoxRectTable g_rects;
 
 // The label next to the sparkline: the profile being applied (with an
 // ellipsis) takes priority, then the active profile, then a fallback for an
@@ -96,13 +72,7 @@ double eq_render(cairo_t *cr, Output *output, double right_edge_x, double box_to
     double text_x = spark_x + SPARK_W + SPARK_GAP;
     module_box_draw_text_centered(cr, text_x, box_top, text_w, box_height, label, FONT.label, true, accent);
 
-    OutputBoxRect *rect = rect_for_output(output);
-    if (rect) {
-        rect->x = box_x;
-        rect->y = box_top;
-        rect->w = box_w;
-        rect->h = box_height;
-    }
+    box_rect_set(&g_rects, output, box_x, box_top, box_w, box_height);
 
     return box_x - BAR.item_spacing;
 }
@@ -111,14 +81,8 @@ void eq_handle_click(Output *output, double x, double y, uint32_t button) {
     if (button != BTN_LEFT && button != BTN_RIGHT) {
         return;
     }
-    OutputBoxRect *rect = NULL;
-    for (int i = 0; i < MAX_TRACKED_OUTPUTS; i++) {
-        if (g_rects[i].output == output) {
-            rect = &g_rects[i];
-            break;
-        }
-    }
-    if (!rect || x < rect->x || x >= rect->x + rect->w || y < rect->y || y >= rect->y + rect->h) {
+    const BoxRect *rect = box_rect_hit(&g_rects, output, x, y);
+    if (!rect) {
         return;
     }
 

@@ -9,35 +9,11 @@
 #include "audio/volume_style.h"
 #include "config/config.h"
 #include "config/glyphs.h"
+#include "render/box_rects.h"
 #include "render/module_box.h"
 
-// How many different Output pointers we keep the box's hit-rect for -- sized
-// generously (this machine has 2 monitors), matching modules/tray/tray.c's
-// own MAX_TRACKED_OUTPUTS convention.
-#define MAX_TRACKED_OUTPUTS 8
-
-typedef struct {
-    Output *output; // NULL if this slot is unused
-    double x, y, w, h;
-} OutputBoxRect;
-
-static OutputBoxRect g_rects[MAX_TRACKED_OUTPUTS];
-
-static OutputBoxRect *rect_for_output(Output *output) {
-    OutputBoxRect *free_slot = NULL;
-    for (int i = 0; i < MAX_TRACKED_OUTPUTS; i++) {
-        if (g_rects[i].output == output) {
-            return &g_rects[i];
-        }
-        if (!free_slot && g_rects[i].output == NULL) {
-            free_slot = &g_rects[i];
-        }
-    }
-    if (free_slot) {
-        free_slot->output = output;
-    }
-    return free_slot;
-}
+// Where this box was last drawn, per output (render/box_rects.h).
+static BoxRectTable g_rects;
 
 double volume_render(cairo_t *cr, Output *output, double right_edge_x, double box_top, double box_height) {
     int percent = pulse_default_sink_volume_percent();
@@ -49,41 +25,13 @@ double volume_render(cairo_t *cr, Output *output, double right_edge_x, double bo
     char label[32];
     snprintf(label, sizeof(label), "%s %d%%", icon_buf, percent);
 
-    double text_w, text_h;
-    module_box_measure_text(label, FONT.label, true, &text_w, &text_h);
-    (void)text_h;
-
-    // Matches the reference VolumeWidget.qml's `implicitWidth: label.implicitWidth + 12`.
-    double box_w = text_w + 12.0;
-    double box_x = right_edge_x - box_w;
-
-    module_box_draw_rect(cr, box_x, box_top, box_w, box_height,
-                          COLORS.mantle, COLORS.sky, (double)BAR.module_border_width);
-    module_box_draw_text_centered(cr, box_x, box_top, box_w, box_height, label, FONT.label, true, COLORS.sky);
-
-    OutputBoxRect *rect = rect_for_output(output);
-    if (rect) {
-        rect->x = box_x;
-        rect->y = box_top;
-        rect->w = box_w;
-        rect->h = box_height;
-    }
-
-    // Matches tray_render()'s/clock_render()'s convention of baking
-    // BAR.item_spacing into the returned x, so the next (further left)
-    // right-region module renders with a gap rather than flush against this box.
-    return box_x - BAR.item_spacing;
+    return module_box_label(cr, &g_rects, output, MODULE_BOX_FROM_RIGHT, right_edge_x, box_top, box_height, label,
+                            COLORS.sky);
 }
 
 void volume_handle_click(Output *output, double x, double y, uint32_t button) {
-    OutputBoxRect *rect = NULL;
-    for (int i = 0; i < MAX_TRACKED_OUTPUTS; i++) {
-        if (g_rects[i].output == output) {
-            rect = &g_rects[i];
-            break;
-        }
-    }
-    if (!rect || x < rect->x || x >= rect->x + rect->w || y < rect->y || y >= rect->y + rect->h) {
+    const BoxRect *rect = box_rect_hit(&g_rects, output, x, y);
+    if (!rect) {
         return;
     }
 
@@ -101,14 +49,8 @@ void volume_handle_click(Output *output, double x, double y, uint32_t button) {
 }
 
 void volume_handle_scroll(Output *output, double x, double y, int direction) {
-    OutputBoxRect *rect = NULL;
-    for (int i = 0; i < MAX_TRACKED_OUTPUTS; i++) {
-        if (g_rects[i].output == output) {
-            rect = &g_rects[i];
-            break;
-        }
-    }
-    if (!rect || x < rect->x || x >= rect->x + rect->w || y < rect->y || y >= rect->y + rect->h) {
+    const BoxRect *rect = box_rect_hit(&g_rects, output, x, y);
+    if (!rect) {
         return;
     }
 

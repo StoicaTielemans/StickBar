@@ -85,6 +85,7 @@ sources = files(
   'src/bar/bar_surface.c',
   'src/render/render.c',
   'src/render/module_box.c',
+  'src/render/box_rects.c',
   'src/render/popup_chrome.c',
   'src/render/stat_card.c',
   'src/render/braille_graph.c',

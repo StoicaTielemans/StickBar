@@ -6,6 +6,7 @@
 #include <stddef.h>
 
 #include "config/config.h"
+#include "render/box_rects.h"
 
 // Fills an (x, y, w, h) rect with `fill` and strokes a `border_width`-thick border
 // in `border` around it. This is the shared "module box" chrome every bar widget
@@ -72,5 +73,21 @@ void module_box_draw_text_right(cairo_t *cr, double right_x, double y, double h,
 // cheap.
 void module_box_truncate_to_width(const char *text, double max_w, int font_size_px, bool bold,
                                    char *out, size_t out_size);
+
+// Which edge a bar box is laid out from: left-region modules are placed left
+// to right from the x they're given; right-region ones right to left, ending
+// at the x they're given.
+typedef enum {
+    MODULE_BOX_FROM_LEFT,
+    MODULE_BOX_FROM_RIGHT,
+} ModuleBoxAnchor;
+
+// The standard bar box: `label` (bold FONT.label) centered in a box
+// BAR.module_padding wider than it, `mantle` fill and a BAR.module_border_width
+// border in `accent`, recorded in `rects` for `output`. Returns where the
+// next module goes (BAR.item_spacing past this box's far edge). Most bar
+// modules are exactly this plus building their label.
+double module_box_label(cairo_t *cr, BoxRectTable *rects, Output *output, ModuleBoxAnchor anchor, double edge_x,
+                        double box_top, double box_height, const char *label, Color accent);
 
 #endif

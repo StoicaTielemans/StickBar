@@ -30,6 +30,8 @@ typedef struct {
     int height;               // px, total bar height and the layer-surface's exclusive zone
     int item_spacing;         // px, gap between items within a bar region (left/center/right)
     int module_border_width;  // px, default border thickness on bar module boxes
+    int module_padding;       // px, a bar box's width beyond its label -- the
+                              // reference's `implicitWidth: label.implicitWidth + 12`
 } BarGeometry;
 
 extern const BarGeometry BAR;

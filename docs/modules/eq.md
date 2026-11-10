@@ -56,8 +56,8 @@ this module never opens the DAC's HID device.
 - **Offered profiles** are a fixed list in `modules/eq/eq_popup.c`
   (`zero2`, `dt990`, `dt990-loud`, `flat-high`, `flat-low`, per explicit user
   request -- a subset of
-  DacController's `presets/`); each must match a `presets/NAME.txt`. Choosing a
-  profile is the widget's only action, so both buttons open the dropdown, which stays open after a click, like
+  DacController's `presets/`); each must match a `presets/NAME.txt`. Right-click
+  opens the dropdown (left-click does nothing, per user request), which stays open after a click, like
   `audio/device_popup.c`, and redraws when the new state arrives.
 - **Dropdown contents** (fixed size, so a state change only repaints):
   - **Header**: equalizer glyph, profile name, `· low gain`, and a pill:

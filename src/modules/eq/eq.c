@@ -1,6 +1,6 @@
 #include "modules/eq/eq.h"
 
-#include <linux/input-event-codes.h> // BTN_LEFT, BTN_RIGHT
+#include <linux/input-event-codes.h> // BTN_RIGHT
 #include <stdio.h>
 
 #include "config/config.h"
@@ -78,7 +78,7 @@ double eq_render(cairo_t *cr, Output *output, double right_edge_x, double box_to
 }
 
 void eq_handle_click(Output *output, double x, double y, uint32_t button) {
-    if (button != BTN_LEFT && button != BTN_RIGHT) {
+    if (button != BTN_RIGHT) {
         return;
     }
     const BoxRect *rect = box_rect_hit(&g_rects, output, x, y);

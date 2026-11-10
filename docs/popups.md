@@ -15,7 +15,7 @@ and a left click on its timeline seeks to that spot
 ([modules/media.md](modules/media.md)).
 | network | | dropdown | | | TOP+RIGHT |
 | clock | | calendar (toggle) | | | TOP+RIGHT |
-| EQ | dropdown | dropdown | | | TOP+RIGHT |
+| EQ | | dropdown | | | TOP+RIGHT |
 | tray | see the has-menu rule in [modules/tray.md](modules/tray.md) | same | | | TOP+RIGHT |
 | Arch logo | power menu | | | | full-screen overlay |
 

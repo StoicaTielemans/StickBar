@@ -255,7 +255,7 @@ void pointer_dispatch_button(AppContext *app, uint32_t button, bool pressed) {
         privacy_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         media_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
         network_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
-        // Left *or* right opens the EQ dropdown -- see modules/eq/eq.h.
+        // Right-click only opens the EQ dropdown -- see modules/eq/eq.h.
         eq_handle_click(app->pointer_over, app->pointer_x, app->pointer_y, button);
     }
 }

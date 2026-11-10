@@ -75,6 +75,9 @@ generated_sources = wl_scanner_private_code.process(protocol_xmls)
 
 sources = files(
   'src/main.c',
+  'src/util/file.c',
+  'src/util/timer.c',
+  'src/util/notify_fd.c',
   'src/config/config.c',
   'src/config/glyphs.c',
   'src/wayland/registry.c',
@@ -97,6 +100,7 @@ sources = files(
   'src/modules/clock/clock.c',
   'src/modules/clock/clock_calendar_popup.c',
   'src/dbus/dbus_loop.c',
+  'src/dbus/dbus_dict.c',
   'src/dbus/sni_watcher.c',
   'src/dbus/sni_watcher_service.c',
   'src/dbus/sni_registry.c',

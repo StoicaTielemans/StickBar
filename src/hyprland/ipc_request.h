@@ -19,6 +19,11 @@ bool hyprland_ipc_socket_path(const char *filename, char *out, size_t out_size);
 // request per connection -- Hyprland's IPC doesn't support pipelining multiple
 // commands over a single connection; this opens a fresh socket per call. Returns
 // NULL on any connection/IO failure (a message is printed to stderr).
+// Connects to Hyprland's socket `filename` (".socket.sock" for requests,
+// ".socket2.sock" for the event stream) in this session's instance
+// directory. Returns the fd, or -1 with a message on stderr.
+int hyprland_ipc_connect(const char *filename, bool nonblock);
+
 char *hyprland_ipc_request(const char *command);
 
 // Convenience wrapper: sends "j/<subcommand>" (Hyprland's JSON-output prefix) and

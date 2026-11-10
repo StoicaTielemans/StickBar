@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "config/config.h"
+#include "dbus/dbus_dict.h"
 #include "dbus/icon_theme.h"
 #include "dbus/sni_icon.h"
 #include "wayland/output.h"
@@ -226,6 +227,34 @@ static int on_item_signal(sd_bus_message *m, void *userdata, sd_bus_error *ret_e
     // beyond whatever Quickshell's SystemTray service does implicitly.
     return 0;
 }
+// One property from the item's GetAll.
+static bool item_property(sd_bus_message *m, const char *key, const char *contents, void *user_data) {
+    SniItem *item = user_data;
+    if (strcmp(key, "Id") == 0) {
+        return dbus_dict_read_string(m, contents, item->id, sizeof(item->id));
+    }
+    if (strcmp(key, "Title") == 0) {
+        return dbus_dict_read_string(m, contents, item->title, sizeof(item->title));
+    }
+    if (strcmp(key, "Menu") == 0) {
+        return dbus_dict_read_string(m, contents, item->menu_path, sizeof(item->menu_path));
+    }
+    if (strcmp(key, "IconName") == 0) {
+        return dbus_dict_read_string(m, contents, item->icon_name, sizeof(item->icon_name));
+    }
+    if (strcmp(key, "IconThemePath") == 0) {
+        return dbus_dict_read_string(m, contents, item->icon_theme_path, sizeof(item->icon_theme_path));
+    }
+    if (strcmp(key, "IconPixmap") == 0 && strcmp(contents, "a(iiay)") == 0) {
+        cairo_surface_t *surf = convert_best_pixmap_from_message(m);
+        if (surf) {
+            item->icon_surface = surf;
+        }
+        return true;
+    }
+    return false;
+}
+
 
 static void fetch_item_properties(SniItem *item) {
     sd_bus_error err = SD_BUS_ERROR_NULL;
@@ -240,60 +269,7 @@ static void fetch_item_properties(SniItem *item) {
         return;
     }
 
-    if (sd_bus_message_enter_container(reply, SD_BUS_TYPE_ARRAY, "{sv}") > 0) {
-        while (sd_bus_message_enter_container(reply, SD_BUS_TYPE_DICT_ENTRY, "sv") > 0) {
-            const char *key = NULL;
-            sd_bus_message_read_basic(reply, SD_BUS_TYPE_STRING, &key);
-
-            char type = 0;
-            const char *contents = NULL;
-            sd_bus_message_peek_type(reply, &type, &contents);
-
-            if (contents && sd_bus_message_enter_container(reply, SD_BUS_TYPE_VARIANT, contents) > 0) {
-                if (key && strcmp(key, "Id") == 0 && strcmp(contents, "s") == 0) {
-                    const char *id = NULL;
-                    sd_bus_message_read_basic(reply, SD_BUS_TYPE_STRING, &id);
-                    if (id) {
-                        snprintf(item->id, sizeof(item->id), "%s", id);
-                    }
-                } else if (key && strcmp(key, "Title") == 0 && strcmp(contents, "s") == 0) {
-                    const char *title = NULL;
-                    sd_bus_message_read_basic(reply, SD_BUS_TYPE_STRING, &title);
-                    if (title) {
-                        snprintf(item->title, sizeof(item->title), "%s", title);
-                    }
-                } else if (key && strcmp(key, "Menu") == 0 && strcmp(contents, "o") == 0) {
-                    const char *menu = NULL;
-                    sd_bus_message_read_basic(reply, SD_BUS_TYPE_OBJECT_PATH, &menu);
-                    if (menu) {
-                        snprintf(item->menu_path, sizeof(item->menu_path), "%s", menu);
-                    }
-                } else if (key && strcmp(key, "IconPixmap") == 0 && strcmp(contents, "a(iiay)") == 0) {
-                    cairo_surface_t *surf = convert_best_pixmap_from_message(reply);
-                    if (surf) {
-                        item->icon_surface = surf;
-                    }
-                } else if (key && strcmp(key, "IconName") == 0 && strcmp(contents, "s") == 0) {
-                    const char *icon_name = NULL;
-                    sd_bus_message_read_basic(reply, SD_BUS_TYPE_STRING, &icon_name);
-                    if (icon_name) {
-                        snprintf(item->icon_name, sizeof(item->icon_name), "%s", icon_name);
-                    }
-                } else if (key && strcmp(key, "IconThemePath") == 0 && strcmp(contents, "s") == 0) {
-                    const char *theme_path = NULL;
-                    sd_bus_message_read_basic(reply, SD_BUS_TYPE_STRING, &theme_path);
-                    if (theme_path) {
-                        snprintf(item->icon_theme_path, sizeof(item->icon_theme_path), "%s", theme_path);
-                    }
-                } else {
-                    sd_bus_message_skip(reply, contents);
-                }
-                sd_bus_message_exit_container(reply); // variant
-            }
-            sd_bus_message_exit_container(reply); // dict entry
-        }
-        sd_bus_message_exit_container(reply); // array
-    }
+    dbus_dict_walk(reply, item_property, item);
 
     sd_bus_message_unref(reply);
 

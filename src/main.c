@@ -34,6 +34,7 @@
 #include "visualizer/visualizer.h"
 #include "sysmon/sysmon_client.h"
 #include "testing/test_control.h"
+#include "util/timer.h"
 #include "wayland/context.h"
 #include "wayland/event_loop.h"
 #include "wayland/output.h"
@@ -66,24 +67,17 @@ static void handle_signal(int sig) {
  *     of the timer silently staying on the old alignment -- main loop then calls
  *     arm_clock_timer() again to re-align to the new time.
  */
+#define NS_PER_S 1000000000ULL
+
 static bool arm_clock_timer(int fd) {
     struct timespec now;
     clock_gettime(CLOCK_REALTIME, &now);
-    struct itimerspec spec = {
-        .it_interval = { .tv_sec = 1, .tv_nsec = 0 },
-        .it_value = { .tv_sec = now.tv_sec + 1, .tv_nsec = 0 },
-    };
-    if (timerfd_settime(fd, TFD_TIMER_ABSTIME | TFD_TIMER_CANCEL_ON_SET, &spec, NULL) < 0) {
-        perror("stickBar: timerfd_settime");
-        return false;
-    }
-    return true;
+    return timer_fd_set_abs(fd, ((uint64_t)now.tv_sec + 1) * NS_PER_S, NS_PER_S, TFD_TIMER_CANCEL_ON_SET);
 }
 
 static int create_clock_timer(void) {
-    int fd = timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC | TFD_NONBLOCK);
+    int fd = timer_fd_new(CLOCK_REALTIME, "clock");
     if (fd < 0) {
-        perror("stickBar: timerfd_create");
         return -1;
     }
     if (!arm_clock_timer(fd)) {
@@ -98,17 +92,8 @@ static int create_clock_timer(void) {
 // site), since NetworkMonitor.qml's own Timer uses the identical 5000ms
 // interval and reusing this one avoids a second timerfd for the same cadence.
 static int create_sysmon_timer(void) {
-    int fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
-    if (fd < 0) {
-        perror("stickBar: timerfd_create(sysmon)");
-        return -1;
-    }
-    struct itimerspec spec = {
-        .it_interval = { .tv_sec = 5, .tv_nsec = 0 },
-        .it_value = { .tv_sec = 5, .tv_nsec = 0 },
-    };
-    if (timerfd_settime(fd, 0, &spec, NULL) < 0) {
-        perror("stickBar: timerfd_settime(sysmon)");
+    int fd = timer_fd_new(CLOCK_MONOTONIC, "sysmon");
+    if (fd >= 0 && !timer_fd_set(fd, 5 * NS_PER_S, 5 * NS_PER_S)) {
         close(fd);
         return -1;
     }
@@ -158,6 +143,22 @@ static int create_powermenu_signal_fd(bool blocked) {
     int fd = signalfd(-1, &mask, SFD_CLOEXEC | SFD_NONBLOCK);
     if (fd < 0) {
         perror("stickBar: signalfd(SIGUSR1)");
+    }
+    return fd;
+}
+
+// Starts an optional module -- one whose failure just disables it for this
+// run ("degrade gracefully", as with every source below) -- and registers
+// its fd on epoll. Returns the fd, or -1 if the module didn't start or its fd
+// couldn't be registered (in which case it's shut down again).
+static int start_optional(int epoll_fd, bool (*init)(void), int (*get_fd)(void), void (*shutdown)(void)) {
+    if (!init()) {
+        return -1;
+    }
+    int fd = get_fd();
+    if (fd < 0 || !event_loop_add_fd(epoll_fd, fd, EPOLLIN)) {
+        shutdown();
+        return -1;
     }
     return fd;
 }
@@ -303,16 +304,7 @@ int main(void) {
     // the tray's D-Bus connection above -- a missing/broken PulseAudio-compatible
     // server just means the volume/mic boxes render "--" and stay
     // non-interactive for this run, not a fatal error.
-    bool pulse_ok = pulse_client_init();
-    int pulse_fd = -1;
-    if (pulse_ok) {
-        pulse_fd = pulse_client_notify_fd();
-        if (!event_loop_add_fd(epoll_fd, pulse_fd, EPOLLIN)) {
-            pulse_client_shutdown();
-            pulse_ok = false;
-            pulse_fd = -1;
-        }
-    }
+    int pulse_fd = start_optional(epoll_fd, pulse_client_init, pulse_client_notify_fd, pulse_client_shutdown);
 
     // Privacy indicator (mic/webcam/screen-share): an optional module, same
     // "degrade gracefully" convention as the tray's D-Bus connection and
@@ -324,45 +316,22 @@ int main(void) {
     // reason pulse_client_init() must be: pw_thread_loop_start() spawns a
     // background thread, which inherits the calling thread's signal mask at
     // creation time.
-    bool pipewire_ok = pipewire_client_init();
-    int pipewire_fd = -1;
-    if (pipewire_ok) {
-        pipewire_fd = pipewire_client_notify_fd();
-        if (!event_loop_add_fd(epoll_fd, pipewire_fd, EPOLLIN)) {
-            pipewire_client_shutdown();
-            pipewire_ok = false;
-            pipewire_fd = -1;
-        }
-    }
+    int pipewire_fd = start_optional(epoll_fd, pipewire_client_init, pipewire_client_notify_fd,
+                                     pipewire_client_shutdown);
 
-    // Media visualizer (spectrum bars in the media box): optional, same
-    // "degrade gracefully" convention -- without it the media box just has no
-    // bars. Starts a thread, so it too must come after the sigprocmask() at
-    // the top of main(). Its timerfd is only armed while something plays.
-    bool visualizer_ok = visualizer_init();
-    int visualizer_fd = -1;
-    if (visualizer_ok) {
-        visualizer_fd = visualizer_timer_fd();
-        if (!event_loop_add_fd(epoll_fd, visualizer_fd, EPOLLIN)) {
-            visualizer_shutdown();
-            visualizer_ok = false;
-            visualizer_fd = -1;
-        }
-    }
+    // Media visualizer (the spectrum graphs in the media dropdown): optional,
+    // same "degrade gracefully" convention -- without it the dropdown just has
+    // no graphs. Its thread starts on the first capture, but its init still
+    // comes after the sigprocmask() at the top of main() like the others. Its
+    // timerfd is only armed while the dropdown is open and something plays.
+    int visualizer_fd = start_optional(epoll_fd, visualizer_init, visualizer_timer_fd, visualizer_shutdown);
 
     // DAC EQ (TRN Black Pearl): an optional module, same "degrade
     // gracefully" convention as everything above -- if the inotify watch
     // can't be set up, the EQ box still shows whatever state was loaded at
     // startup, it just won't live-update for this run. Needs no thread, so
     // its position relative to the sigprocmask() call above doesn't matter.
-    int eq_fd = -1;
-    if (eq_state_init()) {
-        eq_fd = eq_state_watch_fd();
-        if (!event_loop_add_fd(epoll_fd, eq_fd, EPOLLIN)) {
-            eq_state_shutdown();
-            eq_fd = -1;
-        }
-    }
+    int eq_fd = start_optional(epoll_fd, eq_state_init, eq_state_watch_fd, eq_state_shutdown);
 
     // Test-only: STICKBAR_TEST_CONTROL=1 makes stdin a command channel for
     // tests/ (see testing/test_control.h). -1 -- and stdin never touched --
@@ -406,11 +375,8 @@ int main(void) {
             if (fd == wayland_fd) {
                 wayland_ready = true;
             } else if (fd == timer_fd) {
-                uint64_t expirations;
-                // Value is unused (we redraw once per wakeup regardless of how many
-                // 1s intervals elapsed) -- reading it is only to drain the timerfd,
-                // which is required or it stays permanently "readable".
-                if (read(timer_fd, &expirations, sizeof(expirations)) < 0 && errno == ECANCELED) {
+                // One redraw per wakeup, however many seconds elapsed.
+                if (!timer_fd_drain(timer_fd) && errno == ECANCELED) {
                     // The wall clock was set -- re-align to the new second
                     // boundary (see arm_clock_timer()). Still tick below: the
                     // time being shown just changed.
@@ -428,8 +394,7 @@ int main(void) {
                 // bar (see bar_surface_mark_clock_dirty()).
                 output_mark_all_clock_dirty(&app);
             } else if (fd == sysmon_timer_fd) {
-                uint64_t expirations;
-                (void)!read(sysmon_timer_fd, &expirations, sizeof(expirations));
+                timer_fd_drain(sysmon_timer_fd);
                 // All in-process reads (/proc, /sys, NVML) -- no subprocess.
                 sysmon_client_poll();
                 // Moves the GPU dropdown's graphs along; no-op if closed.
@@ -459,8 +424,7 @@ int main(void) {
                 }
             } else if (bus && (fd == dbus_fd || fd == dbus_timeout_fd)) {
                 if (fd == dbus_timeout_fd) {
-                    uint64_t expirations;
-                    (void)!read(dbus_timeout_fd, &expirations, sizeof(expirations));
+                    timer_fd_drain(dbus_timeout_fd);
                 }
                 dbus_loop_pump(bus, epoll_fd, dbus_fd, dbus_timeout_fd);
                 // Cheap no-op unless the media popup is actually open (see
@@ -474,7 +438,7 @@ int main(void) {
                 // already calls output_mark_all_dirty() itself, granularly,
                 // only when something actually changed.
                 media_popup_refresh_if_open();
-            } else if (pulse_ok && fd == pulse_fd) {
+            } else if (pulse_fd >= 0 && fd == pulse_fd) {
                 // The cache itself is already updated by the time this fires
                 // (pulse_client's background thread writes to it before
                 // signaling) -- pump() just drains the eventfd counter.
@@ -482,7 +446,7 @@ int main(void) {
                 device_popup_refresh_if_open();
                 mixer_popup_refresh_if_open();
                 output_mark_all_dirty(&app);
-            } else if (pipewire_ok && fd == pipewire_fd) {
+            } else if (pipewire_fd >= 0 && fd == pipewire_fd) {
                 // Same shape as the pulse_fd branch above: this fd is only
                 // ever signaled on an actual node/link graph change, so an
                 // unconditional redraw here (rather than each module calling
@@ -491,7 +455,7 @@ int main(void) {
                 // Players' playback streams may have come or gone.
                 media_popup_streams_changed();
                 output_mark_all_dirty(&app);
-            } else if (visualizer_ok && fd == visualizer_fd) {
+            } else if (visualizer_fd >= 0 && fd == visualizer_fd) {
                 // Each graph lives on its own small subsurface in the media
                 // dropdown, so a frame never touches the popup's own pixels.
                 // A graph that can't show a new frame right now (the
@@ -535,7 +499,7 @@ int main(void) {
         // several places (MPRIS signals on the D-Bus fd, clicks, players
         // coming and going), so this syncs once per iteration; a no-op per
         // slot unless its answer changed.
-        if (visualizer_ok) {
+        if (visualizer_fd >= 0) {
             media_popup_sync_visualizer();
         }
 
@@ -555,13 +519,13 @@ int main(void) {
     if (bus) {
         dbus_loop_disconnect(bus);
     }
-    if (pulse_ok) {
+    if (pulse_fd >= 0) {
         pulse_client_shutdown();
     }
-    if (pipewire_ok) {
+    if (pipewire_fd >= 0) {
         pipewire_client_shutdown();
     }
-    if (visualizer_ok) {
+    if (visualizer_fd >= 0) {
         visualizer_shutdown();
     }
     if (eq_fd >= 0) {
@@ -584,13 +548,7 @@ int main(void) {
     // and the verification checklist specifically checks `hyprctl monitors -j`'s
     // `reserved` field goes back to normal after exit.
     while (app.outputs) {
-        Output *output = app.outputs;
-        app.outputs = output->next;
-        if (output->bar_surface) {
-            bar_surface_destroy(output->bar_surface);
-        }
-        wl_output_destroy(output->wl_output);
-        free(output);
+        output_remove(&app, app.outputs->registry_name);
     }
 
     if (app.pointer) {

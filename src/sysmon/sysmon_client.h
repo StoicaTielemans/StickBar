@@ -1,6 +1,8 @@
 #ifndef CUSTOMBAR_SYSMON_SYSMON_CLIENT_H
 #define CUSTOMBAR_SYSMON_SYSMON_CLIENT_H
 
+#include "util/history.h"
+
 #include <stdbool.h>
 
 // Establishes the /proc/stat CPU-jiffies baseline this needs before it can
@@ -46,7 +48,7 @@ bool sysmon_cpu_core_is_efficient(int index);
 
 // Usage % / temperature °C of the last SYSMON_CPU_HISTORY_LEN 5s polls (10
 // minutes), for the dropdown's graphs. Index 0 is the oldest.
-#define SYSMON_CPU_HISTORY_LEN 120
+#define SYSMON_CPU_HISTORY_LEN HISTORY_LEN
 int sysmon_cpu_history_len(void);
 double sysmon_cpu_util_history(int index);
 double sysmon_cpu_temp_history(int index);
@@ -116,7 +118,7 @@ int sysmon_gpu_mem_clock_max_mhz(void);
 
 // Usage % / temperature °C of the last SYSMON_GPU_HISTORY_LEN 5s polls (10
 // minutes), for the dropdown's graphs. Index 0 is the oldest.
-#define SYSMON_GPU_HISTORY_LEN 120
+#define SYSMON_GPU_HISTORY_LEN HISTORY_LEN
 int sysmon_gpu_history_len(void);
 double sysmon_gpu_util_history(int index);
 double sysmon_gpu_temp_history(int index);
@@ -136,7 +138,7 @@ int sysmon_swap_percent(void);
 
 // Used % / swap % of the last SYSMON_MEM_HISTORY_LEN 5s polls (10 minutes).
 // Index 0 is the oldest.
-#define SYSMON_MEM_HISTORY_LEN 120
+#define SYSMON_MEM_HISTORY_LEN HISTORY_LEN
 int sysmon_mem_history_len(void);
 double sysmon_mem_used_history(int index);
 double sysmon_mem_swap_history(int index);

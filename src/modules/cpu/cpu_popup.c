@@ -17,6 +17,7 @@
 #include "render/popup_style.h"
 #include "render/stat_card.h"
 #include "sysmon/sysmon_client.h"
+#include "util/file.h"
 
 // Layout tuning, local to this popup (see CLAUDE.md "Conventions"). Section
 // rhythm and graph card match modules/gpu/gpu_popup.c on purpose, so the two
@@ -47,12 +48,6 @@ static CpuPopupState g_popup;
 // timer fires on whole seconds, so the first tick after opening can land
 // only milliseconds later -- far too short to measure anything meaningful.
 #define MIN_FIRST_SAMPLE_S 0.5
-
-static double monotonic_seconds(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
-}
 
 // Green -> yellow -> red; a function since COLORS isn't a compile-time
 // constant (see docs/modules/power-menu.md).

@@ -4,8 +4,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/epoll.h>
-#include <sys/timerfd.h>
 #include <time.h>
+
+#include "util/timer.h"
 
 sd_bus *dbus_loop_connect(void) {
     sd_bus *bus = NULL;
@@ -23,11 +24,7 @@ int dbus_loop_fd(sd_bus *bus) {
 }
 
 int dbus_loop_create_timeout_fd(void) {
-    int fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
-    if (fd < 0) {
-        perror("stickBar: timerfd_create(dbus timeout)");
-    }
-    return fd;
+    return timer_fd_new(CLOCK_MONOTONIC, "dbus timeout");
 }
 
 static void rearm_timeout_fd(sd_bus *bus, int timeout_fd) {
@@ -36,27 +33,15 @@ static void rearm_timeout_fd(sd_bus *bus, int timeout_fd) {
         return; // leave whatever was previously armed; not worth failing over
     }
 
-    struct itimerspec spec = { 0 };
-    if (deadline_usec != UINT64_MAX) {
-        // sd_bus_get_timeout() returns an *absolute* CLOCK_MONOTONIC deadline in
-        // microseconds; timerfd_settime() wants a *relative* itimerspec, so this
-        // converts between the two. A deadline already in the past (sd-bus wants
-        // to be pumped again immediately) clamps to the smallest positive
-        // interval instead of zero -- an all-zero itimerspec.it_value would
-        // *disarm* the timer instead of firing it immediately, the opposite of
-        // what's needed here.
-        struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        uint64_t now_usec = (uint64_t)now.tv_sec * 1000000ULL + (uint64_t)now.tv_nsec / 1000ULL;
-        uint64_t remaining_usec = deadline_usec > now_usec ? deadline_usec - now_usec : 1;
-
-        spec.it_value.tv_sec = (time_t)(remaining_usec / 1000000ULL);
-        spec.it_value.tv_nsec = (long)((remaining_usec % 1000000ULL) * 1000ULL);
+    if (deadline_usec == UINT64_MAX) {
+        timer_fd_set(timeout_fd, 0, 0); // no timeout pending: disarm
+        return;
     }
-    // deadline_usec == UINT64_MAX means "no timeout pending" -- spec stays
-    // all-zero, which disarms the timer.
-
-    timerfd_settime(timeout_fd, 0, &spec, NULL);
+    // sd_bus_get_timeout() returns an *absolute* CLOCK_MONOTONIC deadline, and
+    // the timerfd is on CLOCK_MONOTONIC too, so it's armed at that time
+    // directly. A deadline already past (sd-bus wants pumping again right
+    // away) fires immediately.
+    timer_fd_set_abs(timeout_fd, deadline_usec * 1000ULL, 0, 0);
 }
 
 void dbus_loop_pump(sd_bus *bus, int epoll_fd, int dbus_fd, int timeout_fd) {

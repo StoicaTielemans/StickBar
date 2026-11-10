@@ -6,8 +6,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/timerfd.h>
 #include <unistd.h>
+
+#include "util/timer.h"
 
 // Fixed capture format: stereo float at 48kHz, interleaved FL/FR. PipeWire's
 // stream adapter converts whatever the source really runs at into this (a
@@ -86,6 +87,7 @@ static Source g_sources[VISUALIZER_MAX_SOURCES];
 // after that (slot on/off, FFT, smoothing, drawing) is the real path. So the
 // test never touches the user's audio system.
 static bool g_synth = false;
+static bool g_pw_inited = false; // pw_init() called -- pairs with pw_deinit() at shutdown
 
 // The thread loop's lock, or nothing in synth mode (there's no thread loop).
 static void lock(void) {
@@ -142,16 +144,9 @@ static void set_timer(bool armed) {
     if (armed == g_timer_armed || g_timer_fd < 0) {
         return;
     }
-    struct itimerspec spec = {0}; // all zero = disarm
-    if (armed) {
-        spec.it_interval.tv_nsec = FRAME_NS;
-        spec.it_value.tv_nsec = FRAME_NS;
+    if (timer_fd_set(g_timer_fd, armed ? FRAME_NS : 0, armed ? FRAME_NS : 0)) {
+        g_timer_armed = armed;
     }
-    if (timerfd_settime(g_timer_fd, 0, &spec, NULL) < 0) {
-        perror("stickBar: timerfd_settime(visualizer)");
-        return;
-    }
-    g_timer_armed = armed;
 }
 
 // --- Streams (call with the thread loop locked) ---
@@ -244,9 +239,8 @@ bool visualizer_init(void) {
         g_sources[i].settled = true;
     }
 
-    g_timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    g_timer_fd = timer_fd_new(CLOCK_MONOTONIC, "visualizer");
     if (g_timer_fd < 0) {
-        perror("stickBar: timerfd_create(visualizer)");
         return false;
     }
 
@@ -258,6 +252,7 @@ bool visualizer_init(void) {
     }
 
     pw_init(NULL, NULL); // refcounted -- pipewire_client.c calls it too
+    g_pw_inited = true;
     g_loop = pw_thread_loop_new("stickBar-visualizer", NULL);
     g_context = g_loop ? pw_context_new(pw_thread_loop_get_loop(g_loop), NULL, 0) : NULL;
     if (!g_context || pw_thread_loop_start(g_loop) < 0) {
@@ -306,6 +301,10 @@ void visualizer_shutdown(void) {
     if (g_timer_fd >= 0) {
         close(g_timer_fd);
         g_timer_fd = -1;
+    }
+    if (g_pw_inited) {
+        pw_deinit();
+        g_pw_inited = false;
     }
     g_available = false;
     g_timer_armed = false;
@@ -470,9 +469,7 @@ uint32_t visualizer_pump(uint32_t ready_mask, uint32_t shown_mask) {
     if (!g_available) {
         return 0;
     }
-    uint64_t expirations;
-    // Drain the timerfd; how many frames were missed doesn't matter.
-    (void)!read(g_timer_fd, &expirations, sizeof(expirations));
+    timer_fd_drain(g_timer_fd); // how many frames were missed doesn't matter
 
     uint32_t changed = 0;
     bool busy = false;

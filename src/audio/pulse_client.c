@@ -5,8 +5,9 @@
 #include <pulse/pulseaudio.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/eventfd.h>
 #include <unistd.h>
+
+#include "util/notify_fd.h"
 
 // Fixed-size, matches this project's existing convention (sni_registry.c's
 // MAX_TRAY_ITEMS) of a bounded array over dynamic growth -- generous for any
@@ -63,13 +64,22 @@ static char g_default_source_name[256] = "";
 
 // Wakes up the main epoll loop to re-read the cache and redraw. Safe to call
 // from inside a PA callback (always running on the mainloop's own thread, with
-// its lock already held per pa_threaded_mainloop's documented model) --
-// eventfd_write() doesn't touch any of libpulse's own data structures, so no
-// separate synchronization is needed for this part.
+// its lock already held) -- see util/notify_fd.h.
 static void notify_dirty(void) {
-    if (g_notify_fd >= 0) {
-        eventfd_write(g_notify_fd, 1);
-    }
+    notify_fd_signal(g_notify_fd);
+}
+
+// Every channel set to `percent` of PA_VOLUME_NORM (100% = unity), on
+// `channels` channels -- 2 if the server hasn't reported a count yet.
+static pa_cvolume percent_to_cvolume(int percent, int channels) {
+    pa_cvolume cv;
+    pa_cvolume_set(&cv, channels > 0 ? channels : 2, (pa_volume_t)lround((double)percent / 100.0 * PA_VOLUME_NORM));
+    return cv;
+}
+
+// The average channel volume as a percent of PA_VOLUME_NORM.
+static int cvolume_to_percent(const pa_cvolume *cv) {
+    return (int)lround((double)pa_cvolume_avg(cv) * 100.0 / PA_VOLUME_NORM);
 }
 
 static int clampi(int v, int lo, int hi) {
@@ -147,7 +157,7 @@ static struct PulseNode *upsert_node(bool is_sink, uint32_t index, const char *n
     snprintf(node->name, sizeof(node->name), "%s", name ? name : "");
     snprintf(node->description, sizeof(node->description), "%s", description ? description : (name ? name : ""));
     node->channels = volume->channels;
-    node->volume_percent = (int)lround((double)pa_cvolume_avg(volume) * 100.0 / PA_VOLUME_NORM);
+    node->volume_percent = cvolume_to_percent(volume);
     node->muted = mute != 0;
     return node;
 }
@@ -237,7 +247,7 @@ static void sink_input_info_cb(pa_context *ctx, const pa_sink_input_info *info, 
              app_name && app_name[0] ? app_name : (info->name ? info->name : "Unknown app"));
     stream->has_volume = info->has_volume != 0;
     stream->channels = info->volume.channels;
-    stream->volume_percent = (int)lround((double)pa_cvolume_avg(&info->volume) * 100.0 / PA_VOLUME_NORM);
+    stream->volume_percent = cvolume_to_percent(&info->volume);
     stream->muted = info->mute != 0;
     notify_dirty();
 }
@@ -343,9 +353,8 @@ bool pulse_client_init(void) {
         return false;
     }
 
-    g_notify_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    g_notify_fd = notify_fd_new("pulse notify");
     if (g_notify_fd < 0) {
-        perror("stickBar: eventfd(pulse notify)");
         pa_context_unref(g_context);
         g_context = NULL;
         pa_threaded_mainloop_free(g_mainloop);
@@ -418,14 +427,9 @@ int pulse_client_notify_fd(void) {
 }
 
 void pulse_client_pump(void) {
-    if (g_notify_fd < 0) {
-        return;
-    }
-    eventfd_t val;
-    // A single read fully drains the counter (eventfd's default, non-semaphore
-    // mode reads-and-resets the whole accumulated value at once) -- any number
-    // of notify_dirty() calls since the last pump collapse into one redraw.
-    (void)eventfd_read(g_notify_fd, &val);
+    // Any number of notify_dirty() calls since the last pump collapse into
+    // one drain, and so one redraw.
+    notify_fd_drain(g_notify_fd);
 }
 
 int pulse_default_sink_volume_percent(void) {
@@ -452,9 +456,7 @@ void pulse_default_sink_adjust_volume(int delta_percent) {
     struct PulseNode *n = find_node_by_name(true, g_default_sink_name);
     if (n) {
         int new_pct = clampi(n->volume_percent + delta_percent, 0, PULSE_MAX_VOLUME_PERCENT);
-        pa_cvolume cv;
-        pa_cvolume_set(&cv, n->channels > 0 ? n->channels : 2,
-                       (pa_volume_t)lround((double)new_pct / 100.0 * PA_VOLUME_NORM));
+        pa_cvolume cv = percent_to_cvolume(new_pct, n->channels);
         // Fire-and-forget: the eventual SINK subscribe event (triggered by the
         // server actually applying this change) is what updates the cache and
         // redraws, not this call's own (unused) success callback -- same
@@ -498,9 +500,7 @@ void pulse_default_source_adjust_volume(int delta_percent) {
     struct PulseNode *n = find_node_by_name(false, g_default_source_name);
     if (n) {
         int new_pct = clampi(n->volume_percent + delta_percent, 0, PULSE_MAX_VOLUME_PERCENT);
-        pa_cvolume cv;
-        pa_cvolume_set(&cv, n->channels > 0 ? n->channels : 2,
-                       (pa_volume_t)lround((double)new_pct / 100.0 * PA_VOLUME_NORM));
+        pa_cvolume cv = percent_to_cvolume(new_pct, n->channels);
         pa_context_set_source_volume_by_index(g_context, n->index, &cv, NULL, NULL);
     }
     pa_threaded_mainloop_unlock(g_mainloop);
@@ -680,9 +680,7 @@ void pulse_node_set_volume_percent(PulseNode *node, int percent) {
     // pulse_stream_set_volume_percent() (a device unplugged mid-drag).
     if (node->in_use) {
         int new_pct = clampi(percent, 0, PULSE_MAX_VOLUME_PERCENT);
-        pa_cvolume cv;
-        pa_cvolume_set(&cv, node->channels > 0 ? node->channels : 2,
-                       (pa_volume_t)lround((double)new_pct / 100.0 * PA_VOLUME_NORM));
+        pa_cvolume cv = percent_to_cvolume(new_pct, node->channels);
         // Fire-and-forget, same as pulse_default_sink_adjust_volume().
         if (node->is_sink) {
             pa_context_set_sink_volume_by_index(g_context, node->index, &cv, NULL, NULL);
@@ -754,9 +752,7 @@ void pulse_stream_set_volume_percent(PulseStream *stream, int percent) {
     // `index` of 0 is a perfectly valid *other* stream's index on the server.
     if (stream->in_use && stream->has_volume) {
         int new_pct = clampi(percent, 0, PULSE_MAX_VOLUME_PERCENT);
-        pa_cvolume cv;
-        pa_cvolume_set(&cv, stream->channels > 0 ? stream->channels : 2,
-                       (pa_volume_t)lround((double)new_pct / 100.0 * PA_VOLUME_NORM));
+        pa_cvolume cv = percent_to_cvolume(new_pct, stream->channels);
         // Fire-and-forget, same as pulse_default_sink_adjust_volume().
         pa_context_set_sink_input_volume(g_context, stream->index, &cv, NULL, NULL);
     }

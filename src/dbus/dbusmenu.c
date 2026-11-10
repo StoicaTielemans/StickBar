@@ -5,6 +5,8 @@
 #include <string.h>
 #include <time.h>
 
+#include "dbus/dbus_dict.h"
+
 #define MENU_INTERFACE "com.canonical.dbusmenu"
 
 // DBusMenu labels mark their keyboard access key with an underscore
@@ -25,6 +27,47 @@ static void strip_access_keys(const char *in, char *out, size_t out_size) {
     out[o] = '\0';
 }
 
+// One property of a menu entry. Every other property (icon-name, icon-data,
+// shortcut, visible, ...) is unhandled -- the dropdown draws no per-entry
+// icons or shortcut hints -- and skipped by the walker.
+static bool entry_property(sd_bus_message *m, const char *key, const char *contents, void *user_data) {
+    DbusMenuEntry *entry = user_data;
+    bool is_string = strcmp(contents, "s") == 0;
+    const char *str = NULL;
+    if (is_string && (strcmp(key, "type") == 0 || strcmp(key, "label") == 0 || strcmp(key, "toggle-type") == 0 ||
+                      strcmp(key, "children-display") == 0)) {
+        sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &str);
+        if (strcmp(key, "type") == 0) {
+            entry->is_separator = str && strcmp(str, "separator") == 0;
+        } else if (strcmp(key, "label") == 0) {
+            if (str) {
+                strip_access_keys(str, entry->label, sizeof(entry->label));
+            }
+        } else if (strcmp(key, "toggle-type") == 0) {
+            entry->toggle = !str                           ? DBUSMENU_TOGGLE_NONE
+                            : strcmp(str, "checkmark") == 0 ? DBUSMENU_TOGGLE_CHECKMARK
+                            : strcmp(str, "radio") == 0     ? DBUSMENU_TOGGLE_RADIO
+                                                            : DBUSMENU_TOGGLE_NONE;
+        } else {
+            entry->has_submenu = str && strcmp(str, "submenu") == 0;
+        }
+        return true;
+    }
+    if (strcmp(key, "enabled") == 0 && strcmp(contents, "b") == 0) {
+        int enabled = 1;
+        sd_bus_message_read_basic(m, SD_BUS_TYPE_BOOLEAN, &enabled);
+        entry->enabled = enabled != 0;
+        return true;
+    }
+    if (strcmp(key, "toggle-state") == 0 && strcmp(contents, "i") == 0) {
+        int32_t state = 0;
+        sd_bus_message_read_basic(m, SD_BUS_TYPE_INT32, &state);
+        entry->toggled = state == 1;
+        return true;
+    }
+    return false;
+}
+
 // Parses one child entry positioned with the read cursor already inside its
 // "ia{sv}av" struct (id not yet read). Leaves the cursor past the struct's
 // content on return (caller still owns exiting the struct/variant containers).
@@ -34,59 +77,7 @@ static void parse_entry(sd_bus_message *m, DbusMenuEntry *entry) {
 
     sd_bus_message_read_basic(m, SD_BUS_TYPE_INT32, &entry->id);
 
-    if (sd_bus_message_enter_container(m, SD_BUS_TYPE_ARRAY, "{sv}") > 0) {
-        while (sd_bus_message_enter_container(m, SD_BUS_TYPE_DICT_ENTRY, "sv") > 0) {
-            const char *key = NULL;
-            sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &key);
-
-            char type = 0;
-            const char *contents = NULL;
-            sd_bus_message_peek_type(m, &type, &contents);
-
-            if (contents && sd_bus_message_enter_container(m, SD_BUS_TYPE_VARIANT, contents) > 0) {
-                if (key && strcmp(key, "type") == 0 && strcmp(contents, "s") == 0) {
-                    const char *type_str = NULL;
-                    sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &type_str);
-                    if (type_str && strcmp(type_str, "separator") == 0) {
-                        entry->is_separator = true;
-                    }
-                } else if (key && strcmp(key, "label") == 0 && strcmp(contents, "s") == 0) {
-                    const char *label = NULL;
-                    sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &label);
-                    if (label) {
-                        strip_access_keys(label, entry->label, sizeof(entry->label));
-                    }
-                } else if (key && strcmp(key, "enabled") == 0 && strcmp(contents, "b") == 0) {
-                    int enabled = 1;
-                    sd_bus_message_read_basic(m, SD_BUS_TYPE_BOOLEAN, &enabled);
-                    entry->enabled = enabled != 0;
-                } else if (key && strcmp(key, "toggle-type") == 0 && strcmp(contents, "s") == 0) {
-                    const char *toggle = NULL;
-                    sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &toggle);
-                    entry->toggle = !toggle                           ? DBUSMENU_TOGGLE_NONE
-                                    : strcmp(toggle, "checkmark") == 0 ? DBUSMENU_TOGGLE_CHECKMARK
-                                    : strcmp(toggle, "radio") == 0     ? DBUSMENU_TOGGLE_RADIO
-                                                                       : DBUSMENU_TOGGLE_NONE;
-                } else if (key && strcmp(key, "toggle-state") == 0 && strcmp(contents, "i") == 0) {
-                    int32_t state = 0;
-                    sd_bus_message_read_basic(m, SD_BUS_TYPE_INT32, &state);
-                    entry->toggled = state == 1;
-                } else if (key && strcmp(key, "children-display") == 0 && strcmp(contents, "s") == 0) {
-                    const char *display = NULL;
-                    sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &display);
-                    entry->has_submenu = display && strcmp(display, "submenu") == 0;
-                } else {
-                    // Every other property (icon-name, icon-data, shortcut,
-                    // visible, ...) is unhandled -- the dropdown draws no
-                    // per-entry icons or shortcut hints.
-                    sd_bus_message_skip(m, contents);
-                }
-                sd_bus_message_exit_container(m); // variant
-            }
-            sd_bus_message_exit_container(m); // dict entry
-        }
-        sd_bus_message_exit_container(m); // properties array
-    }
+    dbus_dict_walk(m, entry_property, entry);
 
     // Nested children ("av") -- always empty in practice since GetLayout's
     // recursionDepth=1 already stops the server from populating them, but

@@ -5,6 +5,7 @@
 #include <string.h>
 #include <sys/types.h>
 
+#include "dbus/dbus_dict.h"
 #include "wayland/output.h"
 
 // Every MPRIS player lives at this same fixed object path, per spec --
@@ -225,6 +226,49 @@ void mpris_player_previous(MprisPlayer *player) {
     send_player_call(player, "Previous");
 }
 
+static bool metadata_entry(sd_bus_message *m, const char *key, const char *contents, void *user_data) {
+    MprisPlayer *item = user_data;
+    if (strcmp(key, "xesam:title") == 0) {
+        return dbus_dict_read_string(m, contents, item->title, sizeof(item->title));
+    }
+    if (strcmp(key, "xesam:album") == 0) {
+        return dbus_dict_read_string(m, contents, item->album, sizeof(item->album));
+    }
+    if (strcmp(key, "xesam:artist") == 0 && strcmp(contents, "as") == 0) {
+        if (sd_bus_message_enter_container(m, SD_BUS_TYPE_ARRAY, "s") > 0) {
+            // Keep only the first artist, but still drain every remaining
+            // entry so the cursor ends up past the whole array -- required
+            // before exit_container(), same reasoning as
+            // sni_registry.c's convert_best_pixmap_from_message() draining
+            // every pixmap entry rather than stopping early.
+            const char *artist = NULL;
+            while (sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &artist) > 0) {
+                if (artist && !item->artist[0]) {
+                    snprintf(item->artist, sizeof(item->artist), "%s", artist);
+                }
+            }
+            sd_bus_message_exit_container(m);
+        }
+        return true;
+    }
+    if (strcmp(key, "mpris:length") == 0 && strcmp(contents, "x") == 0) {
+        int64_t len = 0;
+        sd_bus_message_read_basic(m, SD_BUS_TYPE_INT64, &len);
+        item->length_us = len;
+        return true;
+    }
+    if (strcmp(key, "mpris:length") == 0 && strcmp(contents, "t") == 0) {
+        // The spec says int64 ("x"), but Spotify sends uint64 ("t") --
+        // checked live with busctl. Accepting only "x" left Spotify's
+        // length at 0, so its dropdown timeline never showed.
+        uint64_t len = 0;
+        sd_bus_message_read_basic(m, SD_BUS_TYPE_UINT64, &len);
+        item->length_us = len > (uint64_t)INT64_MAX ? INT64_MAX : (int64_t)len;
+        return true;
+    }
+    return false;
+}
+
 // Parses an "a{sv}" MPRIS Metadata dict positioned at the message's current
 // read cursor (already inside the outer variant that wraps it -- same shape
 // as sni_registry.c's convert_best_pixmap_from_message() being called from
@@ -238,64 +282,30 @@ static void parse_metadata(sd_bus_message *m, MprisPlayer *item) {
     item->album[0] = '\0';
     item->length_us = 0;
 
-    if (sd_bus_message_enter_container(m, SD_BUS_TYPE_ARRAY, "{sv}") <= 0) {
-        return;
+    dbus_dict_walk(m, metadata_entry, item);
+}
+
+// One Player property from GetAll (or, later, PropertiesChanged).
+static bool player_entry(sd_bus_message *m, const char *key, const char *contents, void *user_data) {
+    MprisPlayer *item = user_data;
+    if (strcmp(key, "PlaybackStatus") == 0) {
+        return dbus_dict_read_string(m, contents, item->status, sizeof(item->status));
     }
-    while (sd_bus_message_enter_container(m, SD_BUS_TYPE_DICT_ENTRY, "sv") > 0) {
-        const char *key = NULL;
-        sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &key);
-
-        char type = 0;
-        const char *contents = NULL;
-        sd_bus_message_peek_type(m, &type, &contents);
-
-        if (contents && sd_bus_message_enter_container(m, SD_BUS_TYPE_VARIANT, contents) > 0) {
-            if (key && strcmp(key, "xesam:title") == 0 && strcmp(contents, "s") == 0) {
-                const char *title = NULL;
-                sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &title);
-                if (title) {
-                    snprintf(item->title, sizeof(item->title), "%s", title);
-                }
-            } else if (key && strcmp(key, "xesam:album") == 0 && strcmp(contents, "s") == 0) {
-                const char *album = NULL;
-                sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &album);
-                if (album) {
-                    snprintf(item->album, sizeof(item->album), "%s", album);
-                }
-            } else if (key && strcmp(key, "xesam:artist") == 0 && strcmp(contents, "as") == 0) {
-                if (sd_bus_message_enter_container(m, SD_BUS_TYPE_ARRAY, "s") > 0) {
-                    // Keep only the first artist, but still drain every remaining
-                    // entry so the cursor ends up past the whole array -- required
-                    // before exit_container(), same reasoning as
-                    // sni_registry.c's convert_best_pixmap_from_message() draining
-                    // every pixmap entry rather than stopping early.
-                    const char *artist = NULL;
-                    while (sd_bus_message_read_basic(m, SD_BUS_TYPE_STRING, &artist) > 0) {
-                        if (artist && !item->artist[0]) {
-                            snprintf(item->artist, sizeof(item->artist), "%s", artist);
-                        }
-                    }
-                    sd_bus_message_exit_container(m);
-                }
-            } else if (key && strcmp(key, "mpris:length") == 0 && strcmp(contents, "x") == 0) {
-                int64_t len = 0;
-                sd_bus_message_read_basic(m, SD_BUS_TYPE_INT64, &len);
-                item->length_us = len;
-            } else if (key && strcmp(key, "mpris:length") == 0 && strcmp(contents, "t") == 0) {
-                // The spec says int64 ("x"), but Spotify sends uint64 ("t") --
-                // checked live with busctl. Accepting only "x" left Spotify's
-                // length at 0, so its dropdown timeline never showed.
-                uint64_t len = 0;
-                sd_bus_message_read_basic(m, SD_BUS_TYPE_UINT64, &len);
-                item->length_us = len > (uint64_t)INT64_MAX ? INT64_MAX : (int64_t)len;
-            } else {
-                sd_bus_message_skip(m, contents);
-            }
-            sd_bus_message_exit_container(m); // variant
+    if (strcmp(key, "Metadata") == 0 && strcmp(contents, "a{sv}") == 0) {
+        parse_metadata(m, item);
+        return true;
+    }
+    if (strcmp(contents, "b") == 0 && (strcmp(key, "CanGoNext") == 0 || strcmp(key, "CanGoPrevious") == 0)) {
+        int v = 0;
+        sd_bus_message_read_basic(m, SD_BUS_TYPE_BOOLEAN, &v);
+        if (strcmp(key, "CanGoNext") == 0) {
+            item->can_go_next = v != 0;
+        } else {
+            item->can_go_previous = v != 0;
         }
-        sd_bus_message_exit_container(m); // dict entry
+        return true;
     }
-    sd_bus_message_exit_container(m); // array
+    return false;
 }
 
 // Re-fetches every Player-interface property this module cares about (a full
@@ -318,41 +328,7 @@ static void fetch_player_properties(MprisPlayer *item) {
         return;
     }
 
-    if (sd_bus_message_enter_container(reply, SD_BUS_TYPE_ARRAY, "{sv}") > 0) {
-        while (sd_bus_message_enter_container(reply, SD_BUS_TYPE_DICT_ENTRY, "sv") > 0) {
-            const char *key = NULL;
-            sd_bus_message_read_basic(reply, SD_BUS_TYPE_STRING, &key);
-
-            char type = 0;
-            const char *contents = NULL;
-            sd_bus_message_peek_type(reply, &type, &contents);
-
-            if (contents && sd_bus_message_enter_container(reply, SD_BUS_TYPE_VARIANT, contents) > 0) {
-                if (key && strcmp(key, "PlaybackStatus") == 0 && strcmp(contents, "s") == 0) {
-                    const char *status = NULL;
-                    sd_bus_message_read_basic(reply, SD_BUS_TYPE_STRING, &status);
-                    if (status) {
-                        snprintf(item->status, sizeof(item->status), "%s", status);
-                    }
-                } else if (key && strcmp(key, "Metadata") == 0 && strcmp(contents, "a{sv}") == 0) {
-                    parse_metadata(reply, item);
-                } else if (key && strcmp(key, "CanGoNext") == 0 && strcmp(contents, "b") == 0) {
-                    int v = 0;
-                    sd_bus_message_read_basic(reply, SD_BUS_TYPE_BOOLEAN, &v);
-                    item->can_go_next = v != 0;
-                } else if (key && strcmp(key, "CanGoPrevious") == 0 && strcmp(contents, "b") == 0) {
-                    int v = 0;
-                    sd_bus_message_read_basic(reply, SD_BUS_TYPE_BOOLEAN, &v);
-                    item->can_go_previous = v != 0;
-                } else {
-                    sd_bus_message_skip(reply, contents);
-                }
-                sd_bus_message_exit_container(reply); // variant
-            }
-            sd_bus_message_exit_container(reply); // dict entry
-        }
-        sd_bus_message_exit_container(reply); // array
-    }
+    dbus_dict_walk(reply, player_entry, item);
     sd_bus_message_unref(reply);
     sd_bus_error_free(&err);
 

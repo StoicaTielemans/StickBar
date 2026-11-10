@@ -88,6 +88,14 @@ limitations, as opposed to bugs, are in `docs/limitations.md`.
 - **Rejection logged on every click.** Earlier iterations tried the classic form first
   (which always fails here, needing a fallback + one-time log) and, before the caching
   was added, re-probed and re-logged the rejection on *every single click*.
+- **A failed IPC request was cached as "the Lua syntax works".** The workspace and exit
+  dispatchers each had their own copy of the probe-and-fall-back logic, and they
+  differed: exit returned early when `hyprland_ipc_request()` gave no response, but
+  workspace focus passed the NULL to `response_looks_like_error()` (false for NULL)
+  and cached `DISPATCH_STYLE_LUA`. So one unreachable-socket moment on the first click
+  left a classic-syntax Hyprland on the Lua form for the rest of the run. Found while
+  merging the two copies during the code cleanup; both now go through
+  `dispatch_with_fallback()`, which caches nothing for a missing response.
 
 ### Media
 
@@ -141,3 +149,9 @@ limitations, as opposed to bugs, are in `docs/limitations.md`.
 - **`test_redraw.py` passed without testing anything.** A first version mapped its time
   window onto `WAYLAND_DEBUG` lines using local time, matched zero commits, and passed
   vacuously. It now fails if its window is empty.
+- **`test_power_menu.py` snapshotted a reopened overlay before it had a size.** The
+  overlay is compositor-sized, so until its first configure a snapshot fails ("no open
+  menu to snapshot"). The first snapshot waited for that; the ones after each
+  card-click-and-reopen didn't. It only started failing (~1 run in 4) once the bar's
+  text drawing got faster and answered the test channel before the configure arrived.
+  Every open now waits (`wait_sized()`).

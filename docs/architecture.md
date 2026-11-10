@@ -32,6 +32,11 @@ stickBar/
     │   │                         description handling, per-output index assignment
     │   ├── pointer.c             wl_seat -> wl_pointer, enter/motion/button routing
     │   └── shm_buffer.c          memfd-backed double-buffered wl_shm pool
+    ├── util/                     generic helpers several subsystems share: timerfd
+    │                             create/arm/drain (timer.c), eventfd notification
+    │                             (notify_fd.c), /proc and /sys reads (file.c), the
+    │                             two-series history ring behind every stat graph
+    │                             (history.h)
     ├── testing/
     │   └── test_control.c        STICKBAR_TEST_CONTROL=1 stdin command channel
     │                             for tests/ (injected clicks, data dumps, popup
@@ -82,6 +87,8 @@ stickBar/
     ├── dbus/                     D-Bus plumbing for the system tray (see
     │                             docs/modules/tray.md)
     │   ├── dbus_loop.c           sd_bus connection + generic epoll integration
+    │   ├── dbus_dict.c           a{sv} property-dictionary walker shared by MPRIS,
+    │   │                         SNI and DBusMenu parsing
     │   ├── sni_watcher_service.c attempts to *become* the StatusNotifierWatcher;
     │   │                         tried first
     │   ├── sni_watcher.c         StatusNotifierWatcher Host (client) registration;

@@ -9,6 +9,9 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "util/file.h"
+#include "util/history.h"
+
 // Comfortably above any real machine's thread count (this development
 // machine has 16); matches this project's existing convention (sni_registry's
 // MAX_TRAY_ITEMS, workspaces' MAX_OCCUPIED_IDS) of a bounded array over
@@ -46,8 +49,7 @@ static int g_tasks_running = 0, g_tasks_total = 0;
 static double g_uptime_s = 0.0;
 
 // Usage/temperature history, same shape as the GPU's below.
-static double g_cpu_util_hist[SYSMON_CPU_HISTORY_LEN], g_cpu_temp_hist[SYSMON_CPU_HISTORY_LEN];
-static int g_cpu_hist_head = 0, g_cpu_hist_len = 0;
+static History2 g_cpu_hist; // a = usage %, b = temperature
 
 // Top-processes sample: per-PID utime+stime from the previous /proc scan,
 // in an open-addressing table keyed by PID (two tables swapped each scan, so
@@ -105,8 +107,7 @@ static int g_gpu_proc_count = 0;
 // as fits its card). Recorded always (these two reads happen every poll
 // anyway, for the bar box), so the graph is full
 // the moment the dropdown opens -- same shape as network_client.c's history.
-static double g_gpu_util_hist[SYSMON_GPU_HISTORY_LEN], g_gpu_temp_hist[SYSMON_GPU_HISTORY_LEN];
-static int g_gpu_hist_head = 0, g_gpu_hist_len = 0;
+static History2 g_gpu_hist; // a = usage %, b = temperature
 
 static int g_mem_percent = 0;
 static double g_mem_used_gb = 0.0;
@@ -120,8 +121,7 @@ static double g_swap_total_gb = 0.0;
 static int g_swap_percent = 0;
 
 // Used %/swap % history, same shape as the CPU's and GPU's.
-static double g_mem_used_hist[SYSMON_MEM_HISTORY_LEN], g_mem_swap_hist[SYSMON_MEM_HISTORY_LEN];
-static int g_mem_hist_head = 0, g_mem_hist_len = 0;
+static History2 g_mem_hist; // a = used %, b = swap %
 
 // Dropdown-only memory details (sysmon_mem_refresh_details()).
 static bool g_psi_available = false;
@@ -137,12 +137,6 @@ static MemProcess g_mem_procs[SYSMON_MEM_MAX_PROCS];
 static int g_mem_proc_count = 0;
 
 static void nvml_init(void);
-
-static double monotonic_seconds(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
-}
 
 // Marks every CPU in a kernel cpulist ("0-11", "12-15", "0,2,4-7") as
 // efficient (or not). Returns false if the file doesn't exist.
@@ -205,13 +199,9 @@ static void read_cpu_static_info(void) {
         fclose(f);
     }
 
-    f = fopen("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq", "r");
-    if (f) {
-        long khz = 0;
-        if (fscanf(f, "%ld", &khz) == 1) {
-            g_cpu_max_ghz = khz / 1e6;
-        }
-        fclose(f);
+    long khz = 0;
+    if (file_read_long("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq", &khz)) {
+        g_cpu_max_ghz = khz / 1e6;
     }
 
     bool has_p = mark_cpulist("/sys/devices/cpu_core/cpus", false);
@@ -280,13 +270,9 @@ static void poll_cpu(void) {
     fclose(f);
     g_core_count = core_idx;
 
-    FILE *tf = fopen("/sys/class/thermal/thermal_zone1/temp", "r");
-    if (tf) {
-        long milli_c = 0;
-        if (fscanf(tf, "%ld", &milli_c) == 1) {
-            g_cpu_temp_c = (int)lround((double)milli_c / 1000.0);
-        }
-        fclose(tf);
+    long milli_c = 0;
+    if (file_read_long("/sys/class/thermal/thermal_zone1/temp", &milli_c)) {
+        g_cpu_temp_c = (int)lround((double)milli_c / 1000.0);
     }
 
     FILE *cf = fopen("/proc/cpuinfo", "r");
@@ -518,14 +504,6 @@ static void nvml_init(void) {
     }
 }
 
-static void gpu_history_push(double util, double temp) {
-    g_gpu_util_hist[g_gpu_hist_head] = util;
-    g_gpu_temp_hist[g_gpu_hist_head] = temp;
-    g_gpu_hist_head = (g_gpu_hist_head + 1) % SYSMON_GPU_HISTORY_LEN;
-    if (g_gpu_hist_len < SYSMON_GPU_HISTORY_LEN) {
-        g_gpu_hist_len++;
-    }
-}
 
 // Merges one NVML running-process list into `merged` by PID. An app doing
 // both graphics and compute ("C+G" in nvidia-smi) appears in both lists with
@@ -797,12 +775,8 @@ void sysmon_cpu_refresh_details(void) {
     for (int i = 0; i < g_core_count; i++) {
         char path[96];
         snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", i);
-        FILE *f = fopen(path, "r");
         long khz = 0;
-        g_core_ghz[i] = (f && fscanf(f, "%ld", &khz) == 1) ? khz / 1e6 : 0.0;
-        if (f) {
-            fclose(f);
-        }
+        g_core_ghz[i] = file_read_long(path, &khz) ? khz / 1e6 : 0.0;
     }
 
     // 4th field of /proc/loadavg is "running/total" scheduling entities.
@@ -980,23 +954,13 @@ void sysmon_client_poll(void) {
     poll_cpu();
     poll_mem();
     poll_gpu();
-    g_cpu_util_hist[g_cpu_hist_head] = g_cpu_percent;
-    g_cpu_temp_hist[g_cpu_hist_head] = g_cpu_temp_c;
-    g_cpu_hist_head = (g_cpu_hist_head + 1) % SYSMON_CPU_HISTORY_LEN;
-    if (g_cpu_hist_len < SYSMON_CPU_HISTORY_LEN) {
-        g_cpu_hist_len++;
-    }
+    history2_push(&g_cpu_hist, g_cpu_percent, g_cpu_temp_c);
     // Pushed here rather than inside poll_gpu(), which the dropdown's
     // refresh also calls -- so samples stay exactly one per 5s poll.
     if (g_gpu_available) {
-        gpu_history_push(g_gpu_percent, g_gpu_temp_c);
+        history2_push(&g_gpu_hist, g_gpu_percent, g_gpu_temp_c);
     }
-    g_mem_used_hist[g_mem_hist_head] = g_mem_percent;
-    g_mem_swap_hist[g_mem_hist_head] = g_swap_percent;
-    g_mem_hist_head = (g_mem_hist_head + 1) % SYSMON_MEM_HISTORY_LEN;
-    if (g_mem_hist_len < SYSMON_MEM_HISTORY_LEN) {
-        g_mem_hist_len++;
-    }
+    history2_push(&g_mem_hist, g_mem_percent, g_swap_percent);
 }
 
 void sysmon_client_shutdown(void) {
@@ -1029,17 +993,9 @@ double sysmon_cpu_core_ghz(int index) {
 int sysmon_cpu_tasks_running(void) { return g_tasks_running; }
 int sysmon_cpu_tasks_total(void) { return g_tasks_total; }
 double sysmon_cpu_uptime_s(void) { return g_uptime_s; }
-int sysmon_cpu_history_len(void) { return g_cpu_hist_len; }
-static int cpu_history_slot(int index) {
-    int oldest = g_cpu_hist_len < SYSMON_CPU_HISTORY_LEN ? 0 : g_cpu_hist_head;
-    return (oldest + index) % SYSMON_CPU_HISTORY_LEN;
-}
-double sysmon_cpu_util_history(int index) {
-    return (index >= 0 && index < g_cpu_hist_len) ? g_cpu_util_hist[cpu_history_slot(index)] : 0.0;
-}
-double sysmon_cpu_temp_history(int index) {
-    return (index >= 0 && index < g_cpu_hist_len) ? g_cpu_temp_hist[cpu_history_slot(index)] : 0.0;
-}
+int sysmon_cpu_history_len(void) { return g_cpu_hist.len; }
+double sysmon_cpu_util_history(int index) { return history2_a(&g_cpu_hist, index); }
+double sysmon_cpu_temp_history(int index) { return history2_b(&g_cpu_hist, index); }
 // Results need two scans (a difference); the first one after a reset only primes.
 bool sysmon_cpu_process_ready(void) { return g_proc_has_result; }
 int sysmon_cpu_process_count(void) { return g_cpu_proc_count; }
@@ -1077,18 +1033,9 @@ int sysmon_gpu_process_mib(int index) {
     return (index >= 0 && index < g_gpu_proc_count) ? g_gpu_procs[index].mib : 0;
 }
 
-int sysmon_gpu_history_len(void) { return g_gpu_hist_len; }
-// Index 0 is the oldest sample held (see network_client.c's history_slot()).
-static int gpu_history_slot(int index) {
-    int oldest = g_gpu_hist_len < SYSMON_GPU_HISTORY_LEN ? 0 : g_gpu_hist_head;
-    return (oldest + index) % SYSMON_GPU_HISTORY_LEN;
-}
-double sysmon_gpu_util_history(int index) {
-    return (index >= 0 && index < g_gpu_hist_len) ? g_gpu_util_hist[gpu_history_slot(index)] : 0.0;
-}
-double sysmon_gpu_temp_history(int index) {
-    return (index >= 0 && index < g_gpu_hist_len) ? g_gpu_temp_hist[gpu_history_slot(index)] : 0.0;
-}
+int sysmon_gpu_history_len(void) { return g_gpu_hist.len; }
+double sysmon_gpu_util_history(int index) { return history2_a(&g_gpu_hist, index); }
+double sysmon_gpu_temp_history(int index) { return history2_b(&g_gpu_hist, index); }
 
 int sysmon_mem_percent(void) { return g_mem_percent; }
 double sysmon_mem_used_gb(void) { return g_mem_used_gb; }
@@ -1105,17 +1052,9 @@ double sysmon_swap_used_gb(void) { return g_swap_used_gb; }
 double sysmon_swap_total_gb(void) { return g_swap_total_gb; }
 int sysmon_swap_percent(void) { return g_swap_percent; }
 
-int sysmon_mem_history_len(void) { return g_mem_hist_len; }
-static int mem_history_slot(int index) {
-    int oldest = g_mem_hist_len < SYSMON_MEM_HISTORY_LEN ? 0 : g_mem_hist_head;
-    return (oldest + index) % SYSMON_MEM_HISTORY_LEN;
-}
-double sysmon_mem_used_history(int index) {
-    return (index >= 0 && index < g_mem_hist_len) ? g_mem_used_hist[mem_history_slot(index)] : 0.0;
-}
-double sysmon_mem_swap_history(int index) {
-    return (index >= 0 && index < g_mem_hist_len) ? g_mem_swap_hist[mem_history_slot(index)] : 0.0;
-}
+int sysmon_mem_history_len(void) { return g_mem_hist.len; }
+double sysmon_mem_used_history(int index) { return history2_a(&g_mem_hist, index); }
+double sysmon_mem_swap_history(int index) { return history2_b(&g_mem_hist, index); }
 
 bool sysmon_mem_psi_available(void) { return g_psi_available; }
 double sysmon_mem_psi_some(int window) { return (window >= 0 && window < 3) ? g_psi_some[window] : 0.0; }

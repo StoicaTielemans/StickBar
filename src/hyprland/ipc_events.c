@@ -4,11 +4,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <sys/un.h>
 #include <unistd.h>
 
-#include "hyprland/ipc_request.h" // hyprland_ipc_socket_path()
+#include "hyprland/ipc_request.h" // hyprland_ipc_connect()
 #include "modules/workspaces/workspaces.h"
 #include "wayland/output.h"
 
@@ -43,28 +41,11 @@ static bool event_affects_workspaces(const char *event_name) {
 }
 
 HyprlandEvents *hyprland_events_connect(void) {
-    char path[256];
-    if (!hyprland_ipc_socket_path(".socket2.sock", path, sizeof(path))) {
-        fprintf(stderr, "stickBar: cannot locate Hyprland's event socket "
-                         "(XDG_RUNTIME_DIR or HYPRLAND_INSTANCE_SIGNATURE unset)\n");
-        return NULL;
-    }
-
     // Non-blocking defensively: we only ever read after epoll reports EPOLLIN, so
     // a blocking read shouldn't normally stall, but this avoids any possibility of
     // one doing so on a spurious wakeup or an unlucky race.
-    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    int fd = hyprland_ipc_connect(".socket2.sock", true);
     if (fd < 0) {
-        perror("stickBar: socket(hyprland events)");
-        return NULL;
-    }
-
-    struct sockaddr_un addr = { .sun_family = AF_UNIX };
-    strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
-
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        perror("stickBar: connect(hyprland events socket)");
-        close(fd);
         return NULL;
     }
 

@@ -1,6 +1,8 @@
 #ifndef CUSTOMBAR_NETWORK_NETWORK_CLIENT_H
 #define CUSTOMBAR_NETWORK_NETWORK_CLIENT_H
 
+#include "util/history.h"
+
 #include <stdbool.h>
 
 // Re-reads /proc/net/route (to find the default-route interface), /proc/net/wireless
@@ -42,7 +44,7 @@ double network_tx_total_bytes(void);
 // the 5s poll), for the dropdown's graph. Index 0 is the oldest sample,
 // network_history_len() - 1 the newest. Cleared whenever the default-route
 // interface changes or goes away, so it can hold fewer than the maximum.
-#define NETWORK_HISTORY_LEN 120
+#define NETWORK_HISTORY_LEN HISTORY_LEN
 int network_history_len(void);
 double network_rx_history(int index);
 double network_tx_history(int index);

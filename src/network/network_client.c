@@ -8,6 +8,9 @@
 #include <string.h>
 #include <time.h>
 
+#include "util/file.h"
+#include "util/history.h"
+
 #define MAX_DNS_SERVERS 8 // /etc/resolv.conf can list more, but glibc's own
                            // resolver only honors the first 3 anyway -- 8 is
                            // generous headroom over that, matching this
@@ -32,58 +35,17 @@ static double g_prev_sample_time = -1.0;
 // NETWORK_HISTORY_LEN rx/tx rates, one per poll (so 10 minutes at the 5s
 // poll). Recorded always, not only while the dropdown is open, so the graph
 // is already full the moment it opens -- it costs one store per poll on a
-// timer that runs anyway. g_hist_head is the slot the *next* sample goes in.
-static double g_rx_hist[NETWORK_HISTORY_LEN], g_tx_hist[NETWORK_HISTORY_LEN];
-static int g_hist_head = 0, g_hist_len = 0;
+// timer that runs anyway.
+static History2 g_hist; // a = rx, b = tx
 
 static char g_dns_servers[MAX_DNS_SERVERS][64];
 static int g_dns_count = 0;
-
-static double monotonic_seconds(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
-}
-
-static void history_reset(void) {
-    g_hist_head = 0;
-    g_hist_len = 0;
-}
-
-static void history_push(double rx, double tx) {
-    g_rx_hist[g_hist_head] = rx;
-    g_tx_hist[g_hist_head] = tx;
-    g_hist_head = (g_hist_head + 1) % NETWORK_HISTORY_LEN;
-    if (g_hist_len < NETWORK_HISTORY_LEN) {
-        g_hist_len++;
-    }
-}
-
-// Reads a whole small text file into `out`, trimming trailing
-// whitespace/newline -- the shared shape every /sys/class/net/<iface>/*
-// one-line file below needs. Returns false (and leaves `out` empty) if the
-// file doesn't exist or can't be read, which is expected and not an error
-// for some of these (e.g. "speed" doesn't exist for a Wi-Fi interface).
-static bool read_trimmed_file(const char *path, char *out, size_t out_size) {
-    out[0] = '\0';
-    FILE *f = fopen(path, "r");
-    if (!f) {
-        return false;
-    }
-    size_t n = fread(out, 1, out_size - 1, f);
-    fclose(f);
-    out[n] = '\0';
-    while (n > 0 && (out[n - 1] == '\n' || out[n - 1] == '\r' || out[n - 1] == ' ' || out[n - 1] == '\t')) {
-        out[--n] = '\0';
-    }
-    return true;
-}
 
 static double read_stat_bytes(const char *iface, const char *stat_name) {
     char path[256];
     snprintf(path, sizeof(path), "/sys/class/net/%s/statistics/%s", iface, stat_name);
     char buf[64];
-    if (!read_trimmed_file(path, buf, sizeof(buf)) || buf[0] == '\0') {
+    if (!file_read_trimmed(path, buf, sizeof(buf)) || buf[0] == '\0') {
         return -1.0;
     }
     return atof(buf);
@@ -228,7 +190,7 @@ void network_client_poll(void) {
         g_prev_tx = -1.0;
         // Same reason as the rate reset: samples from the old interface
         // don't belong on the new one's graph.
-        history_reset();
+        history2_reset(&g_hist);
     }
 
     if (!has_route) {
@@ -238,7 +200,7 @@ void network_client_poll(void) {
         g_ip_address[0] = '\0';
         g_rx_rate = 0.0;
         g_tx_rate = 0.0;
-        history_reset();
+        history2_reset(&g_hist);
         return;
     }
 
@@ -248,21 +210,21 @@ void network_client_poll(void) {
     char buf[128];
 
     snprintf(path, sizeof(path), "/sys/class/net/%s/operstate", iface);
-    read_trimmed_file(path, buf, sizeof(buf));
+    file_read_trimmed(path, buf, sizeof(buf));
     g_connected = strcmp(buf, "up") == 0;
 
     g_is_wifi = check_is_wifi(iface);
 
     snprintf(path, sizeof(path), "/sys/class/net/%s/address", iface);
-    read_trimmed_file(path, g_mac_address, sizeof(g_mac_address));
+    file_read_trimmed(path, g_mac_address, sizeof(g_mac_address));
 
     snprintf(path, sizeof(path), "/sys/class/net/%s/mtu", iface);
-    read_trimmed_file(path, g_mtu, sizeof(g_mtu));
+    file_read_trimmed(path, g_mtu, sizeof(g_mtu));
 
     // "speed" doesn't exist (or reads back <= 0) for most Wi-Fi interfaces --
     // matches the reference's own `speed > 0 ? String(speed) : ""` check.
     snprintf(path, sizeof(path), "/sys/class/net/%s/speed", iface);
-    if (read_trimmed_file(path, buf, sizeof(buf)) && atoi(buf) > 0) {
+    if (file_read_trimmed(path, buf, sizeof(buf)) && atoi(buf) > 0) {
         // Explicit ".*s" precision (not a plain "%s") so gcc's
         // -Wformat-truncation can statically verify this can't overflow
         // g_link_speed, even though `buf` (128 bytes) is wider -- the speed
@@ -273,7 +235,7 @@ void network_client_poll(void) {
     }
 
     snprintf(path, sizeof(path), "/sys/class/net/%s/duplex", iface);
-    read_trimmed_file(path, g_duplex, sizeof(g_duplex));
+    file_read_trimmed(path, g_duplex, sizeof(g_duplex));
 
     refresh_dns_servers();
     refresh_ip_address(iface);
@@ -301,7 +263,7 @@ void network_client_poll(void) {
         g_prev_tx = tx;
     }
     g_prev_sample_time = now;
-    history_push(g_rx_rate, g_tx_rate);
+    history2_push(&g_hist, g_rx_rate, g_tx_rate);
 }
 
 bool network_connected(void) { return g_connected; }
@@ -317,22 +279,9 @@ double network_rx_rate_bytes_per_sec(void) { return g_rx_rate; }
 double network_tx_rate_bytes_per_sec(void) { return g_tx_rate; }
 double network_rx_total_bytes(void) { return g_rx_total; }
 double network_tx_total_bytes(void) { return g_tx_total; }
-int network_history_len(void) { return g_hist_len; }
-
-// Index 0 is the oldest sample still held: the oldest one sits at
-// g_hist_head once the buffer has wrapped, and at slot 0 before that.
-static int history_slot(int index) {
-    int oldest = g_hist_len < NETWORK_HISTORY_LEN ? 0 : g_hist_head;
-    return (oldest + index) % NETWORK_HISTORY_LEN;
-}
-
-double network_rx_history(int index) {
-    return (index >= 0 && index < g_hist_len) ? g_rx_hist[history_slot(index)] : 0.0;
-}
-
-double network_tx_history(int index) {
-    return (index >= 0 && index < g_hist_len) ? g_tx_hist[history_slot(index)] : 0.0;
-}
+int network_history_len(void) { return g_hist.len; }
+double network_rx_history(int index) { return history2_a(&g_hist, index); }
+double network_tx_history(int index) { return history2_b(&g_hist, index); }
 
 int network_dns_count(void) { return g_dns_count; }
 const char *network_dns_get(int index) {

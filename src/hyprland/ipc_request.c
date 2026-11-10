@@ -17,26 +17,32 @@ bool hyprland_ipc_socket_path(const char *filename, char *out, size_t out_size) 
     return written > 0 && (size_t)written < out_size;
 }
 
-char *hyprland_ipc_request(const char *command) {
+int hyprland_ipc_connect(const char *filename, bool nonblock) {
     char path[256];
-    if (!hyprland_ipc_socket_path(".socket.sock", path, sizeof(path))) {
-        fprintf(stderr, "stickBar: XDG_RUNTIME_DIR or HYPRLAND_INSTANCE_SIGNATURE not set "
-                         "-- is this running inside a Hyprland session?\n");
-        return NULL;
+    if (!hyprland_ipc_socket_path(filename, path, sizeof(path))) {
+        fprintf(stderr, "stickBar: cannot locate Hyprland's %s (XDG_RUNTIME_DIR or "
+                         "HYPRLAND_INSTANCE_SIGNATURE unset -- not inside a Hyprland session?)\n", filename);
+        return -1;
     }
-
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | (nonblock ? SOCK_NONBLOCK : 0), 0);
     if (fd < 0) {
-        perror("stickBar: socket(hyprland request)");
-        return NULL;
+        perror("stickBar: socket(hyprland)");
+        return -1;
     }
-
     struct sockaddr_un addr = { .sun_family = AF_UNIX };
     strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
-
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        perror("stickBar: connect(hyprland request socket)");
+        fprintf(stderr, "stickBar: connect(hyprland %s): ", filename);
+        perror(NULL);
         close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+char *hyprland_ipc_request(const char *command) {
+    int fd = hyprland_ipc_connect(".socket.sock", false);
+    if (fd < 0) {
         return NULL;
     }
 

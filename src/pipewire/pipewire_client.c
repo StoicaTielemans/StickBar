@@ -5,9 +5,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/eventfd.h>
 #include <unistd.h>
 
+#include "util/file.h"
+#include "util/notify_fd.h"
 #include "visualizer/visualizer.h" // VISUALIZER_NODE_NAME
 
 // Fixed-size, matching this project's existing convention (audio/pulse_client.c's
@@ -80,15 +81,10 @@ static PwClient g_clients[MAX_PW_CLIENTS];
 static PwLink g_links[MAX_PW_LINKS];
 
 // Wakes up the main epoll loop to re-read the cache and redraw. Safe to call
-// from inside a PipeWire callback -- these always run on the thread-loop's own
-// thread, with the thread-loop's lock already held per its documented model
-// (same reasoning audio/pulse_client.c's notify_dirty() gives for
-// pa_threaded_mainloop) -- eventfd_write() doesn't touch any PipeWire state,
-// so no extra synchronization is needed for this part.
+// from inside a PipeWire callback (thread-loop thread, lock held) -- see
+// util/notify_fd.h.
 static void notify_dirty(void) {
-    if (g_notify_fd >= 0) {
-        eventfd_write(g_notify_fd, 1);
-    }
+    notify_fd_signal(g_notify_fd);
 }
 
 // --- Cache mutation, called only from the registry/node callbacks (thread-loop's
@@ -372,9 +368,8 @@ static bool video_node_is_webcam(const PwNode *n) {
 bool pipewire_client_init(void) {
     pw_init(NULL, NULL);
 
-    g_notify_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    g_notify_fd = notify_fd_new("pipewire notify");
     if (g_notify_fd < 0) {
-        perror("stickBar: eventfd(pipewire notify)");
         return false;
     }
 
@@ -481,13 +476,7 @@ int pipewire_client_notify_fd(void) {
 }
 
 void pipewire_client_pump(void) {
-    if (g_notify_fd < 0) {
-        return;
-    }
-    eventfd_t val;
-    // Same "one read drains the whole accumulated counter" reasoning as
-    // audio/pulse_client.c's pulse_client_pump().
-    (void)eventfd_read(g_notify_fd, &val);
+    notify_fd_drain(g_notify_fd);
 }
 
 bool pipewire_client_mic_active(void) {
@@ -598,20 +587,9 @@ static bool is_same_or_descendant(int pid, int ancestor) {
         if (pid == ancestor) {
             return true;
         }
-        char path[64], line[128];
-        snprintf(path, sizeof(path), "/proc/%d/status", pid);
-        FILE *f = fopen(path, "re");
-        if (!f) {
+        if (!proc_read_ppid(pid, &pid)) {
             return false;
         }
-        int ppid = 0;
-        while (fgets(line, sizeof(line), f)) {
-            if (sscanf(line, "PPid: %d", &ppid) == 1) {
-                break;
-            }
-        }
-        fclose(f);
-        pid = ppid;
     }
     return false;
 }

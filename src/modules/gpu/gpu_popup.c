@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "bar/popup_host.h"
 #include "bar/popup_surface.h"
 #include "config/glyphs.h"
 #include "modules/cpu/cpu_popup.h"
@@ -11,34 +12,18 @@
 #include "render/braille_graph.h"
 #include "render/meter_bar.h"
 #include "render/module_box.h"
+#include "render/popup_chrome.h"
+#include "render/popup_style.h"
+#include "render/stat_card.h"
 #include "sysmon/sysmon_client.h"
-
-// Sized generously (this machine has 2 monitors), matching the same
-// MAX_TRACKED_OUTPUTS convention used by every other popup in this project.
-#define MAX_TRACKED_OUTPUTS 8
 
 // Layout tuning, local to this popup (see CLAUDE.md "Conventions"). The
 // section rhythm deliberately matches modules/network/network_info_popup.c.
-#define OUTER_MARGIN 12.0
-#define SECTION_GAP 10.0
-#define HEADER_H 22.0
-#define PILL_H 16.0
-#define PILL_PAD_X 7.0
-#define CARD_PAD 8.0
-#define GRAPH_LABEL_H 14.0
-#define GRAPH_LABEL_GAP 3.0
-#define GRAPH_SPLIT_GAP 8.0 // between the usage and temperature graphs
-#define GRAPH_MIN_CELLS_W 30 // 5 minutes of 5s samples, one per dot column
 #define USAGE_CELLS_H 4
 #define TEMP_CELLS_H 2
-#define AXIS_H 12.0
-#define ROW_H 17.0
-#define COL_GAP 10.0
 #define METER_W 110.0
 #define METER_H 7.0
 #define METER_SEGMENTS 10
-#define APP_BAR_W 70.0
-#define APP_BAR_H 5.0
 
 // The temperature graph's range: idle cards sit around 30-45 °C and NVIDIA's
 // slowdown point is in the 90s, so this span keeps both ends readable.
@@ -46,25 +31,12 @@
 #define TEMP_GRAPH_MAX_C 90.0
 
 typedef struct {
-    bool open;
-    Output *output;
-    PopupSurface *popup;
+    PopupHost host; // the dropdown surface, its placement and click-catchers
     double popup_width, popup_height;
 
-    PopupSurface *catchers[MAX_TRACKED_OUTPUTS];
-    struct wl_surface *catcher_surfaces[MAX_TRACKED_OUTPUTS];
-    int catcher_count;
 } GpuPopupState;
 
 static GpuPopupState g_popup;
-
-// The graph fills its card: as many cells as fit (one 5s sample per dot
-// column), up to the whole history. GRAPH_MIN_CELLS_W (5 minutes) only sets
-// the card's minimum width; a wider card shows a longer stretch of history.
-static int graph_cells(double w) {
-    int cells = braille_graph_cells_for_width(w - CARD_PAD * 2.0);
-    return cells < SYSMON_GPU_HISTORY_LEN / 2 ? cells : SYSMON_GPU_HISTORY_LEN / 2;
-}
 
 // "NVIDIA GeForce RTX 3080" -> "RTX 3080": the vendor/brand words add width
 // without telling you anything on a machine that only has the one card.
@@ -109,25 +81,11 @@ static void heat_gradient(Color out[3]) {
 static const char *ROW_LABELS[] = {"VRAM", "POWER", "FAN", "CLOCK", "VIDEO"};
 
 static double label_col_w(void) {
-    double w = 0.0;
-    for (size_t i = 0; i < sizeof(ROW_LABELS) / sizeof(ROW_LABELS[0]); i++) {
-        double lw = module_box_text_width(ROW_LABELS[i], FONT.xs, true);
-        if (lw > w) {
-            w = lw;
-        }
-    }
-    return w;
-}
-
-// Name column of the apps list: /proc/PID/comm names are at most 15
-// characters (the kernel's TASK_COMM_LEN minus the NUL), and the font is
-// monospace, so 15 of any glyph is exactly the widest a name can get.
-static double app_name_col_w(void) {
-    return module_box_text_width("000000000000000", FONT.label, false) + COL_GAP;
+    return stat_label_col_w(ROW_LABELS, sizeof(ROW_LABELS) / sizeof(ROW_LABELS[0]));
 }
 
 static void row_label(cairo_t *cr, double x, double y, const char *label) {
-    module_box_draw_text_left(cr, x, y, ROW_H, label, FONT.xs, true, COLORS.overlay0);
+    module_box_draw_text_left(cr, x, y, STAT_ROW_H, label, FONT.xs, true, COLORS.overlay0);
 }
 
 // The three meter rows' value texts, built in one place so measuring and
@@ -163,68 +121,47 @@ static void line_texts(char clock[64], char video[64]) {
 
 static double paint_header(cairo_t *cr, double x, double y, double w) {
     if (!cr) {
-        return HEADER_H;
+        return POPUP_HEADER_H;
     }
     char icon[5];
     glyph_utf8(GLYPH_ICON_GPU, icon);
-    module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, COLORS.green);
-    double tx = x + module_box_text_width(icon, FONT.heading, false) + 8.0;
-
-    if (!sysmon_gpu_available()) {
-        module_box_draw_text_left(cr, tx, y, HEADER_H, "No NVIDIA GPU detected", FONT.md, true, COLORS.text);
-        return HEADER_H;
+    PopupHeader header = {.icon = icon, .icon_color = COLORS.green, .title = "No NVIDIA GPU detected"};
+    char name[96], driver[96], pill[32];
+    if (sysmon_gpu_available()) {
+        short_gpu_name(name, sizeof(name));
+        header.title = name;
+        if (sysmon_gpu_driver()[0]) {
+            snprintf(driver, sizeof(driver), "  ·  driver %s", sysmon_gpu_driver());
+            header.summary = driver;
+        }
+        const char *pstate = sysmon_gpu_pstate();
+        if (pstate[0] == 'P') {
+            const char *word = pstate_word(atoi(pstate + 1), &header.pill_fill);
+            snprintf(pill, sizeof(pill), "%s %s", pstate, word);
+            header.pill = pill;
+        }
     }
-
-    char name[96];
-    short_gpu_name(name, sizeof(name));
-    module_box_draw_text_left(cr, tx, y, HEADER_H, name, FONT.md, true, COLORS.text);
-    tx += module_box_text_width(name, FONT.md, true);
-    if (sysmon_gpu_driver()[0]) {
-        char driver[96];
-        snprintf(driver, sizeof(driver), "  ·  driver %s", sysmon_gpu_driver());
-        module_box_draw_text_left(cr, tx, y, HEADER_H, driver, FONT.sm, false, COLORS.subtext0);
-    }
-
-    const char *pstate = sysmon_gpu_pstate();
-    if (pstate[0] == 'P') {
-        Color fill;
-        const char *word = pstate_word(atoi(pstate + 1), &fill);
-        char pill[32];
-        snprintf(pill, sizeof(pill), "%s %s", pstate, word);
-        double pill_w = module_box_text_width(pill, FONT.xs, true) + PILL_PAD_X * 2.0;
-        double pill_x = x + w - pill_w;
-        double pill_y = y + (HEADER_H - PILL_H) / 2.0;
-        module_box_draw_rect(cr, pill_x, pill_y, pill_w, PILL_H, fill, COLORS.mantle, 0.0);
-        module_box_draw_text_centered(cr, pill_x, pill_y, pill_w, PILL_H, pill, FONT.xs, true, COLORS.mantle);
-    }
-    return HEADER_H;
-}
-
-static void graph_label_row(cairo_t *cr, double x, double y, double w, const char *left, Color left_color,
-                            const char *right) {
-    module_box_draw_text_left(cr, x, y, GRAPH_LABEL_H, left, FONT.sm, true, left_color);
-    module_box_draw_text_right(cr, x + w, y, GRAPH_LABEL_H, right, FONT.xs, false, COLORS.overlay0);
+    popup_draw_header(cr, x, y, w, &header);
+    return POPUP_HEADER_H;
 }
 
 // Graph card: usage (rising, 0-100%) over temperature (rising, 30-90 °C),
 // each with a "now / peak" label row above it.
 static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
-    int cells = graph_cells(w);
+    int cells = stat_graph_cells(w, SYSMON_GPU_HISTORY_LEN);
     double graph_w = braille_graph_width(cells);
     double usage_h = braille_graph_height(USAGE_CELLS_H);
     double temp_h = braille_graph_height(TEMP_CELLS_H);
-    double h = CARD_PAD * 2.0 + (GRAPH_LABEL_H + GRAPH_LABEL_GAP) * 2.0 + usage_h + GRAPH_SPLIT_GAP + temp_h;
+    double h = STAT_CARD_PAD * 2.0 + (STAT_GRAPH_LABEL_H + STAT_GRAPH_LABEL_GAP) * 2.0 + usage_h + STAT_GRAPH_SPLIT_GAP +
+               temp_h;
     if (!cr) {
         return h;
     }
-    module_box_draw_rect(cr, x, y, w, h, COLORS.base, COLORS.surface1, 1.0);
+    popup_draw_card(cr, x, y, w, h, false, false, COLORS.surface1);
 
     // Only the samples the graph has room for (and so the peaks over them).
-    int first = sysmon_gpu_history_len() - cells * 2;
-    if (first < 0) {
-        first = 0;
-    }
-    int n = sysmon_gpu_history_len() - first;
+    int n;
+    int first = stat_history_window(sysmon_gpu_history_len(), cells, &n);
     double usage[SYSMON_GPU_HISTORY_LEN], temp[SYSMON_GPU_HISTORY_LEN];
     double usage_peak = 0.0, temp_peak = 0.0;
     for (int i = 0; i < n; i++) {
@@ -241,24 +178,24 @@ static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
         }
     }
 
-    double inner_x = x + CARD_PAD, inner_w = w - CARD_PAD * 2.0;
+    double inner_x = x + STAT_CARD_PAD, inner_w = w - STAT_CARD_PAD * 2.0;
     double graph_x = x + (w - graph_w) / 2.0;
-    double cy = y + CARD_PAD;
+    double cy = y + STAT_CARD_PAD;
     char left[48], right[48];
 
     snprintf(left, sizeof(left), "usage %d%%", sysmon_gpu_percent());
     snprintf(right, sizeof(right), "peak %.0f%%", usage_peak);
-    graph_label_row(cr, inner_x, cy, inner_w, left, COLORS.green, right);
-    cy += GRAPH_LABEL_H + GRAPH_LABEL_GAP;
+    stat_graph_label_row(cr, inner_x, cy, inner_w, left, COLORS.green, right);
+    cy += STAT_GRAPH_LABEL_H + STAT_GRAPH_LABEL_GAP;
     Color usage_gradient[3];
     heat_gradient(usage_gradient);
     braille_graph_draw(cr, graph_x, cy, cells, USAGE_CELLS_H, usage, n, 100.0, true, usage_gradient);
-    cy += usage_h + GRAPH_SPLIT_GAP;
+    cy += usage_h + STAT_GRAPH_SPLIT_GAP;
 
     snprintf(left, sizeof(left), "temp %d°C", sysmon_gpu_temp_c());
     snprintf(right, sizeof(right), "max %.0f°C", temp_peak);
-    graph_label_row(cr, inner_x, cy, inner_w, left, COLORS.peach, right);
-    cy += GRAPH_LABEL_H + GRAPH_LABEL_GAP;
+    stat_graph_label_row(cr, inner_x, cy, inner_w, left, COLORS.peach, right);
+    cy += STAT_GRAPH_LABEL_H + STAT_GRAPH_LABEL_GAP;
     const Color temp_gradient[3] = {COLORS.peach, COLORS.maroon, COLORS.red};
     braille_graph_draw(cr, graph_x, cy, cells, TEMP_CELLS_H, temp, n, TEMP_GRAPH_MAX_C - TEMP_GRAPH_MIN_C,
                        true, temp_gradient);
@@ -270,16 +207,17 @@ static void meter_row(cairo_t *cr, double x, double y, double value_x, const cha
     row_label(cr, x, y, label);
     Color gradient[3];
     heat_gradient(gradient);
-    meter_bar_draw(cr, value_x, y + (ROW_H - METER_H) / 2.0, METER_W, METER_H, fraction, METER_SEGMENTS, gradient,
+    meter_bar_draw(cr, value_x, y + (STAT_ROW_H - METER_H) / 2.0, METER_W, METER_H, fraction, METER_SEGMENTS, gradient,
                    COLORS.surface0);
-    module_box_draw_text_left(cr, value_x + METER_W + COL_GAP, y, ROW_H, value, FONT.label, false, COLORS.text);
+    module_box_draw_text_left(cr, value_x + METER_W + POPUP_COL_GAP, y, STAT_ROW_H, value, FONT.label, false,
+                              COLORS.text);
 }
 
 static double paint_rows(cairo_t *cr, double x, double y) {
     if (!cr) {
-        return ROW_H * 5.0;
+        return STAT_ROW_H * 5.0;
     }
-    double value_x = x + label_col_w() + COL_GAP;
+    double value_x = x + label_col_w() + POPUP_COL_GAP;
     char vram[48], power[48], fan[48], clock[64], video[64];
     meter_texts(vram, power, fan);
     line_texts(clock, video);
@@ -287,94 +225,84 @@ static double paint_rows(cairo_t *cr, double x, double y) {
     int total = sysmon_gpu_mem_total_mb();
     double limit = sysmon_gpu_power_limit_w();
     meter_row(cr, x, y, value_x, "VRAM", total > 0 ? (double)sysmon_gpu_mem_used_mb() / total : 0.0, vram);
-    meter_row(cr, x, y + ROW_H, value_x, "POWER", limit > 0.0 ? sysmon_gpu_power_w() / limit : 0.0, power);
-    meter_row(cr, x, y + ROW_H * 2.0, value_x, "FAN", sysmon_gpu_fan_percent() / 100.0, fan);
+    meter_row(cr, x, y + STAT_ROW_H, value_x, "POWER", limit > 0.0 ? sysmon_gpu_power_w() / limit : 0.0, power);
+    meter_row(cr, x, y + STAT_ROW_H * 2.0, value_x, "FAN", sysmon_gpu_fan_percent() / 100.0, fan);
 
-    row_label(cr, x, y + ROW_H * 3.0, "CLOCK");
-    module_box_draw_text_left(cr, value_x, y + ROW_H * 3.0, ROW_H, clock, FONT.label, false, COLORS.text);
-    row_label(cr, x, y + ROW_H * 4.0, "VIDEO");
-    module_box_draw_text_left(cr, value_x, y + ROW_H * 4.0, ROW_H, video, FONT.label, false, COLORS.text);
-    return ROW_H * 5.0;
+    row_label(cr, x, y + STAT_ROW_H * 3.0, "CLOCK");
+    module_box_draw_text_left(cr, value_x, y + STAT_ROW_H * 3.0, STAT_ROW_H, clock, FONT.label, false, COLORS.text);
+    row_label(cr, x, y + STAT_ROW_H * 4.0, "VIDEO");
+    module_box_draw_text_left(cr, value_x, y + STAT_ROW_H * 4.0, STAT_ROW_H, video, FONT.label, false, COLORS.text);
+    return STAT_ROW_H * 5.0;
 }
 
 // "TOP VRAM APPS": always SYSMON_GPU_MAX_PROCS rows tall so the size fixed at
 // open never clips when more apps start using the GPU while it's open.
 static double paint_apps(cairo_t *cr, double x, double y, double w) {
-    double h = ROW_H * (1 + SYSMON_GPU_MAX_PROCS);
+    double h = STAT_ROW_H * (1 + SYSMON_GPU_MAX_PROCS);
     if (!cr) {
         return h;
     }
-    module_box_draw_text_left(cr, x, y, ROW_H, "TOP VRAM APPS", FONT.xs, true, COLORS.overlay0);
+    module_box_draw_text_left(cr, x, y, STAT_ROW_H, "TOP VRAM APPS", FONT.xs, true, COLORS.overlay0);
     int count = sysmon_gpu_process_count();
     if (count == 0) {
-        module_box_draw_text_left(cr, x, y + ROW_H, ROW_H, "no apps using VRAM", FONT.label, false,
+        module_box_draw_text_left(cr, x, y + STAT_ROW_H, STAT_ROW_H, "no apps using VRAM", FONT.label, false,
                                   COLORS.subtext0);
         return h;
     }
     // Bars are relative to the biggest app (the first), not to total VRAM:
     // a 400 MiB app on a 10 GB card would otherwise be a sliver.
     int biggest = sysmon_gpu_process_mib(0);
-    const Color app_gradient[3] = {COLORS.green, COLORS.green, COLORS.green};
     for (int i = 0; i < count; i++) {
-        double ry = y + ROW_H * (i + 1);
-        module_box_draw_text_left(cr, x, ry, ROW_H, sysmon_gpu_process_name(i), FONT.label, false, COLORS.text);
+        double ry = y + STAT_ROW_H * (i + 1);
         double fraction = biggest > 0 ? (double)sysmon_gpu_process_mib(i) / biggest : 0.0;
-        meter_bar_draw(cr, x + app_name_col_w(), ry + (ROW_H - APP_BAR_H) / 2.0, APP_BAR_W, APP_BAR_H, fraction, 7,
-                       app_gradient, COLORS.surface0);
         char mib[32];
         snprintf(mib, sizeof(mib), "%d MiB", sysmon_gpu_process_mib(i));
-        module_box_draw_text_right(cr, x + w, ry, ROW_H, mib, FONT.label, false, COLORS.subtext0);
+        stat_draw_app_row(cr, x, ry, w, sysmon_gpu_process_name(i), fraction, COLORS.green, mib);
     }
     return h;
 }
 
 static double paint_content(cairo_t *cr, double w) {
-    double x = OUTER_MARGIN, y = OUTER_MARGIN;
+    double x = POPUP_OUTER_MARGIN, y = POPUP_OUTER_MARGIN;
     y += paint_header(cr, x, y, w);
     if (!sysmon_gpu_available()) {
         if (cr) {
-            module_box_draw_text_left(cr, x, y, ROW_H, "NVML unavailable -- no NVIDIA driver?", FONT.sm, false,
+            module_box_draw_text_left(cr, x, y, STAT_ROW_H, "NVML unavailable -- no NVIDIA driver?", FONT.sm, false,
                                       COLORS.subtext0);
         }
-        return y + ROW_H + OUTER_MARGIN;
+        return y + STAT_ROW_H + POPUP_OUTER_MARGIN;
     }
-    y += SECTION_GAP;
+    y += POPUP_SECTION_GAP;
     y += paint_graph_card(cr, x, y, w);
-    if (cr) {
-        char span[24];
-        braille_graph_span_label(span, sizeof(span), graph_cells(w), 5.0);
-        module_box_draw_text_left(cr, x, y + 2.0, AXIS_H, span, FONT.xs, false, COLORS.overlay0);
-        module_box_draw_text_right(cr, x + w, y + 2.0, AXIS_H, "now", FONT.xs, false, COLORS.overlay0);
-    }
-    y += AXIS_H + 2.0 + SECTION_GAP;
+    y += stat_graph_axis(cr, x, y, w, stat_graph_cells(w, SYSMON_GPU_HISTORY_LEN)) + POPUP_SECTION_GAP;
     y += paint_rows(cr, x, y);
-    y += SECTION_GAP;
+    y += POPUP_SECTION_GAP;
     y += paint_apps(cr, x, y, w);
-    return y + OUTER_MARGIN;
+    return y + POPUP_OUTER_MARGIN;
 }
 
 // The graph card's natural width, widened if the header or a row needs more.
 static double content_width(void) {
-    double w = braille_graph_width(GRAPH_MIN_CELLS_W) + CARD_PAD * 2.0;
+    double w = braille_graph_width(STAT_GRAPH_MIN_CELLS_W) + STAT_CARD_PAD * 2.0;
     char icon[5];
     glyph_utf8(GLYPH_ICON_GPU, icon);
-    double icon_w = module_box_text_width(icon, FONT.heading, false) + 8.0;
     if (!sysmon_gpu_available()) {
-        double hw = icon_w + module_box_text_width("No NVIDIA GPU detected", FONT.md, true);
+        PopupHeader none = {.icon = icon, .title = "No NVIDIA GPU detected"};
+        double hw = popup_header_width(&none);
         return hw > w ? hw : w;
     }
 
     char name[96], driver[96];
     short_gpu_name(name, sizeof(name));
     snprintf(driver, sizeof(driver), "  ·  driver %s", sysmon_gpu_driver());
-    double header_w = icon_w + module_box_text_width(name, FONT.md, true) +
-                      module_box_text_width(driver, FONT.sm, false) + 16.0 +
-                      module_box_text_width("P12 active", FONT.xs, true) + PILL_PAD_X * 2.0;
+    // Sized for the widest pill text.
+    PopupHeader header = {.icon = icon, .title = name, .summary = driver, .pill = "P12 active"};
+    double header_w = popup_header_width(&header);
     if (header_w > w) {
         w = header_w;
     }
 
-    double value_x = label_col_w() + COL_GAP;
+    double value_x = label_col_w() + POPUP_COL_GAP;
     char vram[48], power[48], fan[48], clock[64], video[64];
     meter_texts(vram, power, fan);
     line_texts(clock, video);
@@ -382,7 +310,7 @@ static double content_width(void) {
     // measure against a wide sample rather than the current reading.
     const char *meter_values[] = {vram, power, fan, "000 / 000 W", "100%"};
     for (size_t i = 0; i < sizeof(meter_values) / sizeof(meter_values[0]); i++) {
-        double rw = value_x + METER_W + COL_GAP + module_box_text_width(meter_values[i], FONT.label, false);
+        double rw = value_x + METER_W + POPUP_COL_GAP + module_box_text_width(meter_values[i], FONT.label, false);
         if (rw > w) {
             w = rw;
         }
@@ -394,41 +322,18 @@ static double content_width(void) {
             w = rw;
         }
     }
-    double apps_w = app_name_col_w() + APP_BAR_W + COL_GAP + module_box_text_width("00000 MiB", FONT.label, false);
+    double apps_w = stat_app_name_col_w() + STAT_APP_BAR_W + POPUP_COL_GAP + module_box_text_width("00000 MiB",
+                                                                                                   FONT.label, false);
     return apps_w > w ? apps_w : w;
 }
 
 static void draw_popup(cairo_t *cr, void *user_data) {
     (void)user_data;
-    module_box_draw_rect(cr, 0, 0, g_popup.popup_width, g_popup.popup_height, COLORS.mantle, COLORS.green,
-                         (double)BAR.module_border_width);
-    paint_content(cr, g_popup.popup_width - OUTER_MARGIN * 2.0);
-}
-
-static void create_catchers(AppContext *app) {
-    g_popup.catcher_count = 0;
-    for (Output *o = app->outputs; o && g_popup.catcher_count < MAX_TRACKED_OUTPUTS; o = o->next) {
-        PopupSurface *catcher = popup_surface_create_catcher(app, o);
-        if (!catcher) {
-            continue;
-        }
-        g_popup.catchers[g_popup.catcher_count] = catcher;
-        g_popup.catcher_surfaces[g_popup.catcher_count] = popup_surface_wl_surface(catcher);
-        g_popup.catcher_count++;
-    }
-}
-
-static void destroy_catchers(void) {
-    for (int i = 0; i < g_popup.catcher_count; i++) {
-        popup_surface_destroy(g_popup.catchers[i]);
-        g_popup.catchers[i] = NULL;
-        g_popup.catcher_surfaces[i] = NULL;
-    }
-    g_popup.catcher_count = 0;
+    popup_draw_frame(cr, g_popup.popup_width, g_popup.popup_height, COLORS.green);
+    paint_content(cr, g_popup.popup_width - POPUP_OUTER_MARGIN * 2.0);
 }
 
 void gpu_popup_open(Output *output, double box_x, double box_y, double box_w, double box_h) {
-    (void)box_w; // left-anchored: only the box's left edge matters
     gpu_popup_close();
     cpu_popup_close(); // all three sysmon dropdowns open at the same spot
     mem_popup_close();
@@ -437,59 +342,40 @@ void gpu_popup_open(Output *output, double box_x, double box_y, double box_w, do
     // sysmon_gpu_refresh_details()) -- fetch them now, before measuring.
     sysmon_gpu_refresh_details();
 
-    g_popup.output = output;
+    g_popup.host.output = output;
     double content_w = content_width();
-    g_popup.popup_width = content_w + OUTER_MARGIN * 2.0;
+    g_popup.popup_width = content_w + POPUP_OUTER_MARGIN * 2.0;
     g_popup.popup_height = paint_content(NULL, content_w);
 
-    // Same TOP+LEFT anchor math as modules/cpu/cpu_popup.c.
-    int top_margin = (int)(box_y + box_h) - BAR.height;
-    int left_margin = (int)box_x;
-    g_popup.popup = popup_surface_create(output->app, output, (int)g_popup.popup_width, (int)g_popup.popup_height,
-                                         top_margin, 0, 0, left_margin,
-                                         ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT,
-                                         ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY);
-    if (!g_popup.popup) {
+    // Under its box, opening rightward from the box's left edge (bar/popup_host.c).
+    if (!popup_host_open(&g_popup.host, output, POPUP_ANCHOR_LEFT, box_x, box_y, box_w, box_h,
+                         (int)g_popup.popup_width, (int)g_popup.popup_height)) {
         return;
     }
-    create_catchers(output->app);
-    g_popup.open = true;
-    popup_surface_render_now(g_popup.popup, draw_popup, NULL);
+    popup_surface_render_now(g_popup.host.popup, draw_popup, NULL);
 }
 
 void gpu_popup_refresh_if_open(void) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return;
     }
     // ~4-11ms (the fan query dominates), but only every 5s and only while
     // the dropdown is actually open.
     sysmon_gpu_refresh_details();
-    popup_surface_render_now(g_popup.popup, draw_popup, NULL);
+    popup_surface_render_now(g_popup.host.popup, draw_popup, NULL);
 }
 
 void gpu_popup_close(void) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return;
     }
-    popup_surface_destroy(g_popup.popup);
-    g_popup.popup = NULL;
-    destroy_catchers();
-    g_popup.open = false;
-    g_popup.output = NULL;
+    popup_host_close(&g_popup.host);
 }
 
 bool gpu_popup_is_menu_surface(struct wl_surface *surface) {
-    return g_popup.open && g_popup.popup && popup_surface_wl_surface(g_popup.popup) == surface;
+    return popup_host_is_menu_surface(&g_popup.host, surface);
 }
 
 bool gpu_popup_is_catcher_surface(struct wl_surface *surface) {
-    if (!g_popup.open) {
-        return false;
-    }
-    for (int i = 0; i < g_popup.catcher_count; i++) {
-        if (g_popup.catcher_surfaces[i] == surface) {
-            return true;
-        }
-    }
-    return false;
+    return popup_host_is_catcher_surface(&g_popup.host, surface);
 }

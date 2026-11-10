@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "bar/popup_host.h"
 #include "bar/popup_surface.h"
 #include "bar/strip_surface.h"
 #include "config/glyphs.h"
@@ -15,11 +16,9 @@
 #include "render/color.h"
 #include "render/meter_bar.h"
 #include "render/module_box.h"
+#include "render/popup_chrome.h"
+#include "render/popup_style.h"
 #include "visualizer/visualizer.h"
-
-// Sized generously (this machine has 2 monitors), matching the same
-// MAX_TRACKED_OUTPUTS convention used by every other popup in this project.
-#define MAX_TRACKED_OUTPUTS 8
 
 // Mirrors mpris/mpris_client.c's MAX_MPRIS_PLAYERS, but that constant isn't
 // part of mpris_client.h's public surface -- redeclared locally at the same
@@ -32,12 +31,6 @@
 // The content width is fixed, so a track change (a longer title) never
 // changes the popup's size -- titles truncate instead.
 #define CONTENT_W 360.0
-#define OUTER_MARGIN 12.0
-#define SECTION_GAP 10.0
-#define CARD_GAP 8.0
-#define HEADER_H 22.0
-#define PILL_H 16.0
-#define PILL_PAD_X 7.0
 #define CARD_PAD 10.0
 #define TOP_LINE_H 14.0
 #define TITLE_H 20.0
@@ -50,7 +43,6 @@
 #define BUTTON_W 38.0
 #define BUTTON_H 28.0
 #define BUTTON_GAP 6.0
-#define COL_GAP 10.0
 #define TEXT_BUF_SIZE 600
 
 // Spectrum graph, one per player card (visualizer/visualizer.c captures each
@@ -106,7 +98,7 @@ typedef struct {
 
 typedef struct {
     MprisPlayer *player;
-    double y, h;         // card rect, relative to the popup (x is always OUTER_MARGIN)
+    double y, h;         // card rect, relative to the popup (x is always POPUP_OUTER_MARGIN)
     bool has_artist;     // artist/album line shown (omitted if both are empty)
     bool has_vis;        // spectrum graph shown (first VISUALIZER_MAX_SOURCES cards, if it runs)
     double vis_y;        // top of the graph panel, when has_vis
@@ -114,11 +106,8 @@ typedef struct {
 } CardLayout;
 
 typedef struct {
-    bool open;
+    PopupHost host; // the dropdown surface, its placement and click-catchers
     Color accent;
-    Output *output;
-    PopupSurface *popup;
-    int top_margin, left_margin; // kept from open time, for recreating the surface
 
     // One per graph-carrying card; strips are children of `popup` and are
     // recreated with it.
@@ -129,9 +118,6 @@ typedef struct {
     int hovered_card, hovered_button; // -1 = none
     double popup_width, popup_height;
 
-    PopupSurface *catchers[MAX_TRACKED_OUTPUTS];
-    struct wl_surface *catcher_surfaces[MAX_TRACKED_OUTPUTS];
-    int catcher_count;
 } MediaPopupState;
 
 static MediaPopupState g_popup = { .hovered_card = -1, .hovered_button = -1 };
@@ -177,8 +163,8 @@ static void artist_text(MprisPlayer *player, char *out, size_t out_size) {
     }
 }
 
-static double card_x(void) { return OUTER_MARGIN; }
-static double inner_x(void) { return OUTER_MARGIN + CARD_PAD; }
+static double card_x(void) { return POPUP_OUTER_MARGIN; }
+static double inner_x(void) { return POPUP_OUTER_MARGIN + CARD_PAD; }
 static double inner_w(void) { return CONTENT_W - CARD_PAD * 2.0; }
 static double button_x(int button) { return inner_x() + button * (BUTTON_W + BUTTON_GAP); }
 
@@ -193,7 +179,7 @@ static void compute_layout(void) {
     }
     g_popup.card_count = count;
 
-    double y = OUTER_MARGIN + HEADER_H + SECTION_GAP;
+    double y = POPUP_OUTER_MARGIN + POPUP_HEADER_H + POPUP_SECTION_GAP;
     for (int i = 0; i < count; i++) {
         CardLayout *card = &g_popup.cards[i];
         card->player = mpris_player_get(i);
@@ -219,25 +205,19 @@ static void compute_layout(void) {
 
         card->y = y;
         card->h = h;
-        y += h + (i < count - 1 ? CARD_GAP : 0.0);
+        y += h + (i < count - 1 ? POPUP_CARD_GAP : 0.0);
     }
-    g_popup.popup_width = CONTENT_W + OUTER_MARGIN * 2.0;
-    g_popup.popup_height = y + OUTER_MARGIN;
+    g_popup.popup_width = CONTENT_W + POPUP_OUTER_MARGIN * 2.0;
+    g_popup.popup_height = y + POPUP_OUTER_MARGIN;
 }
 
 // ---- Painting ----------------------------------------------------------------
 
 static void paint_header(cairo_t *cr) {
-    double x = OUTER_MARGIN, y = OUTER_MARGIN;
+    double x = POPUP_OUTER_MARGIN, y = POPUP_OUTER_MARGIN;
     char icon[5], summary[48];
     glyph_utf8(GLYPH_ICON_MEDIA_PLAY, icon);
     snprintf(summary, sizeof(summary), "  ·  %d player%s", g_popup.card_count, g_popup.card_count == 1 ? "" : "s");
-    module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, g_popup.accent);
-    double tx = x + module_box_text_width(icon, FONT.heading, false) + 8.0;
-    module_box_draw_text_left(cr, tx, y, HEADER_H, "Media", FONT.md, true, COLORS.text);
-    tx += module_box_text_width("Media", FONT.md, true);
-    module_box_draw_text_left(cr, tx, y, HEADER_H, summary, FONT.sm, false, COLORS.subtext0);
-
     // Pill: the "liveliest" state across players -- playing beats paused
     // beats stopped.
     bool any_playing = false, any_paused = false;
@@ -246,13 +226,12 @@ static void paint_header(cairo_t *cr) {
         any_playing |= strcmp(status, "Playing") == 0;
         any_paused |= strcmp(status, "Paused") == 0;
     }
-    const char *word = any_playing ? "playing" : any_paused ? "paused" : "stopped";
-    Color fill = any_playing ? COLORS.green : any_paused ? COLORS.yellow : COLORS.overlay1;
-    double pill_w = module_box_text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
-    double pill_x = x + CONTENT_W - pill_w;
-    double pill_y = y + (HEADER_H - PILL_H) / 2.0;
-    module_box_draw_rect(cr, pill_x, pill_y, pill_w, PILL_H, fill, COLORS.mantle, 0.0);
-    module_box_draw_text_centered(cr, pill_x, pill_y, pill_w, PILL_H, word, FONT.xs, true, COLORS.mantle);
+    PopupHeader header = {
+        .icon = icon, .icon_color = g_popup.accent, .title = "Media", .summary = summary,
+        .pill = any_playing ? "playing" : any_paused ? "paused" : "stopped",
+        .pill_fill = any_playing ? COLORS.green : any_paused ? COLORS.yellow : COLORS.overlay1,
+    };
+    popup_draw_header(cr, x, y, CONTENT_W, &header);
 }
 
 static void paint_timeline(cairo_t *cr, MprisPlayer *player, double y) {
@@ -279,7 +258,7 @@ static void paint_timeline(cairo_t *cr, MprisPlayer *player, double y) {
     // Reserve the widest the label can get, so the meter never shifts as
     // the seconds tick over (the font is monospace).
     double text_col_w = module_box_text_width("00:00:00 / 00:00:00", FONT.sm, false);
-    double meter_w = inner_w() - text_col_w - COL_GAP;
+    double meter_w = inner_w() - text_col_w - POPUP_COL_GAP;
     const Color gradient[3] = {g_popup.accent, g_popup.accent, COLORS.peach};
     double fraction = has_length ? (double)pos_us / (double)length_us : 0.0;
     meter_bar_draw(cr, inner_x(), y + (TIMELINE_ROW_H - TIMELINE_METER_H) / 2.0, meter_w, TIMELINE_METER_H, fraction,
@@ -502,8 +481,7 @@ static void paint_card(cairo_t *cr, int i) {
     // The player the bar box shows gets the accent border, like the
     // calendar's current month.
     bool active = player == mpris_active_player();
-    module_box_draw_rect(cr, card_x(), card->y, CONTENT_W, card->h, COLORS.base,
-                         active ? g_popup.accent : COLORS.surface1, active ? 2.0 : 1.0);
+    popup_draw_card(cr, card_x(), card->y, CONTENT_W, card->h, active, false, g_popup.accent);
 
     double y = card->y + CARD_PAD;
     char app[TEXT_BUF_SIZE], line[TEXT_BUF_SIZE];
@@ -514,7 +492,7 @@ static void paint_card(cairo_t *cr, int i) {
     Color status_color;
     const char *status = status_word(player, &status_color);
     double status_w = module_box_text_width(status, FONT.xs, true);
-    module_box_truncate_to_width(app, inner_w() - status_w - COL_GAP, FONT.xs, true, line, sizeof(line));
+    module_box_truncate_to_width(app, inner_w() - status_w - POPUP_COL_GAP, FONT.xs, true, line, sizeof(line));
     module_box_draw_text_left(cr, inner_x(), y, TOP_LINE_H, line, FONT.xs, true, COLORS.overlay0);
     module_box_draw_text_right(cr, inner_x() + inner_w(), y, TOP_LINE_H, status, FONT.xs, true, status_color);
     y += TOP_LINE_H;
@@ -545,8 +523,7 @@ static void paint_card(cairo_t *cr, int i) {
 
 static void draw_popup(cairo_t *cr, void *user_data) {
     (void)user_data;
-    module_box_draw_rect(cr, 0, 0, g_popup.popup_width, g_popup.popup_height, COLORS.mantle, g_popup.accent,
-                         (double)BAR.module_border_width);
+    popup_draw_frame(cr, g_popup.popup_width, g_popup.popup_height, g_popup.accent);
     paint_header(cr);
     for (int i = 0; i < g_popup.card_count; i++) {
         paint_card(cr, i);
@@ -554,20 +531,13 @@ static void draw_popup(cairo_t *cr, void *user_data) {
 }
 
 static void redraw(void) {
-    if (g_popup.popup) {
-        popup_surface_render_now(g_popup.popup, draw_popup, NULL);
+    if (g_popup.host.popup) {
+        popup_surface_render_now(g_popup.host.popup, draw_popup, NULL);
     }
 }
 
 static void update_graphs(void); // below, with the rest of the visualizer code
 static void destroy_graphs(void);
-
-static PopupSurface *create_menu_surface(void) {
-    return popup_surface_create(g_popup.output->app, g_popup.output, (int)g_popup.popup_width,
-                                (int)g_popup.popup_height, g_popup.top_margin, 0, 0, g_popup.left_margin,
-                                ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT,
-                                ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY);
-}
 
 // Re-lays out and repaints; recreates the menu surface if the height
 // changed (a player appeared/disappeared, or gained/lost its artist line).
@@ -587,9 +557,7 @@ static void relayout_and_redraw(void) {
     }
     if (g_popup.popup_height != old_h) {
         destroy_graphs(); // the strips are children of the surface about to go away
-        popup_surface_destroy(g_popup.popup);
-        g_popup.popup = create_menu_surface();
-        if (!g_popup.popup) {
+        if (!popup_host_resize(&g_popup.host, (int)g_popup.popup_width, (int)g_popup.popup_height)) {
             media_popup_close();
             return;
         }
@@ -624,7 +592,7 @@ static void resolve_target(int i) {
 // card whose player changed gets its stream re-resolved (it isn't re-resolved
 // otherwise; see media_popup_streams_changed()).
 static void update_graphs(void) {
-    struct wl_surface *parent = g_popup.popup ? popup_surface_wl_surface(g_popup.popup) : NULL;
+    struct wl_surface *parent = g_popup.host.popup ? popup_surface_wl_surface(g_popup.host.popup) : NULL;
     for (int i = 0; i < VISUALIZER_MAX_SOURCES; i++) {
         CardGraph *g = &g_popup.graphs[i];
         if (g->strip && strip_surface_parent(g->strip) != parent) {
@@ -645,7 +613,7 @@ static void update_graphs(void) {
             resolve_target(i);
         }
         if (!g->strip) {
-            g->strip = strip_surface_create(g_popup.output->app, parent);
+            g->strip = strip_surface_create(g_popup.host.output->app, parent);
             if (!g->strip) {
                 continue;
             }
@@ -678,14 +646,14 @@ static bool capture_allowed(MprisPlayer *player) {
 void media_popup_sync_visualizer(void) {
     for (int i = 0; i < VISUALIZER_MAX_SOURCES; i++) {
         CardGraph *g = &g_popup.graphs[i];
-        bool active = g_popup.open && g->shown && g->player && mpris_player_is_playing(g->player) &&
+        bool active = g_popup.host.open && g->shown && g->player && mpris_player_is_playing(g->player) &&
                       capture_allowed(g->player);
         visualizer_set_source(i, g->target, active);
     }
 }
 
 void media_popup_streams_changed(void) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return;
     }
     // Streams come and go (a browser opens a new one per track, Spotify keeps
@@ -699,7 +667,7 @@ void media_popup_streams_changed(void) {
 }
 
 void media_popup_visualizer_frame(uint32_t changed_mask) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return;
     }
     for (int i = 0; i < VISUALIZER_MAX_SOURCES; i++) {
@@ -722,7 +690,7 @@ void media_popup_visualizer_frame(uint32_t changed_mask) {
 void media_popup_visualizer_status(uint32_t *shown_mask, uint32_t *ready_mask) {
     *shown_mask = 0;
     *ready_mask = 0;
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return;
     }
     for (int i = 0; i < VISUALIZER_MAX_SOURCES; i++) {
@@ -737,14 +705,14 @@ void media_popup_visualizer_status(uint32_t *shown_mask, uint32_t *ready_mask) {
 }
 
 void media_popup_refresh_if_open(void) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return;
     }
     relayout_and_redraw();
 }
 
 void media_popup_tick(void) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return;
     }
     // MPRIS's Position property isn't push-notified via PropertiesChanged
@@ -760,36 +728,13 @@ void media_popup_tick(void) {
     relayout_and_redraw();
 }
 
-static void create_catchers(AppContext *app) {
-    g_popup.catcher_count = 0;
-    for (Output *o = app->outputs; o && g_popup.catcher_count < MAX_TRACKED_OUTPUTS; o = o->next) {
-        PopupSurface *catcher = popup_surface_create_catcher(app, o);
-        if (!catcher) {
-            continue;
-        }
-        g_popup.catchers[g_popup.catcher_count] = catcher;
-        g_popup.catcher_surfaces[g_popup.catcher_count] = popup_surface_wl_surface(catcher);
-        g_popup.catcher_count++;
-    }
-}
-
-static void destroy_catchers(void) {
-    for (int i = 0; i < g_popup.catcher_count; i++) {
-        popup_surface_destroy(g_popup.catchers[i]);
-        g_popup.catchers[i] = NULL;
-        g_popup.catcher_surfaces[i] = NULL;
-    }
-    g_popup.catcher_count = 0;
-}
-
 void media_popup_open(Output *output, Color accent, double box_x, double box_y, double box_w, double box_h) {
-    (void)box_w; // left-anchored: only the box's left edge (box_x) matters, not its width
     media_popup_close(); // at most one media popup open at a time
 
     g_popup.accent = accent;
     g_popup.hovered_card = -1;
     g_popup.hovered_button = -1;
-    g_popup.output = output;
+    g_popup.host.output = output;
 
     // Fetch every open player's current position once, up front, so the
     // very first frame already shows a real elapsed time rather than 0:00
@@ -807,25 +752,17 @@ void media_popup_open(Output *output, Color accent, double box_x, double box_y, 
         return; // no tracked players at all -- nothing to show
     }
 
-    // Same top_margin math (including the BAR.height correction) as every
-    // other popup in this bar -- see docs/popups.md
-    // for the reasoning. Anchored TOP+LEFT since the media widget lives in the bar's
-    // center region -- see media_popup.h's own doc comment.
-    g_popup.top_margin = (int)(box_y + box_h) - BAR.height;
-    g_popup.left_margin = (int)box_x;
-    g_popup.popup = create_menu_surface();
-    if (!g_popup.popup) {
+    // Under its box, opening rightward from the box's left edge (bar/popup_host.c).
+    if (!popup_host_open(&g_popup.host, output, POPUP_ANCHOR_LEFT, box_x, box_y, box_w, box_h, (int)g_popup.popup_width,
+                         (int)g_popup.popup_height)) {
         return;
     }
-
-    create_catchers(output->app);
-    g_popup.open = true;
     update_graphs();
     redraw();
 }
 
 void media_popup_close(void) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return;
     }
     destroy_graphs(); // before their parent
@@ -833,34 +770,22 @@ void media_popup_close(void) {
         g_popup.graphs[i].player = NULL;
     }
     free_vis_cache();
-    popup_surface_destroy(g_popup.popup);
-    g_popup.popup = NULL;
-    destroy_catchers();
-    g_popup.open = false;
-    g_popup.output = NULL;
+    popup_host_close(&g_popup.host);
     g_popup.card_count = 0;
     g_popup.hovered_card = -1;
     g_popup.hovered_button = -1;
 }
 
 bool media_popup_is_open(void) {
-    return g_popup.open;
+    return g_popup.host.open;
 }
 
 bool media_popup_is_menu_surface(struct wl_surface *surface) {
-    return g_popup.open && g_popup.popup && popup_surface_wl_surface(g_popup.popup) == surface;
+    return popup_host_is_menu_surface(&g_popup.host, surface);
 }
 
 bool media_popup_is_catcher_surface(struct wl_surface *surface) {
-    if (!g_popup.open) {
-        return false;
-    }
-    for (int i = 0; i < g_popup.catcher_count; i++) {
-        if (g_popup.catcher_surfaces[i] == surface) {
-            return true;
-        }
-    }
-    return false;
+    return popup_host_is_catcher_surface(&g_popup.host, surface);
 }
 
 // Which control chip (card index + button) is under (x, y); false if none.
@@ -882,7 +807,7 @@ static bool button_at(double x, double y, int *card_out, int *button_out) {
 }
 
 void media_popup_handle_motion(double x, double y) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return;
     }
     int card = -1, button = -1;
@@ -895,7 +820,7 @@ void media_popup_handle_motion(double x, double y) {
 }
 
 void media_popup_handle_click(double x, double y) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return;
     }
     // Only the control chips are interactive -- the text and the timeline
@@ -922,10 +847,10 @@ void media_popup_handle_click(double x, double y) {
 
 // ---- Test-control hooks (testing/test_control.c) ---------------------------------
 
-int media_popup_test_card_count(void) { return g_popup.open ? g_popup.card_count : -1; }
+int media_popup_test_card_count(void) { return g_popup.host.open ? g_popup.card_count : -1; }
 
 bool media_popup_test_graph(int card, MediaPopupTestGraph *out) {
-    if (!g_popup.open || card < 0 || card >= g_popup.card_count || !g_popup.cards[card].has_vis) {
+    if (!g_popup.host.open || card < 0 || card >= g_popup.card_count || !g_popup.cards[card].has_vis) {
         return false;
     }
     mpris_player_app_name(g_popup.cards[card].player, out->app, sizeof(out->app));
@@ -944,7 +869,7 @@ bool media_popup_test_graph(int card, MediaPopupTestGraph *out) {
 }
 
 bool media_popup_test_target(const char *app_name, const char *button, double *x, double *y) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return false;
     }
     int b = strcmp(button, "prev") == 0 ? BUTTON_PREV : strcmp(button, "next") == 0 ? BUTTON_NEXT : BUTTON_PLAYPAUSE;

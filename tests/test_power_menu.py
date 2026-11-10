@@ -58,6 +58,20 @@ def alive(bar):
     return bar.proc.poll() is None
 
 
+def wait_sized(bar):
+    """Waits for the overlay to be open *and* configured. The surface is
+    compositor-sized: until its first configure it has no size (a snapshot
+    fails), and the layout is only a stand-in from the output's size. A bar
+    that answers test commands quickly can be asked before that configure
+    has arrived -- seen once the bar's text drawing got faster."""
+    opened = bar.wait_menu(True)
+    deadline = time.time() + 3.0
+    while not opened.get("width") and time.time() < deadline:
+        time.sleep(0.05)
+        opened = bar.must("menu")
+    return opened
+
+
 def check_panel_and_actions(binary, failures):
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -69,13 +83,7 @@ def check_panel_and_actions(binary, failures):
         png = str(tmp / "power.png")
         with common.ControlledBar(binary, env_extra=env) as bar:
             bar.click_module("arch", "left")
-            opened = bar.wait_menu(True)
-            # The surface is compositor-sized: until its first configure it has
-            # no size, and the layout is only a stand-in from the output's size.
-            deadline = time.time() + 3.0
-            while not opened.get("width") and time.time() < deadline:
-                time.sleep(0.05)
-                opened = bar.must("menu")
+            opened = wait_sized(bar)
 
             corner = bar.must("target power corner")
             x, y = int(corner["x"]), int(corner["y"])
@@ -124,7 +132,7 @@ def check_panel_and_actions(binary, failures):
                 if picked != action:
                     failures.append(f"{action} card picked {picked!r}")
                 bar.proc.send_signal(signal.SIGUSR1)
-                bar.wait_menu(True)
+                wait_sized(bar)  # reopened: a fresh surface, sized only once configured
             bar.proc.send_signal(signal.SIGUSR1)
             bar.wait_menu(False)
         if log.exists():

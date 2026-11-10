@@ -3,30 +3,26 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "bar/popup_host.h"
 #include "bar/popup_surface.h"
 #include "config/config.h"
 #include "config/glyphs.h"
 #include "dbus/dbusmenu.h"
 #include "render/module_box.h"
-
-// Sized generously (this machine has 2 monitors), matching the same
-// MAX_TRACKED_OUTPUTS convention used by modules/workspaces.c and modules/tray/tray.c.
-#define MAX_TRACKED_OUTPUTS 8
+#include "render/popup_chrome.h"
+#include "render/popup_style.h"
 
 // Layout tuning, local to this popup (see CLAUDE.md "Conventions"). Same
 // header/card language as the other dropdowns, kept neutral grey (overlay0
 // border, per explicit user request): the tray is the one module without an
 // accent colour of its own.
-#define OUTER_MARGIN 12.0
-#define HEADER_H 22.0
 #define HEADER_ICON 20.0 // tray icons are pre-scaled to BAR.height (20px)
-#define SECTION_GAP 10.0
-#define CARD_GAP 6.0
+#define CARD_GAP 6.0  // tighter than POPUP_CARD_GAP (8): menus can run long, entries stay compact
 #define CARD_PAD 3.0
 #define ROW_H 26.0
 #define ROW_PAD_X 10.0
 #define HOVER_BAR_W 3.0
-#define COL_GAP 8.0
+#define COL_GAP 8.0   // tighter than POPUP_COL_GAP (10), for the same reason
 #define MIN_CONTENT_W 200.0
 
 typedef struct {
@@ -38,10 +34,8 @@ typedef struct {
 } CardLayout;
 
 typedef struct {
-    bool open;
-    Output *output; // which output the popup itself is displayed on
+    PopupHost host; // the dropdown surface, its placement and click-catchers
     SniItem *item;  // which tray item this menu belongs to
-    PopupSurface *popup;
 
     DbusMenuEntry entries[MAX_MENU_ENTRIES];
     RowLayout rows[MAX_MENU_ENTRIES]; // meaningful only for non-separator entries
@@ -63,9 +57,6 @@ typedef struct {
     // mechanism (HyprlandFocusGrab) captures compositor-wide, and this machine
     // has 2 monitors; a single-output catcher would leave the menu stuck open
     // if the user clicked the other one, a real regression versus the reference.
-    PopupSurface *catchers[MAX_TRACKED_OUTPUTS];
-    struct wl_surface *catcher_surfaces[MAX_TRACKED_OUTPUTS];
-    int catcher_count;
 } MenuState;
 
 static MenuState g_menu = { .hovered_index = -1 };
@@ -82,7 +73,7 @@ static double chevron_w(void) {
     return module_box_text_width(buf, FONT.xs, false);
 }
 
-static double card_inner_x(void) { return OUTER_MARGIN + CARD_PAD; }
+static double card_inner_x(void) { return POPUP_OUTER_MARGIN + CARD_PAD; }
 static double card_inner_w(void) { return g_menu.content_width - CARD_PAD * 2.0; }
 
 static void header_summary(char *out, size_t out_size) {
@@ -126,31 +117,30 @@ static void draw_row(cairo_t *cr, int i) {
 static void draw_menu(cairo_t *cr, void *user_data) {
     (void)user_data;
 
-    module_box_draw_rect(cr, 0, 0, g_menu.popup_width, g_menu.popup_height,
-                          COLORS.mantle, COLORS.overlay0, (double)BAR.module_border_width);
+    popup_draw_frame(cr, g_menu.popup_width, g_menu.popup_height, COLORS.overlay0);
 
     // Header: the item's own tray icon, its name, and the entry count.
-    double x = OUTER_MARGIN, y = OUTER_MARGIN;
+    double x = POPUP_OUTER_MARGIN, y = POPUP_OUTER_MARGIN;
     cairo_surface_t *icon = sni_item_icon_surface(g_menu.item);
     if (icon) {
         cairo_save(cr);
-        cairo_set_source_surface(cr, icon, x, y + (HEADER_H - HEADER_ICON) / 2.0);
+        cairo_set_source_surface(cr, icon, x, y + (POPUP_HEADER_H - HEADER_ICON) / 2.0);
         cairo_paint(cr);
         cairo_restore(cr);
     } else {
-        module_box_draw_rect(cr, x, y + (HEADER_H - HEADER_ICON) / 2.0, HEADER_ICON, HEADER_ICON,
+        module_box_draw_rect(cr, x, y + (POPUP_HEADER_H - HEADER_ICON) / 2.0, HEADER_ICON, HEADER_ICON,
                              COLORS.overlay0, COLORS.mantle, 0.0);
     }
-    double tx = x + HEADER_ICON + 8.0;
-    module_box_draw_text_left(cr, tx, y, HEADER_H, g_menu.title, FONT.md, true, COLORS.text);
+    double tx = x + HEADER_ICON + POPUP_HEADER_ICON_GAP;
+    module_box_draw_text_left(cr, tx, y, POPUP_HEADER_H, g_menu.title, FONT.md, true, COLORS.text);
     tx += module_box_text_width(g_menu.title, FONT.md, true);
     char summary[48];
     header_summary(summary, sizeof(summary));
-    module_box_draw_text_left(cr, tx, y, HEADER_H, summary, FONT.sm, false, COLORS.subtext0);
+    module_box_draw_text_left(cr, tx, y, POPUP_HEADER_H, summary, FONT.sm, false, COLORS.subtext0);
 
     for (int c = 0; c < g_menu.card_count; c++) {
-        module_box_draw_rect(cr, OUTER_MARGIN, g_menu.cards[c].y, g_menu.content_width, g_menu.cards[c].h,
-                             COLORS.base, COLORS.surface1, 1.0);
+        popup_draw_card(cr, POPUP_OUTER_MARGIN, g_menu.cards[c].y, g_menu.content_width, g_menu.cards[c].h, false,
+                        false, COLORS.surface1);
     }
     for (int i = 0; i < g_menu.entry_count; i++) {
         if (!g_menu.entries[i].is_separator) {
@@ -160,8 +150,8 @@ static void draw_menu(cairo_t *cr, void *user_data) {
 }
 
 static void redraw(void) {
-    if (g_menu.popup) {
-        popup_surface_render_now(g_menu.popup, draw_menu, NULL);
+    if (g_menu.host.popup) {
+        popup_surface_render_now(g_menu.host.popup, draw_menu, NULL);
     }
 }
 
@@ -190,15 +180,15 @@ static void compute_layout(void) {
     double row_w = ROW_PAD_X * 2.0 + (g_menu.any_toggle ? toggle_col_w() : 0.0) + max_row_w + CARD_PAD * 2.0;
     char summary[48];
     header_summary(summary, sizeof(summary));
-    double header_w = HEADER_ICON + 8.0 + module_box_text_width(g_menu.title, FONT.md, true) +
+    double header_w = HEADER_ICON + POPUP_HEADER_ICON_GAP + module_box_text_width(g_menu.title, FONT.md, true) +
                       module_box_text_width(summary, FONT.sm, false);
     g_menu.content_width = row_w > header_w ? row_w : header_w;
     if (g_menu.content_width < MIN_CONTENT_W) {
         g_menu.content_width = MIN_CONTENT_W;
     }
-    g_menu.popup_width = g_menu.content_width + OUTER_MARGIN * 2.0;
+    g_menu.popup_width = g_menu.content_width + POPUP_OUTER_MARGIN * 2.0;
 
-    double y = OUTER_MARGIN + HEADER_H + SECTION_GAP;
+    double y = POPUP_OUTER_MARGIN + POPUP_HEADER_H + POPUP_SECTION_GAP;
     g_menu.card_count = 0;
     bool in_card = false;
     for (int i = 0; i < g_menu.entry_count; i++) {
@@ -228,29 +218,7 @@ static void compute_layout(void) {
     } else if (g_menu.card_count > 0) {
         y -= CARD_GAP; // a trailing separator left one gap too many
     }
-    g_menu.popup_height = y + OUTER_MARGIN;
-}
-
-static void create_catchers(AppContext *app) {
-    g_menu.catcher_count = 0;
-    for (Output *o = app->outputs; o && g_menu.catcher_count < MAX_TRACKED_OUTPUTS; o = o->next) {
-        PopupSurface *catcher = popup_surface_create_catcher(app, o);
-        if (!catcher) {
-            continue;
-        }
-        g_menu.catchers[g_menu.catcher_count] = catcher;
-        g_menu.catcher_surfaces[g_menu.catcher_count] = popup_surface_wl_surface(catcher);
-        g_menu.catcher_count++;
-    }
-}
-
-static void destroy_catchers(void) {
-    for (int i = 0; i < g_menu.catcher_count; i++) {
-        popup_surface_destroy(g_menu.catchers[i]);
-        g_menu.catchers[i] = NULL;
-        g_menu.catcher_surfaces[i] = NULL;
-    }
-    g_menu.catcher_count = 0;
+    g_menu.popup_height = y + POPUP_OUTER_MARGIN;
 }
 
 void tray_context_menu_open(Output *output, SniItem *item, double icon_x, double icon_y, double icon_w, double icon_h) {
@@ -265,74 +233,39 @@ void tray_context_menu_open(Output *output, SniItem *item, double icon_x, double
     g_menu.entry_count = count;
     g_menu.hovered_index = -1;
     g_menu.item = item;
-    g_menu.output = output;
+    g_menu.host.output = output;
     snprintf(g_menu.title, sizeof(g_menu.title), "%s", sni_item_title(item)[0] ? sni_item_title(item) : "Menu");
 
     compute_layout();
 
-    // Reference semantics (anchor: Bottom|Right, gravity: Bottom|Left -- the
-    // popup's top-right corner attaches to the icon's bottom-right corner and
-    // it grows down-and-left from there) translate to: anchor TOP|RIGHT with
-    // top_margin = the icon's bottom edge, right_margin = the distance from the
-    // icon's right edge to the output's own right edge.
-    // Subtracting BAR.height compensates for Hyprland appearing to measure a
-    // layer surface's own top_margin from the edge of its *already-reserved*
-    // exclusive-zone region rather than the raw output edge the spec text
-    // describes, when the margin is set by the same client that owns that
-    // reservation (the bar's own layer surface). Reasoned from spec text plus
-    // the observed symptom (a suspiciously round one-bar-height offset without
-    // this subtraction) -- verify by screenshot before trusting this blindly.
-    int top_margin = (int)(icon_y + icon_h) - BAR.height;
-    int right_margin = output->width - (int)(icon_x + icon_w);
-    if (right_margin < 0) {
-        // Known limitation (also true of the reference): no reflow if the menu
-        // would overflow past the output's left edge -- clamp rather than
-        // produce a negative margin, which would push the popup off-screen
-        // instead of just looking slightly misaligned.
-        right_margin = 0;
-    }
-
-    g_menu.popup = popup_surface_create(output->app, output, (int)g_menu.popup_width, (int)g_menu.popup_height,
-                                         top_margin, right_margin, 0, 0,
-                                         ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
-                                         ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY);
-    if (!g_menu.popup) {
+    // Under the icon, opening leftward from its right edge (bar/popup_host.c,
+    // which also has the BAR.height margin correction this menu was the
+    // first to need). Known limitation, as in the reference: no reflow if
+    // the menu would overflow the output's left edge.
+    if (!popup_host_open(&g_menu.host, output, POPUP_ANCHOR_RIGHT, icon_x, icon_y, icon_w, icon_h,
+                         (int)g_menu.popup_width, (int)g_menu.popup_height)) {
         return;
     }
-
-    create_catchers(output->app);
-    g_menu.open = true;
     redraw(); // no-op until the compositor's configure arrives; see popup_surface.c
 }
 
 void tray_context_menu_close(void) {
-    if (!g_menu.open) {
+    if (!g_menu.host.open) {
         return;
     }
-    popup_surface_destroy(g_menu.popup);
-    g_menu.popup = NULL;
-    destroy_catchers();
-    g_menu.open = false;
+    popup_host_close(&g_menu.host);
     g_menu.item = NULL;
-    g_menu.output = NULL;
+    g_menu.host.output = NULL;
     g_menu.entry_count = 0;
     g_menu.hovered_index = -1;
 }
 
 bool tray_context_menu_is_menu_surface(struct wl_surface *surface) {
-    return g_menu.open && g_menu.popup && popup_surface_wl_surface(g_menu.popup) == surface;
+    return popup_host_is_menu_surface(&g_menu.host, surface);
 }
 
 bool tray_context_menu_is_catcher_surface(struct wl_surface *surface) {
-    if (!g_menu.open) {
-        return false;
-    }
-    for (int i = 0; i < g_menu.catcher_count; i++) {
-        if (g_menu.catcher_surfaces[i] == surface) {
-            return true;
-        }
-    }
-    return false;
+    return popup_host_is_catcher_surface(&g_menu.host, surface);
 }
 
 // Finds which non-separator row (x, y) lands on, or -1 if it lands on the
@@ -354,7 +287,7 @@ static int row_at(double x, double y) {
 }
 
 void tray_context_menu_handle_motion(double x, double y) {
-    if (!g_menu.open) {
+    if (!g_menu.host.open) {
         return;
     }
     int idx = row_at(x, y);
@@ -365,7 +298,7 @@ void tray_context_menu_handle_motion(double x, double y) {
 }
 
 void tray_context_menu_handle_click(double x, double y) {
-    if (!g_menu.open) {
+    if (!g_menu.host.open) {
         return;
     }
     int idx = row_at(x, y);
@@ -386,14 +319,14 @@ void tray_context_menu_handle_click(double x, double y) {
 
 // ---- Test-control hooks (testing/test_control.c) ---------------------------------
 
-int tray_context_menu_test_entry_count(void) { return g_menu.open ? g_menu.entry_count : -1; }
+int tray_context_menu_test_entry_count(void) { return g_menu.host.open ? g_menu.entry_count : -1; }
 
 const DbusMenuEntry *tray_context_menu_test_entry(int index) {
-    return (g_menu.open && index >= 0 && index < g_menu.entry_count) ? &g_menu.entries[index] : NULL;
+    return (g_menu.host.open && index >= 0 && index < g_menu.entry_count) ? &g_menu.entries[index] : NULL;
 }
 
 bool tray_context_menu_test_target(const char *label, double *x, double *y) {
-    for (int i = 0; g_menu.open && i < g_menu.entry_count; i++) {
+    for (int i = 0; g_menu.host.open && i < g_menu.entry_count; i++) {
         if (!g_menu.entries[i].is_separator && strcmp(g_menu.entries[i].label, label) == 0) {
             *x = card_inner_x() + card_inner_w() / 2.0;
             *y = g_menu.rows[i].y + g_menu.rows[i].h / 2.0;

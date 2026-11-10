@@ -12,6 +12,8 @@
 #include "config/glyphs.h"
 #include "hyprland/dispatch.h"
 #include "render/module_box.h"
+#include "render/popup_chrome.h"
+#include "render/popup_style.h"
 #include "testing/test_control.h"
 
 // Sized generously (this machine has 2 monitors), matching the same
@@ -23,18 +25,11 @@
 // centered on each output's dimmed background, three action cards in a row.
 #define CARD_W 116.0
 #define CARD_H 112.0
-#define CARD_GAP 8.0
-#define OUTER_MARGIN 12.0
-#define SECTION_GAP 10.0
-#define HEADER_H 22.0
-#define PILL_H 16.0
-#define PILL_PAD_X 7.0
-#define COL_GAP 10.0
 #define ICON_LABEL_GAP 4.0
 #define LABEL_DETAIL_GAP 2.0
-#define CONTENT_W (3.0 * CARD_W + 2.0 * CARD_GAP)
-#define PANEL_W (CONTENT_W + OUTER_MARGIN * 2.0)
-#define PANEL_H (OUTER_MARGIN + HEADER_H + SECTION_GAP + CARD_H + OUTER_MARGIN)
+#define CONTENT_W (3.0 * CARD_W + 2.0 * POPUP_CARD_GAP)
+#define PANEL_W (CONTENT_W + POPUP_OUTER_MARGIN * 2.0)
+#define PANEL_H (POPUP_OUTER_MARGIN + POPUP_HEADER_H + POPUP_SECTION_GAP + CARD_H + POPUP_OUTER_MARGIN)
 
 typedef struct {
     double x, y, w, h;
@@ -98,8 +93,8 @@ static void compute_layout(OutputOverlay *ov) {
     }
     ov->panel = (ButtonRect){floor((surface_w - PANEL_W) / 2.0), floor((surface_h - PANEL_H) / 2.0), PANEL_W, PANEL_H};
     for (int i = 0; i < 3; i++) {
-        ov->buttons[i].x = ov->panel.x + OUTER_MARGIN + (double)i * (CARD_W + CARD_GAP);
-        ov->buttons[i].y = ov->panel.y + OUTER_MARGIN + HEADER_H + SECTION_GAP;
+        ov->buttons[i].x = ov->panel.x + POPUP_OUTER_MARGIN + (double)i * (CARD_W + POPUP_CARD_GAP);
+        ov->buttons[i].y = ov->panel.y + POPUP_OUTER_MARGIN + POPUP_HEADER_H + POPUP_SECTION_GAP;
         ov->buttons[i].w = CARD_W;
         ov->buttons[i].h = CARD_H;
     }
@@ -151,8 +146,9 @@ static void action_shutdown(void) {
 // one a click would run.
 static void draw_card(cairo_t *cr, ButtonRect *rect, bool hovered, Color accent, uint32_t glyph_cp, const char *label,
                       const char *detail) {
-    module_box_draw_rect(cr, rect->x, rect->y, rect->w, rect->h, hovered ? COLORS.surface0 : COLORS.base,
-                         hovered ? accent : COLORS.surface1, hovered ? 2.0 : 1.0);
+    // Hover marks the card the way "current" does elsewhere: the action a
+    // click would run.
+    popup_draw_card(cr, rect->x, rect->y, rect->w, rect->h, hovered, hovered, accent);
 
     char glyph_buf[5];
     glyph_utf8(glyph_cp, glyph_buf);
@@ -173,31 +169,14 @@ static void draw_card(cairo_t *cr, ButtonRect *rect, bool hovered, Color accent,
 }
 
 static void draw_header(cairo_t *cr, ButtonRect *panel) {
-    double x = panel->x + OUTER_MARGIN, y = panel->y + OUTER_MARGIN;
-    double text_right = x + CONTENT_W;
-
-    if (g_uptime[0]) {
-        double pill_w = module_box_text_width(g_uptime, FONT.xs, true) + PILL_PAD_X * 2.0;
-        double pill_x = x + CONTENT_W - pill_w;
-        double pill_y = y + (HEADER_H - PILL_H) / 2.0;
-        module_box_draw_rect(cr, pill_x, pill_y, pill_w, PILL_H, COLORS.sapphire, COLORS.mantle, 0.0);
-        module_box_draw_text_centered(cr, pill_x, pill_y, pill_w, PILL_H, g_uptime, FONT.xs, true, COLORS.mantle);
-        text_right = pill_x - COL_GAP;
-    }
-
-    // Clipped short of the pill: a long hostname must not draw over it.
-    cairo_save(cr);
-    cairo_rectangle(cr, x, y, text_right - x, HEADER_H);
-    cairo_clip(cr);
+    // A long hostname is ellipsized short of the uptime pill by
+    // popup_draw_header().
     char icon[5], summary[sizeof(g_identity) + 8];
     glyph_utf8(GLYPH_ICON_SHUTDOWN, icon);
     snprintf(summary, sizeof(summary), "  ·  %s", g_identity);
-    module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, COLORS.sapphire);
-    double tx = x + module_box_text_width(icon, FONT.heading, false) + 8.0;
-    module_box_draw_text_left(cr, tx, y, HEADER_H, "Power", FONT.md, true, COLORS.text);
-    tx += module_box_text_width("Power", FONT.md, true);
-    module_box_draw_text_left(cr, tx, y, HEADER_H, summary, FONT.sm, false, COLORS.subtext0);
-    cairo_restore(cr);
+    PopupHeader header = {.icon = icon, .icon_color = COLORS.sapphire, .title = "Power", .summary = summary,
+                          .pill = g_uptime[0] ? g_uptime : NULL, .pill_fill = COLORS.sapphire};
+    popup_draw_header(cr, panel->x + POPUP_OUTER_MARGIN, panel->y + POPUP_OUTER_MARGIN, CONTENT_W, &header);
 }
 
 static void draw_overlay(cairo_t *cr, void *user_data) {
@@ -414,7 +393,7 @@ bool power_menu_test_target(const char *part, double *x, double *y) {
         *y = ov->panel.y;
     } else if (strcmp(part, "header") == 0) {
         *x = ov->panel.x + PANEL_W / 2.0;
-        *y = ov->panel.y + OUTER_MARGIN + HEADER_H / 2.0;
+        *y = ov->panel.y + POPUP_OUTER_MARGIN + POPUP_HEADER_H / 2.0;
     } else {
         return false;
     }

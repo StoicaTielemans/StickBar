@@ -41,6 +41,56 @@ static Output *output_for_surface(AppContext *app, struct wl_surface *surface) {
     return NULL;
 }
 
+// How input on a dropdown's own surfaces is routed (pointer_dispatch_button()
+// and pointer_dispatch_motion()). The click handlers differ in what they
+// take, so each gets a one-line adapter to one shape. The mixer and the power
+// menu aren't in here: they're special-cased where they're handled.
+typedef struct {
+    bool (*is_menu)(struct wl_surface *surface);
+    bool (*is_catcher)(struct wl_surface *surface);
+    void (*click)(double x, double y, uint32_t button); // NULL = read-only content
+    void (*motion)(double x, double y);                 // NULL = no hover states
+    void (*close)(void);
+} PopupRoute;
+
+static void tray_menu_click(double x, double y, uint32_t button) {
+    (void)button;
+    tray_context_menu_handle_click(x, y);
+}
+static void media_click(double x, double y, uint32_t button) {
+    (void)button;
+    media_popup_handle_click(x, y);
+}
+static void eq_click(double x, double y, uint32_t button) {
+    (void)button;
+    eq_popup_handle_click(x, y);
+}
+
+static const PopupRoute POPUP_ROUTES[] = {
+    {.is_menu = tray_context_menu_is_menu_surface, .is_catcher = tray_context_menu_is_catcher_surface,
+     .click = tray_menu_click, .motion = tray_context_menu_handle_motion, .close = tray_context_menu_close},
+    {.is_menu = device_popup_is_menu_surface, .is_catcher = device_popup_is_catcher_surface,
+     .click = device_popup_handle_press, .motion = device_popup_handle_motion, .close = device_popup_close},
+    {.is_menu = media_popup_is_menu_surface, .is_catcher = media_popup_is_catcher_surface,
+     .click = media_click, .motion = media_popup_handle_motion, .close = media_popup_close},
+    {.is_menu = eq_popup_is_menu_surface, .is_catcher = eq_popup_is_catcher_surface,
+     .click = eq_click, .motion = eq_popup_handle_motion, .close = eq_popup_close},
+    // Year navigation in the header; the rest of the calendar is read-only.
+    {.is_menu = clock_calendar_popup_is_menu_surface, .is_catcher = clock_calendar_popup_is_catcher_surface,
+     .click = clock_calendar_popup_handle_click, .motion = clock_calendar_popup_handle_motion,
+     .close = clock_calendar_popup_close},
+    {.is_menu = mem_popup_is_menu_surface, .is_catcher = mem_popup_is_catcher_surface,
+     .click = NULL, .motion = NULL, .close = mem_popup_close},
+    {.is_menu = cpu_popup_is_menu_surface, .is_catcher = cpu_popup_is_catcher_surface,
+     .click = NULL, .motion = NULL, .close = cpu_popup_close},
+    {.is_menu = gpu_popup_is_menu_surface, .is_catcher = gpu_popup_is_catcher_surface,
+     .click = NULL, .motion = NULL, .close = gpu_popup_close},
+    {.is_menu = network_info_popup_is_menu_surface, .is_catcher = network_info_popup_is_catcher_surface,
+     .click = NULL, .motion = NULL, .close = network_info_popup_close},
+    {.is_menu = privacy_info_popup_is_menu_surface, .is_catcher = privacy_info_popup_is_catcher_surface,
+     .click = NULL, .motion = NULL, .close = privacy_info_popup_close},
+};
+
 static void pointer_enter(void *data, struct wl_pointer *pointer, uint32_t serial,
                            struct wl_surface *surface, wl_fixed_t sx, wl_fixed_t sy) {
     (void)pointer; (void)serial;
@@ -79,23 +129,25 @@ static void pointer_motion(void *data, struct wl_pointer *pointer, uint32_t time
 }
 
 void pointer_dispatch_motion(AppContext *app) {
-    if (tray_context_menu_is_menu_surface(app->pointer_over_surface)) {
-        tray_context_menu_handle_motion(app->pointer_x, app->pointer_y);
-    } else if (device_popup_is_menu_surface(app->pointer_over_surface)) {
-        device_popup_handle_motion(app->pointer_x, app->pointer_y);
-    } else if (mixer_popup_is_menu_surface(app->pointer_over_surface)) {
+    struct wl_surface *surface = app->pointer_over_surface;
+    if (mixer_popup_is_menu_surface(surface)) {
         // Also drives slider drags: Wayland's implicit grab keeps
         // pointer_over_surface on the mixer while the button is held, even
         // if the pointer wanders outside it.
         mixer_popup_handle_motion(app->pointer_x, app->pointer_y);
-    } else if (media_popup_is_menu_surface(app->pointer_over_surface)) {
-        media_popup_handle_motion(app->pointer_x, app->pointer_y);
-    } else if (eq_popup_is_menu_surface(app->pointer_over_surface)) {
-        eq_popup_handle_motion(app->pointer_x, app->pointer_y);
-    } else if (power_menu_is_menu_surface(app->pointer_over_surface)) {
-        power_menu_handle_motion(app->pointer_over_surface, app->pointer_x, app->pointer_y);
-    } else if (clock_calendar_popup_is_menu_surface(app->pointer_over_surface)) {
-        clock_calendar_popup_handle_motion(app->pointer_x, app->pointer_y);
+        return;
+    }
+    if (power_menu_is_menu_surface(surface)) {
+        power_menu_handle_motion(surface, app->pointer_x, app->pointer_y);
+        return;
+    }
+    for (size_t i = 0; i < sizeof(POPUP_ROUTES) / sizeof(POPUP_ROUTES[0]); i++) {
+        if (POPUP_ROUTES[i].is_menu(surface)) {
+            if (POPUP_ROUTES[i].motion) {
+                POPUP_ROUTES[i].motion(app->pointer_x, app->pointer_y);
+            }
+            return;
+        }
     }
 }
 
@@ -141,104 +193,31 @@ void pointer_dispatch_button(AppContext *app, uint32_t button, bool pressed) {
         return;
     }
 
-    // Popup-surface clicks (menu entries + click-catcher, for both the tray's
-    // context menu and the volume/mic device dropdown) aren't Output-keyed at
-    // all -- checked first, before falling through to the bar-surface path
-    // below, since a popup/catcher surface never matches any Output. The two
-    // popup kinds are independent singletons (see audio/device_popup.h) --
-    // having both open at once isn't defended against here, just checked for
-    // in whichever order happens to be written below.
+    // Popup surfaces aren't Output-keyed at all -- a dropdown or catcher
+    // surface never matches any Output -- so they're checked first, before the
+    // bar-surface path below. The power menu's own full-screen surface doubles
+    // as its click-catcher: one call handles a card, the panel and the dimmed
+    // background (see power_menu_handle_click()).
     if (power_menu_is_menu_surface(app->pointer_over_surface)) {
-        // Unlike every other popup here, the power menu's own full-screen
-        // surface doubles as its own click-catcher -- one call handles
-        // "landed on a card", the panel, and the dimmed background (see
-        // power_menu_handle_click()'s own doc comment).
         power_menu_handle_click(app->pointer_over_surface, app->pointer_x, app->pointer_y);
         return;
     }
-    if (tray_context_menu_is_menu_surface(app->pointer_over_surface)) {
-        tray_context_menu_handle_click(app->pointer_x, app->pointer_y);
-        return;
-    }
-    if (tray_context_menu_is_catcher_surface(app->pointer_over_surface)) {
-        tray_context_menu_close();
-        return;
-    }
-    if (device_popup_is_menu_surface(app->pointer_over_surface)) {
-        device_popup_handle_press(app->pointer_x, app->pointer_y, button);
-        return;
-    }
-    if (device_popup_is_catcher_surface(app->pointer_over_surface)) {
-        device_popup_close();
-        return;
-    }
-    if (media_popup_is_menu_surface(app->pointer_over_surface)) {
-        media_popup_handle_click(app->pointer_x, app->pointer_y);
-        return;
-    }
-    if (media_popup_is_catcher_surface(app->pointer_over_surface)) {
-        media_popup_close();
-        return;
-    }
-    if (eq_popup_is_menu_surface(app->pointer_over_surface)) {
-        eq_popup_handle_click(app->pointer_x, app->pointer_y);
-        return;
-    }
-    if (eq_popup_is_catcher_surface(app->pointer_over_surface)) {
-        eq_popup_close();
-        return;
-    }
-    if (mem_popup_is_menu_surface(app->pointer_over_surface)) {
-        // Read-only content -- a click lands here but there's nothing to
-        // dispatch to, unlike the interactive popups above; absorbed so it
-        // doesn't fall through to the bar-surface path below (which would be
-        // wrong anyway, since this surface never matches any Output).
-        return;
-    }
-    if (mem_popup_is_catcher_surface(app->pointer_over_surface)) {
-        mem_popup_close();
-        return;
-    }
-    if (cpu_popup_is_menu_surface(app->pointer_over_surface)) {
-        // Read-only content, same as the memory popup above.
-        return;
-    }
-    if (cpu_popup_is_catcher_surface(app->pointer_over_surface)) {
-        cpu_popup_close();
-        return;
-    }
-    if (gpu_popup_is_menu_surface(app->pointer_over_surface)) {
-        // Read-only content, same as the sysmon info popup above.
-        return;
-    }
-    if (gpu_popup_is_catcher_surface(app->pointer_over_surface)) {
-        gpu_popup_close();
-        return;
-    }
-    if (network_info_popup_is_menu_surface(app->pointer_over_surface)) {
-        // Read-only content, same as the sysmon info popup above.
-        return;
-    }
-    if (network_info_popup_is_catcher_surface(app->pointer_over_surface)) {
-        network_info_popup_close();
-        return;
-    }
-    if (privacy_info_popup_is_menu_surface(app->pointer_over_surface)) {
-        // Read-only content, same as the sysmon/network info popups above.
-        return;
-    }
-    if (privacy_info_popup_is_catcher_surface(app->pointer_over_surface)) {
-        privacy_info_popup_close();
-        return;
-    }
-    if (clock_calendar_popup_is_menu_surface(app->pointer_over_surface)) {
-        // Year navigation in the header; the rest of the popup is read-only.
-        clock_calendar_popup_handle_click(app->pointer_x, app->pointer_y, button);
-        return;
-    }
-    if (clock_calendar_popup_is_catcher_surface(app->pointer_over_surface)) {
-        clock_calendar_popup_close();
-        return;
+    // Every other dropdown: a click on it goes to its handler (read-only
+    // ones just absorb it), a click on one of its catchers closes it. They're
+    // independent singletons whose surfaces never overlap, so the order of
+    // this table doesn't matter.
+    for (size_t i = 0; i < sizeof(POPUP_ROUTES) / sizeof(POPUP_ROUTES[0]); i++) {
+        const PopupRoute *r = &POPUP_ROUTES[i];
+        if (r->is_menu(app->pointer_over_surface)) {
+            if (r->click) {
+                r->click(app->pointer_x, app->pointer_y, button);
+            }
+            return;
+        }
+        if (r->is_catcher(app->pointer_over_surface)) {
+            r->close();
+            return;
+        }
     }
 
     // Bar-surface clicks (tray icons, workspace pills, volume/mic/cpu/gpu/mem

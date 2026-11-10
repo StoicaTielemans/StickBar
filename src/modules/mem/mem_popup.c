@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "bar/popup_host.h"
 #include "bar/popup_surface.h"
 #include "config/glyphs.h"
 #include "modules/cpu/cpu_popup.h"
@@ -12,30 +13,16 @@
 #include "render/color.h"
 #include "render/meter_bar.h"
 #include "render/module_box.h"
+#include "render/popup_chrome.h"
+#include "render/popup_style.h"
+#include "render/stat_card.h"
 #include "sysmon/sysmon_client.h"
-
-// Sized generously (this machine has 2 monitors), matching the same
-// MAX_TRACKED_OUTPUTS convention used by every other popup in this project.
-#define MAX_TRACKED_OUTPUTS 8
 
 // Layout tuning, local to this popup (see CLAUDE.md "Conventions"). Section
 // rhythm and graph card match modules/cpu/cpu_popup.c and gpu_popup.c on
 // purpose, so the three sysmon dropdowns read as a set.
-#define OUTER_MARGIN 12.0
-#define SECTION_GAP 10.0
-#define HEADER_H 22.0
-#define PILL_H 16.0
-#define PILL_PAD_X 7.0
-#define CARD_PAD 8.0
-#define GRAPH_LABEL_H 14.0
-#define GRAPH_LABEL_GAP 3.0
-#define GRAPH_SPLIT_GAP 8.0
-#define GRAPH_MIN_CELLS_W 30 // 5 minutes of 5s samples, one per dot column
 #define USED_CELLS_H 4
 #define SWAP_CELLS_H 2
-#define AXIS_H 12.0
-#define ROW_H 17.0
-#define COL_GAP 10.0
 #define SPLIT_BAR_H 8.0
 #define SPLIT_SEGMENTS 48
 #define SPLIT_SEGMENT_GAP 1.0 // same as render/meter_bar.c's
@@ -44,29 +31,14 @@
 #define METER_W 110.0
 #define METER_H 6.0
 #define METER_SEGMENTS 12
-#define APP_BAR_W 70.0
-#define APP_BAR_H 5.0
 
 typedef struct {
-    bool open;
-    Output *output;
-    PopupSurface *popup;
+    PopupHost host; // the dropdown surface, its placement and click-catchers
     double popup_width, popup_height;
 
-    PopupSurface *catchers[MAX_TRACKED_OUTPUTS];
-    struct wl_surface *catcher_surfaces[MAX_TRACKED_OUTPUTS];
-    int catcher_count;
 } MemPopupState;
 
 static MemPopupState g_popup;
-
-// The graph fills its card: as many cells as fit (one 5s sample per dot
-// column), up to the whole history. GRAPH_MIN_CELLS_W (5 minutes) only sets
-// the card's minimum width; a wider card shows a longer stretch of history.
-static int graph_cells(double w) {
-    int cells = braille_graph_cells_for_width(w - CARD_PAD * 2.0);
-    return cells < SYSMON_MEM_HISTORY_LEN / 2 ? cells : SYSMON_MEM_HISTORY_LEN / 2;
-}
 
 // Yellow (the module's accent) -> peach -> red as memory fills; a function
 // since COLORS isn't a compile-time constant (see docs/modules/power-menu.md).
@@ -113,50 +85,32 @@ static void pill_state(const char **word, Color *fill) {
 
 static double paint_header(cairo_t *cr, double x, double y, double w) {
     if (!cr) {
-        return HEADER_H;
+        return POPUP_HEADER_H;
     }
     char icon[5], rest[96];
     glyph_utf8(GLYPH_ICON_MEM, icon);
     header_text(rest, sizeof(rest));
-    module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, COLORS.yellow);
-    double tx = x + module_box_text_width(icon, FONT.heading, false) + 8.0;
-    module_box_draw_text_left(cr, tx, y, HEADER_H, "Memory", FONT.md, true, COLORS.text);
-    tx += module_box_text_width("Memory", FONT.md, true);
-    module_box_draw_text_left(cr, tx, y, HEADER_H, rest, FONT.sm, false, COLORS.subtext0);
-
-    const char *word;
-    Color fill;
-    pill_state(&word, &fill);
-    double pill_w = module_box_text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
-    double pill_x = x + w - pill_w;
-    double pill_y = y + (HEADER_H - PILL_H) / 2.0;
-    module_box_draw_rect(cr, pill_x, pill_y, pill_w, PILL_H, fill, COLORS.mantle, 0.0);
-    module_box_draw_text_centered(cr, pill_x, pill_y, pill_w, PILL_H, word, FONT.xs, true, COLORS.mantle);
-    return HEADER_H;
-}
-
-static void graph_label_row(cairo_t *cr, double x, double y, double w, const char *left, const char *right) {
-    module_box_draw_text_left(cr, x, y, GRAPH_LABEL_H, left, FONT.sm, true, COLORS.yellow);
-    module_box_draw_text_right(cr, x + w, y, GRAPH_LABEL_H, right, FONT.xs, false, COLORS.overlay0);
+    PopupHeader header = {.icon = icon, .icon_color = COLORS.yellow, .title = "Memory", .summary = rest};
+    pill_state(&header.pill, &header.pill_fill);
+    popup_draw_header(cr, x, y, w, &header);
+    return POPUP_HEADER_H;
 }
 
 static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
-    int cells = graph_cells(w);
+    int cells = stat_graph_cells(w, SYSMON_MEM_HISTORY_LEN);
     double graph_w = braille_graph_width(cells);
     double used_h = braille_graph_height(USED_CELLS_H);
     double swap_h = braille_graph_height(SWAP_CELLS_H);
-    double h = CARD_PAD * 2.0 + (GRAPH_LABEL_H + GRAPH_LABEL_GAP) * 2.0 + used_h + GRAPH_SPLIT_GAP + swap_h;
+    double h = STAT_CARD_PAD * 2.0 + (STAT_GRAPH_LABEL_H + STAT_GRAPH_LABEL_GAP) * 2.0 + used_h + STAT_GRAPH_SPLIT_GAP +
+               swap_h;
     if (!cr) {
         return h;
     }
-    module_box_draw_rect(cr, x, y, w, h, COLORS.base, COLORS.surface1, 1.0);
+    popup_draw_card(cr, x, y, w, h, false, false, COLORS.surface1);
 
     // Only the samples the graph has room for (and so the peaks over them).
-    int first = sysmon_mem_history_len() - cells * 2;
-    if (first < 0) {
-        first = 0;
-    }
-    int n = sysmon_mem_history_len() - first;
+    int n;
+    int first = stat_history_window(sysmon_mem_history_len(), cells, &n);
     double used[SYSMON_MEM_HISTORY_LEN], swap[SYSMON_MEM_HISTORY_LEN];
     // The labels show the fresh figures from sysmon_mem_refresh_details(),
     // which can be newer than the last history sample -- so the peak starts
@@ -173,24 +127,24 @@ static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
         }
     }
 
-    double inner_x = x + CARD_PAD, inner_w = w - CARD_PAD * 2.0;
+    double inner_x = x + STAT_CARD_PAD, inner_w = w - STAT_CARD_PAD * 2.0;
     double graph_x = x + (w - graph_w) / 2.0;
-    double cy = y + CARD_PAD;
+    double cy = y + STAT_CARD_PAD;
     char left[48], right[48];
     Color gradient[3];
     fill_gradient(gradient);
 
     snprintf(left, sizeof(left), "used %d%%", sysmon_mem_percent());
     snprintf(right, sizeof(right), "peak %.0f%%", used_peak);
-    graph_label_row(cr, inner_x, cy, inner_w, left, right);
-    cy += GRAPH_LABEL_H + GRAPH_LABEL_GAP;
+    stat_graph_label_row(cr, inner_x, cy, inner_w, left, COLORS.yellow, right);
+    cy += STAT_GRAPH_LABEL_H + STAT_GRAPH_LABEL_GAP;
     braille_graph_draw(cr, graph_x, cy, cells, USED_CELLS_H, used, n, 100.0, true, gradient);
-    cy += used_h + GRAPH_SPLIT_GAP;
+    cy += used_h + STAT_GRAPH_SPLIT_GAP;
 
     snprintf(left, sizeof(left), "swap %d%%", sysmon_swap_percent());
     snprintf(right, sizeof(right), "peak %.0f%%", swap_peak);
-    graph_label_row(cr, inner_x, cy, inner_w, left, right);
-    cy += GRAPH_LABEL_H + GRAPH_LABEL_GAP;
+    stat_graph_label_row(cr, inner_x, cy, inner_w, left, COLORS.yellow, right);
+    cy += STAT_GRAPH_LABEL_H + STAT_GRAPH_LABEL_GAP;
     const Color swap_gradient[3] = {COLORS.peach, COLORS.maroon, COLORS.red};
     braille_graph_draw(cr, graph_x, cy, cells, SWAP_CELLS_H, swap, n, 100.0, true, swap_gradient);
     return h;
@@ -201,7 +155,7 @@ static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
 // free (reclaimable), free = MemFree -- the three add up to the total, which
 // shows at a glance why "free" is tiny while nothing is wrong.
 static double paint_split(cairo_t *cr, double x, double y, double w) {
-    double h = SPLIT_BAR_H + 4.0 + ROW_H;
+    double h = SPLIT_BAR_H + 4.0 + STAT_ROW_H;
     if (!cr) {
         return h;
     }
@@ -228,14 +182,14 @@ static double paint_split(cairo_t *cr, double x, double y, double w) {
     const double values[] = {apps, cache, sysmon_mem_free_gb()};
     const Color colors[] = {COLORS.yellow, COLORS.blue, COLORS.surface1};
     for (int i = 0; i < 3; i++) {
-        module_box_draw_rect(cr, lx, ly + (ROW_H - LEGEND_SWATCH) / 2.0, LEGEND_SWATCH, LEGEND_SWATCH, colors[i],
+        module_box_draw_rect(cr, lx, ly + (STAT_ROW_H - LEGEND_SWATCH) / 2.0, LEGEND_SWATCH, LEGEND_SWATCH, colors[i],
                              COLORS.mantle, 0.0);
         lx += LEGEND_SWATCH + 5.0;
-        module_box_draw_text_left(cr, lx, ly, ROW_H, names[i], FONT.xs, true, COLORS.overlay0);
+        module_box_draw_text_left(cr, lx, ly, STAT_ROW_H, names[i], FONT.xs, true, COLORS.overlay0);
         lx += module_box_text_width(names[i], FONT.xs, true) + 5.0;
         char value[24];
         format_gb(value, sizeof(value), values[i]);
-        module_box_draw_text_left(cr, lx, ly, ROW_H, value, FONT.label, false, COLORS.text);
+        module_box_draw_text_left(cr, lx, ly, STAT_ROW_H, value, FONT.label, false, COLORS.text);
         lx += module_box_text_width(value, FONT.label, false) + LEGEND_GAP;
     }
     return h;
@@ -244,14 +198,7 @@ static double paint_split(cairo_t *cr, double x, double y, double w) {
 static const char *ROW_LABELS[] = {"RAM", "SWAP", "ZRAM", "AVAIL", "PRESS"};
 
 static double label_col_w(void) {
-    double w = 0.0;
-    for (size_t i = 0; i < sizeof(ROW_LABELS) / sizeof(ROW_LABELS[0]); i++) {
-        double lw = module_box_text_width(ROW_LABELS[i], FONT.xs, true);
-        if (lw > w) {
-            w = lw;
-        }
-    }
-    return w;
+    return stat_label_col_w(ROW_LABELS, sizeof(ROW_LABELS) / sizeof(ROW_LABELS[0]));
 }
 
 // The text rows after the two meters; ZRAM and PRESS only when available.
@@ -288,114 +235,101 @@ static void psi_text(char *out, size_t out_size) {
 
 static void meter_row(cairo_t *cr, double x, double y, double w, const char *label, double used_gb,
                       double total_gb, int percent) {
-    module_box_draw_text_left(cr, x, y, ROW_H, label, FONT.xs, true, COLORS.overlay0);
-    double mx = x + label_col_w() + COL_GAP;
+    module_box_draw_text_left(cr, x, y, STAT_ROW_H, label, FONT.xs, true, COLORS.overlay0);
+    double mx = x + label_col_w() + POPUP_COL_GAP;
     Color gradient[3];
     fill_gradient(gradient);
-    meter_bar_draw(cr, mx, y + (ROW_H - METER_H) / 2.0, METER_W, METER_H, total_gb > 0.0 ? used_gb / total_gb : 0.0,
+    meter_bar_draw(cr, mx, y + (STAT_ROW_H - METER_H) / 2.0, METER_W, METER_H,
+                   total_gb > 0.0 ? used_gb / total_gb : 0.0,
                    METER_SEGMENTS, gradient, COLORS.surface0);
     char used_s[24], value[64];
     format_gb(used_s, sizeof(used_s), used_gb);
     snprintf(value, sizeof(value), "%s / %.1f GB", used_s, total_gb);
-    module_box_draw_text_left(cr, mx + METER_W + COL_GAP, y, ROW_H, value, FONT.label, false, COLORS.text);
+    module_box_draw_text_left(cr, mx + METER_W + POPUP_COL_GAP, y, STAT_ROW_H, value, FONT.label, false, COLORS.text);
     char pct[16];
     snprintf(pct, sizeof(pct), "%d%%", percent);
-    module_box_draw_text_right(cr, x + w, y, ROW_H, pct, FONT.label, false, COLORS.subtext0);
+    module_box_draw_text_right(cr, x + w, y, STAT_ROW_H, pct, FONT.label, false, COLORS.subtext0);
 }
 
 static double paint_rows(cairo_t *cr, double x, double y, double w) {
-    double h = ROW_H * (2 + text_row_count());
+    double h = STAT_ROW_H * (2 + text_row_count());
     if (!cr) {
         return h;
     }
     meter_row(cr, x, y, w, "RAM", sysmon_mem_used_gb(), sysmon_mem_total_gb(), sysmon_mem_percent());
     if (sysmon_swap_total_gb() > 0.0) {
-        meter_row(cr, x, y + ROW_H, w, "SWAP", sysmon_swap_used_gb(), sysmon_swap_total_gb(), sysmon_swap_percent());
+        meter_row(cr, x, y + STAT_ROW_H, w, "SWAP", sysmon_swap_used_gb(), sysmon_swap_total_gb(),
+                  sysmon_swap_percent());
     } else {
-        module_box_draw_text_left(cr, x, y + ROW_H, ROW_H, "SWAP", FONT.xs, true, COLORS.overlay0);
-        module_box_draw_text_left(cr, x + label_col_w() + COL_GAP, y + ROW_H, ROW_H, "none", FONT.label, false,
+        module_box_draw_text_left(cr, x, y + STAT_ROW_H, STAT_ROW_H, "SWAP", FONT.xs, true, COLORS.overlay0);
+        module_box_draw_text_left(cr, x + label_col_w() + POPUP_COL_GAP, y + STAT_ROW_H, STAT_ROW_H, "none",
+                                  FONT.label, false,
                                   COLORS.subtext0);
     }
 
-    double value_x = x + label_col_w() + COL_GAP;
-    double ry = y + ROW_H * 2.0;
+    double value_x = x + label_col_w() + POPUP_COL_GAP;
+    double ry = y + STAT_ROW_H * 2.0;
     char text[128];
     if (sysmon_swap_is_zram()) {
         zram_text(text, sizeof(text));
-        module_box_draw_text_left(cr, x, ry, ROW_H, "ZRAM", FONT.xs, true, COLORS.overlay0);
-        module_box_draw_text_left(cr, value_x, ry, ROW_H, text, FONT.label, false, COLORS.text);
-        ry += ROW_H;
+        module_box_draw_text_left(cr, x, ry, STAT_ROW_H, "ZRAM", FONT.xs, true, COLORS.overlay0);
+        module_box_draw_text_left(cr, value_x, ry, STAT_ROW_H, text, FONT.label, false, COLORS.text);
+        ry += STAT_ROW_H;
     }
     avail_text(text, sizeof(text));
-    module_box_draw_text_left(cr, x, ry, ROW_H, "AVAIL", FONT.xs, true, COLORS.overlay0);
-    module_box_draw_text_left(cr, value_x, ry, ROW_H, text, FONT.label, false, COLORS.text);
-    ry += ROW_H;
+    module_box_draw_text_left(cr, x, ry, STAT_ROW_H, "AVAIL", FONT.xs, true, COLORS.overlay0);
+    module_box_draw_text_left(cr, value_x, ry, STAT_ROW_H, text, FONT.label, false, COLORS.text);
+    ry += STAT_ROW_H;
     if (sysmon_mem_psi_available()) {
         psi_text(text, sizeof(text));
-        module_box_draw_text_left(cr, x, ry, ROW_H, "PRESS", FONT.xs, true, COLORS.overlay0);
-        module_box_draw_text_left(cr, value_x, ry, ROW_H, text, FONT.label, false, COLORS.text);
+        module_box_draw_text_left(cr, x, ry, STAT_ROW_H, "PRESS", FONT.xs, true, COLORS.overlay0);
+        module_box_draw_text_left(cr, value_x, ry, STAT_ROW_H, text, FONT.label, false, COLORS.text);
     }
     return h;
 }
 
-// /proc/PID/comm names are at most 15 characters and the font is monospace
-// (see gpu_popup.c's app_name_col_w()).
-static double app_name_col_w(void) {
-    return module_box_text_width("000000000000000", FONT.label, false) + COL_GAP;
-}
-
 // "TOP APPS": always SYSMON_MEM_MAX_PROCS rows tall (fixed size).
 static double paint_apps(cairo_t *cr, double x, double y, double w) {
-    double h = ROW_H * (1 + SYSMON_MEM_MAX_PROCS);
+    double h = STAT_ROW_H * (1 + SYSMON_MEM_MAX_PROCS);
     if (!cr) {
         return h;
     }
-    module_box_draw_text_left(cr, x, y, ROW_H, "TOP APPS", FONT.xs, true, COLORS.overlay0);
+    module_box_draw_text_left(cr, x, y, STAT_ROW_H, "TOP APPS", FONT.xs, true, COLORS.overlay0);
     int count = sysmon_mem_process_count();
     double biggest = sysmon_mem_process_gb(0);
-    const Color app_gradient[3] = {COLORS.yellow, COLORS.yellow, COLORS.yellow};
     for (int i = 0; i < count; i++) {
-        double ry = y + ROW_H * (i + 1);
-        module_box_draw_text_left(cr, x, ry, ROW_H, sysmon_mem_process_name(i), FONT.label, false, COLORS.text);
+        double ry = y + STAT_ROW_H * (i + 1);
         double fraction = biggest > 0.0 ? sysmon_mem_process_gb(i) / biggest : 0.0;
-        meter_bar_draw(cr, x + app_name_col_w(), ry + (ROW_H - APP_BAR_H) / 2.0, APP_BAR_W, APP_BAR_H, fraction, 7,
-                       app_gradient, COLORS.surface0);
         char size[24];
         snprintf(size, sizeof(size), "%.2f GB", sysmon_mem_process_gb(i));
-        module_box_draw_text_right(cr, x + w, ry, ROW_H, size, FONT.label, false, COLORS.subtext0);
+        stat_draw_app_row(cr, x, ry, w, sysmon_mem_process_name(i), fraction, COLORS.yellow, size);
     }
     return h;
 }
 
 static double paint_content(cairo_t *cr, double w) {
-    double x = OUTER_MARGIN, y = OUTER_MARGIN;
+    double x = POPUP_OUTER_MARGIN, y = POPUP_OUTER_MARGIN;
     y += paint_header(cr, x, y, w);
-    y += SECTION_GAP;
+    y += POPUP_SECTION_GAP;
     y += paint_graph_card(cr, x, y, w);
-    if (cr) {
-        char span[24];
-        braille_graph_span_label(span, sizeof(span), graph_cells(w), 5.0);
-        module_box_draw_text_left(cr, x, y + 2.0, AXIS_H, span, FONT.xs, false, COLORS.overlay0);
-        module_box_draw_text_right(cr, x + w, y + 2.0, AXIS_H, "now", FONT.xs, false, COLORS.overlay0);
-    }
-    y += AXIS_H + 2.0 + SECTION_GAP;
+    y += stat_graph_axis(cr, x, y, w, stat_graph_cells(w, SYSMON_MEM_HISTORY_LEN)) + POPUP_SECTION_GAP;
     y += paint_split(cr, x, y, w);
-    y += SECTION_GAP;
+    y += POPUP_SECTION_GAP;
     y += paint_rows(cr, x, y, w);
-    y += SECTION_GAP;
+    y += POPUP_SECTION_GAP;
     y += paint_apps(cr, x, y, w);
-    return y + OUTER_MARGIN;
+    return y + POPUP_OUTER_MARGIN;
 }
 
 static double content_width(void) {
-    double w = braille_graph_width(GRAPH_MIN_CELLS_W) + CARD_PAD * 2.0;
+    double w = braille_graph_width(STAT_GRAPH_MIN_CELLS_W) + STAT_CARD_PAD * 2.0;
 
     char icon[5], rest[96];
     glyph_utf8(GLYPH_ICON_MEM, icon);
     header_text(rest, sizeof(rest));
-    double header_w = module_box_text_width(icon, FONT.heading, false) + 8.0 +
-                      module_box_text_width("Memory", FONT.md, true) + module_box_text_width(rest, FONT.sm, false) +
-                      16.0 + module_box_text_width("thrashing", FONT.xs, true) + PILL_PAD_X * 2.0;
+    // Sized for the widest pill word.
+    PopupHeader header = {.icon = icon, .title = "Memory", .summary = rest, .pill = "thrashing"};
+    double header_w = popup_header_width(&header);
     if (header_w > w) {
         w = header_w;
     }
@@ -410,52 +344,29 @@ static double content_width(void) {
         "zstd · 000 MB -> 000 MB (0.0x) · uses 000 MB",
     };
     for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
-        double rw = label_col_w() + COL_GAP + module_box_text_width(values[i], FONT.label, false);
+        double rw = label_col_w() + POPUP_COL_GAP + module_box_text_width(values[i], FONT.label, false);
         if (rw > w) {
             w = rw;
         }
     }
-    double meter_w = label_col_w() + COL_GAP + METER_W + COL_GAP + module_box_text_width("000 MB / 00.0 GB",
+    double meter_w = label_col_w() + POPUP_COL_GAP + METER_W + POPUP_COL_GAP + module_box_text_width("000 MB / 00.0 GB",
                                                                                          FONT.label, false) +
-                     COL_GAP + module_box_text_width("100%", FONT.label, false);
+                     POPUP_COL_GAP + module_box_text_width("100%", FONT.label, false);
     if (meter_w > w) {
         w = meter_w;
     }
-    double apps_w = app_name_col_w() + APP_BAR_W + COL_GAP + module_box_text_width("00.00 GB", FONT.label, false);
+    double apps_w = stat_app_name_col_w() + STAT_APP_BAR_W + POPUP_COL_GAP + module_box_text_width("00.00 GB",
+                                                                                                   FONT.label, false);
     return apps_w > w ? apps_w : w;
 }
 
 static void draw_popup(cairo_t *cr, void *user_data) {
     (void)user_data;
-    module_box_draw_rect(cr, 0, 0, g_popup.popup_width, g_popup.popup_height, COLORS.mantle, COLORS.yellow,
-                         (double)BAR.module_border_width);
-    paint_content(cr, g_popup.popup_width - OUTER_MARGIN * 2.0);
-}
-
-static void create_catchers(AppContext *app) {
-    g_popup.catcher_count = 0;
-    for (Output *o = app->outputs; o && g_popup.catcher_count < MAX_TRACKED_OUTPUTS; o = o->next) {
-        PopupSurface *catcher = popup_surface_create_catcher(app, o);
-        if (!catcher) {
-            continue;
-        }
-        g_popup.catchers[g_popup.catcher_count] = catcher;
-        g_popup.catcher_surfaces[g_popup.catcher_count] = popup_surface_wl_surface(catcher);
-        g_popup.catcher_count++;
-    }
-}
-
-static void destroy_catchers(void) {
-    for (int i = 0; i < g_popup.catcher_count; i++) {
-        popup_surface_destroy(g_popup.catchers[i]);
-        g_popup.catchers[i] = NULL;
-        g_popup.catcher_surfaces[i] = NULL;
-    }
-    g_popup.catcher_count = 0;
+    popup_draw_frame(cr, g_popup.popup_width, g_popup.popup_height, COLORS.yellow);
+    paint_content(cr, g_popup.popup_width - POPUP_OUTER_MARGIN * 2.0);
 }
 
 void mem_popup_open(Output *output, double box_x, double box_y, double box_w, double box_h) {
-    (void)box_w; // left-anchored: only the box's left edge matters
     mem_popup_close();
     cpu_popup_close(); // all three sysmon dropdowns open at the same spot
     gpu_popup_close();
@@ -464,57 +375,38 @@ void mem_popup_open(Output *output, double box_x, double box_y, double box_w, do
     // the CPU's process list).
     sysmon_mem_refresh_details();
 
-    g_popup.output = output;
+    g_popup.host.output = output;
     double content_w = content_width();
-    g_popup.popup_width = content_w + OUTER_MARGIN * 2.0;
+    g_popup.popup_width = content_w + POPUP_OUTER_MARGIN * 2.0;
     g_popup.popup_height = paint_content(NULL, content_w);
 
-    // Same TOP+LEFT anchor math as modules/cpu/cpu_popup.c.
-    int top_margin = (int)(box_y + box_h) - BAR.height;
-    int left_margin = (int)box_x;
-    g_popup.popup = popup_surface_create(output->app, output, (int)g_popup.popup_width, (int)g_popup.popup_height,
-                                         top_margin, 0, 0, left_margin,
-                                         ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT,
-                                         ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY);
-    if (!g_popup.popup) {
+    // Under its box, opening rightward from the box's left edge (bar/popup_host.c).
+    if (!popup_host_open(&g_popup.host, output, POPUP_ANCHOR_LEFT, box_x, box_y, box_w, box_h,
+                         (int)g_popup.popup_width, (int)g_popup.popup_height)) {
         return;
     }
-    create_catchers(output->app);
-    g_popup.open = true;
-    popup_surface_render_now(g_popup.popup, draw_popup, NULL);
+    popup_surface_render_now(g_popup.host.popup, draw_popup, NULL);
 }
 
 void mem_popup_refresh_if_open(void) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return;
     }
     sysmon_mem_refresh_details();
-    popup_surface_render_now(g_popup.popup, draw_popup, NULL);
+    popup_surface_render_now(g_popup.host.popup, draw_popup, NULL);
 }
 
 void mem_popup_close(void) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return;
     }
-    popup_surface_destroy(g_popup.popup);
-    g_popup.popup = NULL;
-    destroy_catchers();
-    g_popup.open = false;
-    g_popup.output = NULL;
+    popup_host_close(&g_popup.host);
 }
 
 bool mem_popup_is_menu_surface(struct wl_surface *surface) {
-    return g_popup.open && g_popup.popup && popup_surface_wl_surface(g_popup.popup) == surface;
+    return popup_host_is_menu_surface(&g_popup.host, surface);
 }
 
 bool mem_popup_is_catcher_surface(struct wl_surface *surface) {
-    if (!g_popup.open) {
-        return false;
-    }
-    for (int i = 0; i < g_popup.catcher_count; i++) {
-        if (g_popup.catcher_surfaces[i] == surface) {
-            return true;
-        }
-    }
-    return false;
+    return popup_host_is_catcher_surface(&g_popup.host, surface);
 }

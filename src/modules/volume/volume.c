@@ -6,6 +6,7 @@
 #include "audio/device_popup.h"
 #include "audio/mixer_popup.h"
 #include "audio/pulse_client.h"
+#include "audio/volume_style.h"
 #include "config/config.h"
 #include "config/glyphs.h"
 #include "render/module_box.h"
@@ -38,21 +39,12 @@ static OutputBoxRect *rect_for_output(Output *output) {
     return free_slot;
 }
 
-// Matches VolumeWidget.qml's icon() thresholds exactly: muted (or 0%), <34%,
-// <67%, else.
-static uint32_t status_icon_glyph(int percent, bool muted) {
-    if (muted || percent == 0) return GLYPH_ICON_VOLUME_MUTED;
-    if (percent < 34) return GLYPH_ICON_VOLUME_LOW;
-    if (percent < 67) return GLYPH_ICON_VOLUME_MEDIUM;
-    return GLYPH_ICON_VOLUME_HIGH;
-}
-
 double volume_render(cairo_t *cr, Output *output, double right_edge_x, double box_top, double box_height) {
     int percent = pulse_default_sink_volume_percent();
     bool muted = pulse_default_sink_muted();
 
     char icon_buf[5];
-    glyph_utf8(status_icon_glyph(percent, muted), icon_buf);
+    glyph_utf8(volume_level_glyph(percent, muted), icon_buf);
 
     char label[32];
     snprintf(label, sizeof(label), "%s %d%%", icon_buf, percent);

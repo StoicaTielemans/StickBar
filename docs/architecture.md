@@ -40,11 +40,14 @@ stickBar/
     │   ├── bar_surface.c         per-output zwlr_layer_surface_v1 lifecycle +
     │   │                         frame-callback-throttled redraw (lives forever,
     │   │                         one per output)
-    │   └── popup_surface.c       generic *transient* layer-surface: explicit
-    │                             anchor/margin/size, single-shot render (no
-    │                             frame-callback throttling), created per-open and
-    │                             destroyed on close -- every dropdown, click-catcher
-    │                             and the power menu (see docs/popups.md)
+    │   ├── popup_surface.c       generic *transient* layer-surface: explicit
+    │   │                         anchor/margin/size, single-shot render (no
+    │   │                         frame-callback throttling), created per-open and
+    │   │                         destroyed on close -- every dropdown, click-catcher
+    │   │                         and the power menu (see docs/popups.md)
+    │   ├── popup_host.c          what every dropdown shares around its content:
+    │   │                         the surface placed under its box, the click-
+    │   │                         catchers, open/close/resize, surface matching
     │   └── strip_surface.c       small desync wl_subsurface drawn on its own --
     │                             the media dropdown's spectrum graphs (the only
     │                             continuous animation)
@@ -59,8 +62,14 @@ stickBar/
     │   │                         cairo), used by the network/CPU/GPU/memory
     │   │                         dropdowns; plus a lit-sprite + column-rect path
     │                             for the animated media spectrum
-    │   └── meter_bar.c           segmented "how full" bar (btop's ▰▰▱▱ meters),
-    │                             pure cairo, used by the CPU/GPU/memory dropdowns
+    │   ├── meter_bar.c           segmented "how full" bar (btop's ▰▰▱▱ meters),
+    │   │                         pure cairo, used by the CPU/GPU/memory dropdowns
+    │   ├── popup_style.h         layout tokens every dropdown shares (margins, header,
+    │   │                         pill, gaps)
+    │   ├── popup_chrome.c        dropdown chrome: frame, header row + pill, cards
+    │   └── stat_card.c           the CPU/GPU/memory/network dropdowns' shared parts:
+    │                             graph card sizing, history window, time axis, label/
+    │                             value rows, top-apps rows
     ├── hyprland/
     │   ├── ipc_request.c         request socket (.socket.sock): one connection per
     │                             command, cJSON parsing helper
@@ -88,7 +97,9 @@ stickBar/
     │   ├── pulse_client.c        pa_threaded_mainloop connection, live sink/source/
     │   │                         stream cache, get+set, eventfd notification
     │   ├── device_popup.c        shared sink/source dropdown (volume and mic)
-    │   └── mixer_popup.c         per-app volume mixer (middle-click on the volume box)
+    │   ├── mixer_popup.c         per-app volume mixer (middle-click on the volume box)
+    │   └── volume_style.c        how volume looks: level icon, meter gradient, slider
+    │                             percent -- shared by the volume box and both popups
     ├── sysmon/                   /proc + NVML plumbing for CPU/GPU/memory (see
     │                             docs/modules/sysmon.md)
     │   └── sysmon_client.c       the 5s poll, plain synchronous accessors, and the

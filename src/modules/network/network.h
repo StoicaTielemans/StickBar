@@ -2,6 +2,7 @@
 #define CUSTOMBAR_MODULES_NETWORK_NETWORK_H
 
 #include <cairo.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "wayland/context.h"
@@ -26,5 +27,14 @@ double network_render(cairo_t *cr, Output *output, double right_edge_x, double b
 // twin of that same shape, not a control widget like volume/mic). No-op if
 // (x, y) doesn't land on the box.
 void network_handle_click(Output *output, double x, double y, uint32_t button);
+
+// The box's icon: no default route at all, else disconnected/connected,
+// each split on Wi-Fi vs. Ethernet -- NetworkWidget.qml's icon(). Shared with
+// the dropdown's header.
+uint32_t network_status_glyph(void);
+
+// "1.2 MB/s" / "340.0 KB/s" / "12 B/s" -- NetworkMonitor.qml's formatRate()
+// thresholds and precision. Shared with the dropdown.
+void network_format_rate(double bytes_per_sec, char *out, size_t out_size);
 
 #endif

@@ -30,6 +30,15 @@ Shared by all of them; a module's own section only records what differs.
   This came from a restyling pass over every popup, per explicit user request, in
   this order: calendar, network, GPU, CPU, memory, media, audio/mixer, tray, then
   EQ, power menu and privacy.
+- **Shared code, not copies**: the look lives in `render/popup_chrome.c`
+  (`popup_draw_frame`, `popup_draw_header` -- which ellipsizes text that would run
+  into the pill -- `popup_draw_card`) with the tokens in `render/popup_style.h`; the
+  surface, its placement under the box, the catchers and open/close/resize in
+  `bar/popup_host.c` (`PopupHost`); the stat dropdowns' graph card, axis, rows and
+  top-apps list in `render/stat_card.c`. `wayland/pointer.c` routes clicks and hover
+  through one table of popup kinds. Each of these used to be repeated in every
+  dropdown (11 copies of the catcher code, 10 of the header and pill); a popup that
+  really differs keeps a local `#define` with a comment saying why.
 - **First paint**: `popup_surface.c` caches the last draw callback and self-triggers
   from its own `configure` handler (mirroring how `bar_surface.c`'s `configure`
   handler calls `bar_surface_mark_dirty()`), because the first
@@ -62,9 +71,9 @@ Shared by all of them; a module's own section only records what differs.
   no `wp_viewporter` (bound optionally in `registry.c`).
 - **Changing height while open means recreating the menu surface, not `set_size()`**:
   Hyprland unmaps a popup whose `zwlr_layer_surface_v1_set_size()` shrinks it.
-  Destroy-and-recreate is the same path every popup open already uses. The mixer,
-  device and media popups do this when their rows change; the rest are a fixed size
-  while open.
+  Destroy-and-recreate (`popup_host_resize()`) is the same path every popup open
+  already uses. The mixer, device and media popups do this when their rows change;
+  the rest are a fixed size while open.
 - **Animation goes on a subsurface, not into the popup**: the media dropdown's
   spectrum is a `bar/strip_surface.c` child of the popup surface, so the popup
   itself still only repaints on discrete changes. When a popup surface is
@@ -83,7 +92,7 @@ Shared by all of them; a module's own section only records what differs.
   case. The exceptions hang off the same spot and close each other: CPU/GPU/memory,
   and the mixer with the sink dropdown. It matters most for the power menu, whose
   full-screen surface covers whatever else was left open without closing it.
-- **Graph width (network, CPU, GPU, memory)**: `graph_cells()` in each popup fits as many
+- **Graph width (network, CPU, GPU, memory)**: `stat_graph_cells()` fits as many
   cells as the card holds (`braille_graph_cells_for_width()`), the histories hold 120
   samples (10 min at one per 5s poll) so a wide card can fill, peaks are taken over the
   visible samples only, and the axis label comes from the real span

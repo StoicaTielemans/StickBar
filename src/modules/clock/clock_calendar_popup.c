@@ -6,19 +6,18 @@
 #include <stdlib.h>
 #include <time.h>
 
+#include "bar/popup_host.h"
 #include "bar/popup_surface.h"
 #include "config/glyphs.h"
 #include "render/color.h"
 #include "render/module_box.h"
-
-// Sized generously (this machine has 2 monitors), matching the same
-// MAX_TRACKED_OUTPUTS convention used by every other popup's click-catcher table.
-#define MAX_TRACKED_OUTPUTS 8
+#include "render/popup_chrome.h"
 
 // Geometry. Originally mirrored the reference ClockYearPopup.qml's spacing;
 // the redesign (per-month cards, week numbers, larger day cells, a header
 // with navigation) moved away from that, so these are this popup's own
 // values now. All local -- widget-specific tuning, not shared FONT/BAR tokens.
+// Wider than POPUP_OUTER_MARGIN (12): the year grid is the biggest popup.
 #define OUTER_MARGIN 14.0   // popup edge -> header / card grid
 #define HEADER_PAD 4.0      // vertical padding inside the header row (hover bg)
 #define HEADER_GAP 12.0     // header -> card grid
@@ -60,9 +59,7 @@ typedef struct {
 } Rect;
 
 typedef struct {
-    bool open;
-    Output *output;
-    PopupSurface *popup;
+    PopupHost host; // the dropdown surface, its placement and click-catchers
 
     // Today's date, snapshotted when the popup opens (see
     // docs/popups.md for why it isn't kept live while open).
@@ -79,9 +76,6 @@ typedef struct {
     double popup_width, popup_height;
     Rect prev_rect, next_rect, today_rect; // header hit targets, popup-local
 
-    PopupSurface *catchers[MAX_TRACKED_OUTPUTS];
-    struct wl_surface *catcher_surfaces[MAX_TRACKED_OUTPUTS];
-    int catcher_count;
 } CalendarPopupState;
 
 static CalendarPopupState g_popup;
@@ -213,8 +207,7 @@ static void draw_month_card(cairo_t *cr, int m, double card_x, double card_y) {
 
     // Card: base background, thin surface1 border -- or a mauve border (and a
     // mauve month name) for the month we're in, so it's findable at a glance.
-    module_box_draw_rect(cr, card_x, card_y, g_popup.card_w, g_popup.card_h, COLORS.base,
-                          is_current_month ? COLORS.mauve : COLORS.surface1, is_current_month ? 2.0 : 1.0);
+    popup_draw_card(cr, card_x, card_y, g_popup.card_w, g_popup.card_h, is_current_month, false, COLORS.mauve);
 
     double inner_x = card_x + CARD_PAD;
     double y = card_y + CARD_PAD;
@@ -284,8 +277,7 @@ static void draw_month_card(cairo_t *cr, int m, double card_x, double card_y) {
 static void draw_calendar(cairo_t *cr, void *user_data) {
     (void)user_data;
 
-    module_box_draw_rect(cr, 0, 0, g_popup.popup_width, g_popup.popup_height,
-                          COLORS.mantle, COLORS.mauve, (double)BAR.module_border_width);
+    popup_draw_frame(cr, g_popup.popup_width, g_popup.popup_height, COLORS.mauve);
 
     draw_header(cr);
 
@@ -300,46 +292,20 @@ static void draw_calendar(cairo_t *cr, void *user_data) {
 }
 
 static void rerender(void) {
-    if (g_popup.open && g_popup.popup) {
-        popup_surface_render_now(g_popup.popup, draw_calendar, NULL);
+    if (g_popup.host.open && g_popup.host.popup) {
+        popup_surface_render_now(g_popup.host.popup, draw_calendar, NULL);
     }
-}
-
-static void create_catchers(AppContext *app) {
-    g_popup.catcher_count = 0;
-    for (Output *o = app->outputs; o && g_popup.catcher_count < MAX_TRACKED_OUTPUTS; o = o->next) {
-        PopupSurface *catcher = popup_surface_create_catcher(app, o);
-        if (!catcher) {
-            continue;
-        }
-        g_popup.catchers[g_popup.catcher_count] = catcher;
-        g_popup.catcher_surfaces[g_popup.catcher_count] = popup_surface_wl_surface(catcher);
-        g_popup.catcher_count++;
-    }
-}
-
-static void destroy_catchers(void) {
-    for (int i = 0; i < g_popup.catcher_count; i++) {
-        popup_surface_destroy(g_popup.catchers[i]);
-        g_popup.catchers[i] = NULL;
-        g_popup.catcher_surfaces[i] = NULL;
-    }
-    g_popup.catcher_count = 0;
 }
 
 void clock_calendar_popup_close(void) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return;
     }
-    popup_surface_destroy(g_popup.popup);
-    g_popup.popup = NULL;
-    destroy_catchers();
-    g_popup.open = false;
-    g_popup.output = NULL;
+    popup_host_close(&g_popup.host);
 }
 
 void clock_calendar_popup_toggle(Output *output, double box_x, double box_y, double box_w, double box_h) {
-    if (g_popup.open) {
+    if (g_popup.host.open) {
         clock_calendar_popup_close();
         return;
     }
@@ -355,7 +321,7 @@ void clock_calendar_popup_toggle(Output *output, double box_x, double box_y, dou
     strftime(g_popup.today_label, sizeof(g_popup.today_label), "%A, %-d %B", &local);
     g_popup.view_year = g_popup.year; // always opens on the current year
     g_popup.hover = HOVER_NONE;
-    g_popup.output = output;
+    g_popup.host.output = output;
 
     double w;
     module_box_measure_text("2026", FONT.title, true, &w, &g_popup.title_h);
@@ -373,34 +339,17 @@ void clock_calendar_popup_toggle(Output *output, double box_x, double box_y, dou
     g_popup.popup_height = OUTER_MARGIN + g_popup.header_h + HEADER_GAP + CARD_ROWS * g_popup.card_h +
                             (CARD_ROWS - 1) * CARD_SPACING + OUTER_MARGIN;
 
-    // Same anchor+margin math (including the BAR.height correction) as
-    // modules/tray/tray_context_menu.c -- see
-    // docs/popups.md for the reasoning. Right-anchored, unlike
-    // modules/cpu/cpu_popup.c, because the clock lives in the bar's right
-    // region, not the left.
-    int top_margin = (int)(box_y + box_h) - BAR.height;
-    int right_margin = output->width - (int)(box_x + box_w);
-    if (right_margin < 0) {
-        right_margin = 0;
-    }
-
-    g_popup.popup = popup_surface_create(output->app, output, (int)g_popup.popup_width, (int)g_popup.popup_height,
-                                          top_margin, right_margin, 0, 0,
-                                          ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
-                                          ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY);
-    if (!g_popup.popup) {
-        g_popup.output = NULL;
+    // Under its box, opening leftward from the box's right edge (bar/popup_host.c).
+    if (!popup_host_open(&g_popup.host, output, POPUP_ANCHOR_RIGHT, box_x, box_y, box_w, box_h,
+                         (int)g_popup.popup_width, (int)g_popup.popup_height)) {
         return;
     }
-
-    create_catchers(output->app);
-    g_popup.open = true;
     layout_header(); // hit rects must exist before the first click/motion
     rerender();
 }
 
 void clock_calendar_popup_handle_click(double x, double y, uint32_t button) {
-    if (!g_popup.open || button != BTN_LEFT) {
+    if (!g_popup.host.open || button != BTN_LEFT) {
         return;
     }
     int before = g_popup.view_year;
@@ -419,7 +368,7 @@ void clock_calendar_popup_handle_click(double x, double y, uint32_t button) {
 }
 
 void clock_calendar_popup_handle_motion(double x, double y) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return;
     }
     HoverTarget hover = HOVER_NONE;
@@ -439,17 +388,9 @@ void clock_calendar_popup_handle_motion(double x, double y) {
 }
 
 bool clock_calendar_popup_is_menu_surface(struct wl_surface *surface) {
-    return g_popup.open && g_popup.popup && popup_surface_wl_surface(g_popup.popup) == surface;
+    return popup_host_is_menu_surface(&g_popup.host, surface);
 }
 
 bool clock_calendar_popup_is_catcher_surface(struct wl_surface *surface) {
-    if (!g_popup.open) {
-        return false;
-    }
-    for (int i = 0; i < g_popup.catcher_count; i++) {
-        if (g_popup.catcher_surfaces[i] == surface) {
-            return true;
-        }
-    }
-    return false;
+    return popup_host_is_catcher_surface(&g_popup.host, surface);
 }

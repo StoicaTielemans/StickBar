@@ -4,17 +4,16 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "bar/popup_host.h"
 #include "bar/popup_surface.h"
 #include "config/glyphs.h"
 #include "eq/eq_curve.h"
 #include "eq/eq_state.h"
 #include "render/color.h"
 #include "render/module_box.h"
+#include "render/popup_chrome.h"
+#include "render/popup_style.h"
 #include "wayland/output.h"
-
-// Sized generously (this machine has 2 monitors), matching the same
-// MAX_TRACKED_OUTPUTS convention used by every other popup in this project.
-#define MAX_TRACKED_OUTPUTS 8
 
 // The profiles offered in the dropdown, in display order -- a deliberate
 // subset of DacController's presets/ (the user asked for exactly these:
@@ -43,13 +42,8 @@ static const EqProfileEntry PROFILES[] = {
 // a fixed size (nothing here depends on the state's text), so a state change
 // only ever repaints the existing surface -- the size never changes.
 #define CONTENT_W 340.0
-#define OUTER_MARGIN 12.0
-#define SECTION_GAP 10.0
-#define HEADER_H 22.0
-#define PILL_H 16.0
-#define PILL_PAD_X 7.0
 #define CARD_PAD 8.0
-#define CARD_GAP 6.0
+#define CARD_GAP 6.0  // tighter than POPUP_CARD_GAP (8): four profile cards in a fixed-size popup
 #define GRAPH_LABEL_H 14.0
 #define GRAPH_TOP_GAP 8.0      // leaves room for the top dB label, centred on the graph's top edge
 #define GRAPH_H 110.0
@@ -59,36 +53,30 @@ static const EqProfileEntry PROFILES[] = {
 #define SECTION_LABEL_H 14.0
 #define SECTION_LABEL_GAP 4.0
 #define PROFILE_CARD_H 30.0
-#define COL_GAP 10.0
 // The graph's dB span: at least +/-12 dB, growing in 6 dB grid steps to fit
 // heavier EQs (e.g. the bass-v preset's +19 dB) without clipping them.
 #define GRAPH_MIN_RANGE_DB 12.0
 #define GRAPH_STEP_DB 6.0
 
 // Derived geometry: a straight stack, top to bottom.
-#define POPUP_W (CONTENT_W + OUTER_MARGIN * 2.0)
-#define INNER_X (OUTER_MARGIN + CARD_PAD)
+#define POPUP_W (CONTENT_W + POPUP_OUTER_MARGIN * 2.0)
+#define INNER_X (POPUP_OUTER_MARGIN + CARD_PAD)
 #define INNER_W (CONTENT_W - CARD_PAD * 2.0)
-#define GRAPH_CARD_Y (OUTER_MARGIN + HEADER_H + SECTION_GAP)
+#define GRAPH_CARD_Y (POPUP_OUTER_MARGIN + POPUP_HEADER_H + POPUP_SECTION_GAP)
 #define GRAPH_CARD_H \
     (CARD_PAD + GRAPH_LABEL_H + GRAPH_TOP_GAP + GRAPH_H + FREQ_LABEL_GAP + AXIS_LABEL_H + CARD_PAD)
 #define GRAPH_X (INNER_X + DB_LABEL_W)
 #define GRAPH_Y (GRAPH_CARD_Y + CARD_PAD + GRAPH_LABEL_H + GRAPH_TOP_GAP)
 #define GRAPH_W (INNER_W - DB_LABEL_W)
-#define SECTION_LABEL_Y (GRAPH_CARD_Y + GRAPH_CARD_H + SECTION_GAP)
+#define SECTION_LABEL_Y (GRAPH_CARD_Y + GRAPH_CARD_H + POPUP_SECTION_GAP)
 #define PROFILES_Y (SECTION_LABEL_Y + SECTION_LABEL_H + SECTION_LABEL_GAP)
 #define POPUP_H \
-    (PROFILES_Y + PROFILE_COUNT * PROFILE_CARD_H + (PROFILE_COUNT - 1) * CARD_GAP + OUTER_MARGIN)
+    (PROFILES_Y + PROFILE_COUNT * PROFILE_CARD_H + (PROFILE_COUNT - 1) * CARD_GAP + POPUP_OUTER_MARGIN)
 
 typedef struct {
-    bool open;
-    Output *output;
-    PopupSurface *popup;
+    PopupHost host; // the dropdown surface, its placement and click-catchers
     int hovered_index;
 
-    PopupSurface *catchers[MAX_TRACKED_OUTPUTS];
-    struct wl_surface *catcher_surfaces[MAX_TRACKED_OUTPUTS];
-    int catcher_count;
 } EqPopupState;
 
 static EqPopupState g_popup = { .hovered_index = -1 };
@@ -119,37 +107,22 @@ static const char *pill_word(Color *fill) {
 }
 
 static void paint_header(cairo_t *cr) {
-    double x = OUTER_MARGIN, y = OUTER_MARGIN;
+    double x = POPUP_OUTER_MARGIN, y = POPUP_OUTER_MARGIN;
 
-    Color fill;
-    const char *word = pill_word(&fill);
-    double pill_w = module_box_text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
-    double pill_x = x + CONTENT_W - pill_w;
-    double pill_y = y + (HEADER_H - PILL_H) / 2.0;
-
-    // Clipped short of the pill: the preset name comes from the state file,
-    // so an unusually long one must not draw over it.
-    cairo_save(cr);
-    cairo_rectangle(cr, x, y, pill_x - COL_GAP - x, HEADER_H);
-    cairo_clip(cr);
-    char icon[5];
+    // The preset name comes from the state file, so an unusually long one is
+    // ellipsized short of the pill by popup_draw_header().
+    char icon[5], summary[48];
     glyph_utf8(GLYPH_ICON_EQUALIZER, icon);
-    module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, COLORS.lavender);
-    double tx = x + module_box_text_width(icon, FONT.heading, false) + 8.0;
-    const char *title = !eq_state_available()      ? "No EQ state yet"
-                        : eq_state_profile()[0]    ? eq_state_profile()
-                                                   : "custom EQ";
-    module_box_draw_text_left(cr, tx, y, HEADER_H, title, FONT.md, true, COLORS.text);
+    PopupHeader header = {
+        .icon = icon, .icon_color = COLORS.lavender,
+        .title = !eq_state_available() ? "No EQ state yet" : eq_state_profile()[0] ? eq_state_profile() : "custom EQ",
+    };
     if (eq_state_gain()[0]) {
-        char summary[48];
         snprintf(summary, sizeof(summary), "  ·  %s gain", eq_state_gain());
-        tx += module_box_text_width(title, FONT.md, true);
-        module_box_draw_text_left(cr, tx, y, HEADER_H, summary, FONT.sm, false, COLORS.subtext0);
+        header.summary = summary;
     }
-    cairo_restore(cr);
-
-    module_box_draw_rect(cr, pill_x, pill_y, pill_w, PILL_H, fill, COLORS.mantle, 0.0);
-    module_box_draw_text_centered(cr, pill_x, pill_y, pill_w, PILL_H, word, FONT.xs, true, COLORS.mantle);
+    header.pill = pill_word(&header.pill_fill);
+    popup_draw_header(cr, x, y, CONTENT_W, &header);
 }
 
 static void stroke_line(cairo_t *cr, double x0, double y0, double x1, double y1, Color c) {
@@ -169,7 +142,7 @@ static void paint_graph_card(cairo_t *cr) {
     double mid_y = gy + GRAPH_H / 2.0;
     double px_per_db = (GRAPH_H / 2.0) / range;
 
-    module_box_draw_rect(cr, OUTER_MARGIN, GRAPH_CARD_Y, CONTENT_W, GRAPH_CARD_H, COLORS.base, COLORS.surface1, 1.0);
+    popup_draw_card(cr, POPUP_OUTER_MARGIN, GRAPH_CARD_Y, CONTENT_W, GRAPH_CARD_H, false, false, COLORS.surface1);
 
     double label_y = GRAPH_CARD_Y + CARD_PAD;
     if (eq_state_available()) {
@@ -223,8 +196,7 @@ static void paint_profile_card(cairo_t *cr, int i) {
     bool hovered = i == g_popup.hovered_index;
     double y = profile_card_y(i);
 
-    module_box_draw_rect(cr, OUTER_MARGIN, y, CONTENT_W, PROFILE_CARD_H, hovered ? COLORS.surface0 : COLORS.base,
-                         active ? COLORS.lavender : COLORS.surface1, active ? 2.0 : 1.0);
+    popup_draw_card(cr, POPUP_OUTER_MARGIN, y, CONTENT_W, PROFILE_CARD_H, active, hovered, COLORS.lavender);
 
     module_box_draw_text_left(cr, INNER_X, y, PROFILE_CARD_H, name, FONT.label, true,
                               active ? COLORS.lavender : COLORS.text);
@@ -232,7 +204,7 @@ static void paint_profile_card(cairo_t *cr, int i) {
     const char *tag = pending ? "applying..." : active ? "active" : hovered ? "apply" : "";
     Color tag_color = pending ? COLORS.yellow : active ? COLORS.lavender : COLORS.overlay0;
     if (tag[0]) {
-        double tag_x = INNER_X + module_box_text_width(name, FONT.label, true) + COL_GAP;
+        double tag_x = INNER_X + module_box_text_width(name, FONT.label, true) + POPUP_COL_GAP;
         module_box_draw_text_left(cr, tag_x, y, PROFILE_CARD_H, tag, FONT.xs, true, tag_color);
     }
 
@@ -242,11 +214,10 @@ static void paint_profile_card(cairo_t *cr, int i) {
 
 static void draw_popup(cairo_t *cr, void *user_data) {
     (void)user_data;
-    module_box_draw_rect(cr, 0, 0, POPUP_W, POPUP_H, COLORS.mantle, COLORS.lavender,
-                         (double)BAR.module_border_width);
+    popup_draw_frame(cr, POPUP_W, POPUP_H, COLORS.lavender);
     paint_header(cr);
     paint_graph_card(cr);
-    module_box_draw_text_left(cr, OUTER_MARGIN, SECTION_LABEL_Y, SECTION_LABEL_H, "PROFILES", FONT.xs, true,
+    module_box_draw_text_left(cr, POPUP_OUTER_MARGIN, SECTION_LABEL_Y, SECTION_LABEL_H, "PROFILES", FONT.xs, true,
                               COLORS.overlay0);
     for (int i = 0; i < PROFILE_COUNT; i++) {
         paint_profile_card(cr, i);
@@ -254,97 +225,50 @@ static void draw_popup(cairo_t *cr, void *user_data) {
 }
 
 static void redraw(void) {
-    if (g_popup.popup) {
-        popup_surface_render_now(g_popup.popup, draw_popup, NULL);
+    if (g_popup.host.popup) {
+        popup_surface_render_now(g_popup.host.popup, draw_popup, NULL);
     }
 }
 
 void eq_popup_refresh_if_open(void) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return;
     }
     redraw();
-}
-
-static void create_catchers(AppContext *app) {
-    g_popup.catcher_count = 0;
-    for (Output *o = app->outputs; o && g_popup.catcher_count < MAX_TRACKED_OUTPUTS; o = o->next) {
-        PopupSurface *catcher = popup_surface_create_catcher(app, o);
-        if (!catcher) {
-            continue;
-        }
-        g_popup.catchers[g_popup.catcher_count] = catcher;
-        g_popup.catcher_surfaces[g_popup.catcher_count] = popup_surface_wl_surface(catcher);
-        g_popup.catcher_count++;
-    }
-}
-
-static void destroy_catchers(void) {
-    for (int i = 0; i < g_popup.catcher_count; i++) {
-        popup_surface_destroy(g_popup.catchers[i]);
-        g_popup.catchers[i] = NULL;
-        g_popup.catcher_surfaces[i] = NULL;
-    }
-    g_popup.catcher_count = 0;
 }
 
 void eq_popup_open(Output *output, double box_x, double box_y, double box_w, double box_h) {
     eq_popup_close(); // at most one EQ popup open at a time
 
-    g_popup.output = output;
+    g_popup.host.output = output;
     g_popup.hovered_index = -1;
 
-    // Same TOP+RIGHT anchor+margin math (including the BAR.height
-    // correction) as audio/device_popup.c -- see
-    // docs/popups.md for the reasoning.
-    int top_margin = (int)(box_y + box_h) - BAR.height;
-    int right_margin = output->width - (int)(box_x + box_w);
-    if (right_margin < 0) {
-        right_margin = 0;
-    }
-
-    g_popup.popup = popup_surface_create(output->app, output, (int)POPUP_W, (int)POPUP_H, top_margin, right_margin, 0, 0,
-                                          ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
-                                          ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY);
-    if (!g_popup.popup) {
+    // Under its box, opening leftward from the box's right edge (bar/popup_host.c).
+    if (!popup_host_open(&g_popup.host, output, POPUP_ANCHOR_RIGHT, box_x, box_y, box_w, box_h, (int)POPUP_W,
+                         (int)POPUP_H)) {
         return;
     }
-
-    create_catchers(output->app);
-    g_popup.open = true;
     redraw();
 }
 
 void eq_popup_close(void) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return;
     }
-    popup_surface_destroy(g_popup.popup);
-    g_popup.popup = NULL;
-    destroy_catchers();
-    g_popup.open = false;
-    g_popup.output = NULL;
+    popup_host_close(&g_popup.host);
     g_popup.hovered_index = -1;
 }
 
 bool eq_popup_is_menu_surface(struct wl_surface *surface) {
-    return g_popup.open && g_popup.popup && popup_surface_wl_surface(g_popup.popup) == surface;
+    return popup_host_is_menu_surface(&g_popup.host, surface);
 }
 
 bool eq_popup_is_catcher_surface(struct wl_surface *surface) {
-    if (!g_popup.open) {
-        return false;
-    }
-    for (int i = 0; i < g_popup.catcher_count; i++) {
-        if (g_popup.catcher_surfaces[i] == surface) {
-            return true;
-        }
-    }
-    return false;
+    return popup_host_is_catcher_surface(&g_popup.host, surface);
 }
 
 static int card_at(double x, double y) {
-    if (x < OUTER_MARGIN || x >= OUTER_MARGIN + CONTENT_W) {
+    if (x < POPUP_OUTER_MARGIN || x >= POPUP_OUTER_MARGIN + CONTENT_W) {
         return -1;
     }
     for (int i = 0; i < PROFILE_COUNT; i++) {
@@ -357,7 +281,7 @@ static int card_at(double x, double y) {
 }
 
 void eq_popup_handle_motion(double x, double y) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return;
     }
     int idx = card_at(x, y);
@@ -368,7 +292,7 @@ void eq_popup_handle_motion(double x, double y) {
 }
 
 void eq_popup_handle_click(double x, double y) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return;
     }
     int idx = card_at(x, y);
@@ -381,20 +305,20 @@ void eq_popup_handle_click(double x, double y) {
     eq_state_apply_profile(PROFILES[idx].name);
     redraw();
     // The bar box's own label also switches to "NAME..." while pending.
-    output_mark_all_dirty(g_popup.output->app);
+    output_mark_all_dirty(g_popup.host.output->app);
 }
 
 // ---- Test-control hooks (testing/test_control.c) ---------------------------------
 
-int eq_popup_test_card_count(void) { return g_popup.open ? PROFILE_COUNT : -1; }
+int eq_popup_test_card_count(void) { return g_popup.host.open ? PROFILE_COUNT : -1; }
 
 bool eq_popup_test_target(const char *profile, double *x, double *y) {
-    if (!g_popup.open) {
+    if (!g_popup.host.open) {
         return false;
     }
     for (int i = 0; i < PROFILE_COUNT; i++) {
         if (strcmp(PROFILES[i].name, profile) == 0) {
-            *x = OUTER_MARGIN + CONTENT_W / 2.0;
+            *x = POPUP_OUTER_MARGIN + CONTENT_W / 2.0;
             *y = profile_card_y(i) + PROFILE_CARD_H / 2.0;
             return true;
         }

@@ -103,6 +103,7 @@ typedef struct {
     bool has_artist;     // artist/album line shown (omitted if both are empty)
     bool has_vis;        // spectrum graph shown (first VISUALIZER_MAX_SOURCES cards, if it runs)
     double vis_y;        // top of the graph panel, when has_vis
+    double timeline_y;   // top of the timeline row (meter + time text)
     double buttons_y;    // top of the control chips
 } CardLayout;
 
@@ -117,11 +118,12 @@ typedef struct {
     CardLayout cards[MAX_MEDIA_ROWS];
     int card_count;
     int hovered_card, hovered_button; // -1 = none
+    int hovered_timeline;             // card whose timeline is under the pointer, -1 = none
     double popup_width, popup_height;
 
 } MediaPopupState;
 
-static MediaPopupState g_popup = { .hovered_card = -1, .hovered_button = -1 };
+static MediaPopupState g_popup = { .hovered_card = -1, .hovered_button = -1, .hovered_timeline = -1 };
 
 // "m:ss", or "h:mm:ss" from an hour up (long podcasts, videos) -- below an
 // hour this matches MediaPopup.qml's own formatTime() exactly.
@@ -200,6 +202,7 @@ static void compute_layout(void) {
             card->vis_y = y + h + VIS_ROW_GAP;
             h += VIS_ROW_GAP + VIS_ROW_H;
         }
+        card->timeline_y = y + h + TIMELINE_GAP;
         h += TIMELINE_GAP + TIMELINE_ROW_H + CONTROLS_GAP;
         card->buttons_y = y + h;
         h += BUTTON_H + CARD_PAD;
@@ -235,10 +238,24 @@ static void paint_header(cairo_t *cr) {
     popup_draw_header(cr, x, y, CONTENT_W, &header);
 }
 
-static void paint_timeline(cairo_t *cr, MprisPlayer *player, double y) {
+// The timeline meter's width: the row minus the time text's column. The
+// text column reserves the widest the label can get, so the meter never
+// shifts as the seconds tick over (the font is monospace). Shared by the
+// painter and the click hit-test.
+static double timeline_meter_w(void) {
+    return inner_w() - module_box_text_width("00:00:00 / 00:00:00", FONT.sm, false) - POPUP_COL_GAP;
+}
+
+// A length the timeline can show (and seek within): reported, and not absurd.
+static bool has_sane_length(MprisPlayer *player) {
+    int64_t length_us = mpris_player_length_us(player);
+    return length_us > 0 && length_us < MAX_SANE_DURATION_US;
+}
+
+static void paint_timeline(cairo_t *cr, MprisPlayer *player, double y, bool hovered) {
     int64_t length_us = mpris_player_length_us(player);
     int64_t pos_us = mpris_player_position_us(player);
-    bool has_length = length_us > 0 && length_us < MAX_SANE_DURATION_US;
+    bool has_length = has_sane_length(player);
     if (pos_us < 0) {
         pos_us = 0;
     }
@@ -256,14 +273,13 @@ static void paint_timeline(cairo_t *cr, MprisPlayer *player, double y) {
         // shows -- a livestream, or a player that doesn't report one.
         snprintf(text, sizeof(text), "%s", pos);
     }
-    // Reserve the widest the label can get, so the meter never shifts as
-    // the seconds tick over (the font is monospace).
-    double text_col_w = module_box_text_width("00:00:00 / 00:00:00", FONT.sm, false);
-    double meter_w = inner_w() - text_col_w - POPUP_COL_GAP;
     const Color gradient[3] = {g_popup.accent, g_popup.accent, COLORS.peach};
     double fraction = has_length ? (double)pos_us / (double)length_us : 0.0;
-    meter_bar_draw(cr, inner_x(), y + (TIMELINE_ROW_H - TIMELINE_METER_H) / 2.0, meter_w, TIMELINE_METER_H, fraction,
-                   TIMELINE_SEGMENTS, gradient, COLORS.surface0);
+    // Hovered (only ever when it's seekable): the empty part lightens a
+    // shade, the same "this is clickable" cue as the control chips.
+    meter_bar_draw(cr, inner_x(), y + (TIMELINE_ROW_H - TIMELINE_METER_H) / 2.0, timeline_meter_w(),
+                   TIMELINE_METER_H, fraction, TIMELINE_SEGMENTS, gradient,
+                   hovered ? COLORS.surface1 : COLORS.surface0);
     module_box_draw_text_right(cr, inner_x() + inner_w(), y, TIMELINE_ROW_H, text, FONT.sm, false, COLORS.subtext0);
 }
 
@@ -516,7 +532,7 @@ static void paint_card(cairo_t *cr, int i) {
         y = card->vis_y + VIS_ROW_H;
     }
 
-    paint_timeline(cr, player, y + TIMELINE_GAP);
+    paint_timeline(cr, player, card->timeline_y, g_popup.hovered_timeline == i);
     for (int b = 0; b < BUTTON_COUNT; b++) {
         paint_button(cr, i, b, card->buttons_y);
     }
@@ -555,6 +571,9 @@ static void relayout_and_redraw(void) {
     if (g_popup.hovered_card >= g_popup.card_count) {
         g_popup.hovered_card = -1;
         g_popup.hovered_button = -1;
+    }
+    if (g_popup.hovered_timeline >= g_popup.card_count) {
+        g_popup.hovered_timeline = -1;
     }
     if (g_popup.popup_height != old_h) {
         destroy_graphs(); // the strips are children of the surface about to go away
@@ -747,6 +766,7 @@ void media_popup_open(Output *output, Color accent, double box_x, double box_y, 
     g_popup.accent = accent;
     g_popup.hovered_card = -1;
     g_popup.hovered_button = -1;
+    g_popup.hovered_timeline = -1;
     g_popup.host.output = output;
 
     // Fetch every open player's current position once, up front, so the
@@ -787,6 +807,7 @@ void media_popup_close(void) {
     g_popup.card_count = 0;
     g_popup.hovered_card = -1;
     g_popup.hovered_button = -1;
+    g_popup.hovered_timeline = -1;
 }
 
 bool media_popup_is_menu_surface(struct wl_surface *surface) {
@@ -815,15 +836,42 @@ static bool button_at(double x, double y, int *card_out, int *button_out) {
     return false;
 }
 
+// Which card's timeline is under (x, y), and how far along it (0..1); false
+// if none, or if that card's player can't seek or reports no usable length.
+// The hit area is the meter's width over the whole row (14px), more
+// forgiving than the 6px meter itself.
+static bool timeline_at(double x, double y, int *card_out, double *fraction_out) {
+    double meter_w = timeline_meter_w();
+    if (x < inner_x() || x >= inner_x() + meter_w) {
+        return false;
+    }
+    for (int i = 0; i < g_popup.card_count; i++) {
+        CardLayout *card = &g_popup.cards[i];
+        if (y < card->timeline_y || y >= card->timeline_y + TIMELINE_ROW_H) {
+            continue;
+        }
+        if (!mpris_player_can_seek(card->player) || !has_sane_length(card->player)) {
+            return false;
+        }
+        *card_out = i;
+        *fraction_out = (x - inner_x()) / meter_w;
+        return true;
+    }
+    return false;
+}
+
 void media_popup_handle_motion(double x, double y) {
     if (!g_popup.host.open) {
         return;
     }
-    int card = -1, button = -1;
+    int card = -1, button = -1, timeline = -1;
+    double fraction = 0.0;
     button_at(x, y, &card, &button);
-    if (card != g_popup.hovered_card || button != g_popup.hovered_button) {
+    timeline_at(x, y, &timeline, &fraction);
+    if (card != g_popup.hovered_card || button != g_popup.hovered_button || timeline != g_popup.hovered_timeline) {
         g_popup.hovered_card = card;
         g_popup.hovered_button = button;
+        g_popup.hovered_timeline = timeline;
         redraw();
     }
 }
@@ -832,12 +880,16 @@ void media_popup_handle_click(double x, double y) {
     if (!g_popup.host.open) {
         return;
     }
-    // Only the control chips are interactive -- the text and the timeline
-    // are a no-op. No click-to-seek on the timeline: MPRIS's SetPosition()
-    // needs the track's own mpris:trackid object path, which isn't cached
-    // anywhere (only the fields this popup actually displays are), and
-    // adding it purely to support seeking wasn't judged worth it here.
+    // The timeline seeks to the clicked spot; the control chips are below.
+    // The text is a no-op.
     int card = -1, button = -1;
+    double fraction = 0.0;
+    if (timeline_at(x, y, &card, &fraction)) {
+        MprisPlayer *player = g_popup.cards[card].player;
+        mpris_player_seek_to(player, (int64_t)(fraction * (double)mpris_player_length_us(player)));
+        redraw(); // shows the optimistic new position right away
+        return;
+    }
     if (!button_at(x, y, &card, &button)) {
         return;
     }
@@ -888,8 +940,13 @@ bool media_popup_test_target(const char *app_name, const char *button, double *x
         if (strcmp(name, app_name) != 0) {
             continue;
         }
-        *x = button_x(b) + BUTTON_W / 2.0;
-        *y = g_popup.cards[i].buttons_y + BUTTON_H / 2.0;
+        if (strncmp(button, "timeline:", 9) == 0) {
+            *x = inner_x() + atof(button + 9) * timeline_meter_w();
+            *y = g_popup.cards[i].timeline_y + TIMELINE_ROW_H / 2.0;
+        } else {
+            *x = button_x(b) + BUTTON_W / 2.0;
+            *y = g_popup.cards[i].buttons_y + BUTTON_H / 2.0;
+        }
         return true;
     }
     return false;

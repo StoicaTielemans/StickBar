@@ -9,6 +9,10 @@ Shared by all of them; a module's own section only records what differs.
 | CPU / GPU / memory | | dropdown | | | TOP+LEFT |
 | privacy | | dropdown | | | TOP+LEFT |
 | media | play/pause | dropdown | | | TOP+LEFT |
+
+Inside the media dropdown, a left click on a card's chips plays/pauses or skips,
+and a left click on its timeline seeks to that spot
+([modules/media.md](modules/media.md)).
 | network | | dropdown | | | TOP+RIGHT |
 | clock | | calendar (toggle) | | | TOP+RIGHT |
 | EQ | dropdown | dropdown | | | TOP+RIGHT |

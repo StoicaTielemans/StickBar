@@ -85,6 +85,19 @@ def main():
                 if not wait_for(lambda: (p := fake_player(bar)) and p["status"] == "Playing"):
                     failures.append(f"status after PlayPause: {fake_player(bar)}")
 
+                # A quarter of the way along the 200s track's timeline is 50s:
+                # SetPosition with the track's id, within a pixel's worth.
+                t = bar.must(f"target media timeline:0.25 {APP}")
+                bar.must(f"menu-click {t['x']} {t['y']}")
+                seek = wait_for(lambda: next((c for c in calls(log) if c.startswith("SetPosition")), None))
+                parts = seek.split() if seek else []
+                if len(parts) != 3 or parts[1] != "/org/stickbar/track/1" or \
+                        abs(int(parts[2]) - 50_000_000) > 0.015 * 200_000_000:
+                    failures.append(f"timeline click at 0.25 sent {seek!r}, expected SetPosition "
+                                    f"/org/stickbar/track/1 ~50000000")
+                if not bar.must("menu")["open"]:
+                    failures.append("the dropdown closed after a timeline click")
+
                 fake.terminate()
                 fake.wait(timeout=5)
                 if players == 1:
@@ -102,6 +115,7 @@ def main():
     if failures:
         common.fail("; ".join(failures))
     common.ok(f"fake player's metadata read right; play/next/prev chips sent PlayPause/Next/Previous; "
+              f"timeline click sent {seek}; "
               f"after it quit: {gone}")
 
 

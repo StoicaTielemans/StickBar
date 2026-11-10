@@ -92,6 +92,15 @@ void mpris_player_toggle_playing(MprisPlayer *player);
 void mpris_player_next(MprisPlayer *player);
 void mpris_player_previous(MprisPlayer *player);
 
+// Seeking, for the media dropdown's clickable timeline. mpris_player_seek_to()
+// jumps to an absolute position (microseconds), fire-and-forget like the
+// calls above: SetPosition() with the track's mpris:trackid, or a relative
+// Seek() from the last polled position if the player reports no track id.
+// No-op unless the player's CanSeek is true. Updates the cached position
+// right away, so the dropdown shows the jump before the next poll.
+bool mpris_player_can_seek(MprisPlayer *player);
+void mpris_player_seek_to(MprisPlayer *player, int64_t position_us);
+
 // Bumped every time something a player shows changes, or players come and
 // go -- so a consumer (the media dropdown) can tell whether a D-Bus wakeup
 // touched anything it displays, without comparing it all itself.

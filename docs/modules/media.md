@@ -131,11 +131,20 @@ userdata pointer, `in_use`-gated iteration, `_count()`/`_get(index)` accessors).
     `mpris_player_refresh_position()`, so a player nobody's looking at isn't
     polled at all (the bar box shows no position, like the reference's
     `MediaWidget.qml`). The "24h sentinel" `mpris:length` heuristic and "m:ss" formatting
-    mirror `MediaPopup.qml`'s own `maxSaneDuration`/`formatTime()`. **Read-only, no
-    click-to-seek** — `SetPosition()` needs the track's own `mpris:trackid`
-    object path, which isn't cached anywhere (only the fields this popup
-    actually displays are), and adding it purely to support seeking wasn't
-    judged worth it here.
+    mirror `MediaPopup.qml`'s own `maxSaneDuration`/`formatTime()`.
+  - **Click-to-seek on the timeline**: a left click anywhere along the meter's
+    width, over the whole 14px row, jumps that far into the track
+    (`mpris_player_seek_to()`). It sends `SetPosition(trackid, pos)` with the
+    track's `mpris:trackid`, or a relative `Seek(pos − last polled position)` if
+    the player reports no track id. Spotify sends the id as a string (`s`), not
+    the spec's object path (`o`), checked live; both are accepted if the value
+    is a valid path. Only when the player's `CanSeek` is true and the length is
+    sane; otherwise the row isn't clickable and doesn't light up. One of the
+    user's Chromium players reports `CanSeek false`. Hovering a seekable
+    timeline lightens its empty segments, like the chips. The cached position
+    is set to the target at once, so the meter jumps before the next 1s
+    `Position` poll, which corrects it if the player clamped or ignored the
+    seek. Fire-and-forget like the chips; the dropdown stays open.
 - **Deliberately out of scope**: no per-player volume/mute control (would need
   client-side mute-state bookkeeping like the reference's own `_mutedVolumes`, judged
   not essential for v1).

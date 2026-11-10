@@ -94,6 +94,9 @@ typedef struct {
     int rows;              // dot rows per half
 } MediaPopupTestGraph;
 bool media_popup_test_graph(int card, MediaPopupTestGraph *out);
+// Where to click on `app_name`'s card: `button` is "prev", "next", "play", or
+// "timeline:<fraction>" for that far along its timeline meter (at the row's
+// vertical centre).
 bool media_popup_test_target(const char *app_name, const char *button, double *x, double *y);
 
 #endif

@@ -427,7 +427,7 @@ static void cmd_menu(void) {
 static void cmd_target(char *args) {
     // target device <part> <frac> <description...>
     // target mixer <part> <frac> <stream name...>
-    // target media <button> <app name...>
+    // target media <prev|next|play|timeline:FRAC> <app name...>
     // target eq <profile>
     // target power <logout|restart|shutdown|header|corner>
     // target traymenu <label...>

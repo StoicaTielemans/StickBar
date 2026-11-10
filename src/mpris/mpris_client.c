@@ -33,6 +33,8 @@ struct MprisPlayer {
     char artist[256];
     char album[256]; // "" if unreported (common: browsers send an empty one)
     bool can_go_next, can_go_previous;
+    bool can_seek;       // CanSeek -- gates mpris_player_seek_to()
+    char track_id[256];  // Metadata's mpris:trackid, "" if unreported -- SetPosition() needs it
     int64_t length_us;   // 0 if unreported
     int64_t position_us; // last value from mpris_player_refresh_position(), 0 if never polled
     pid_t pid;           // process owning bus_name, 0 if unknown -- see is_shadowed()
@@ -226,6 +228,38 @@ void mpris_player_previous(MprisPlayer *player) {
     send_player_call(player, "Previous");
 }
 
+bool mpris_player_can_seek(MprisPlayer *player) { return player && player->can_seek; }
+
+void mpris_player_seek_to(MprisPlayer *player, int64_t position_us) {
+    if (!player || !player->bus || !player->can_seek) {
+        return;
+    }
+    if (position_us < 0) {
+        position_us = 0;
+    }
+    // SetPosition is the spec's absolute seek, but it names the track it's
+    // meant for (so a seek racing a track change is ignored, not applied to
+    // the next song) -- without a track id, fall back to the relative Seek,
+    // measured from the last polled position.
+    bool absolute = player->track_id[0] != '\0';
+    sd_bus_message *msg = NULL;
+    if (sd_bus_message_new_method_call(player->bus, &msg, player->bus_name, MPRIS_OBJECT_PATH,
+                                        MPRIS_PLAYER_INTERFACE, absolute ? "SetPosition" : "Seek") < 0) {
+        return;
+    }
+    int r = absolute ? sd_bus_message_append(msg, "ox", player->track_id, position_us)
+                     : sd_bus_message_append(msg, "x", position_us - player->position_us);
+    if (r >= 0) {
+        // Fire-and-forget, like the other controls (see the header).
+        sd_bus_send(player->bus, msg, NULL);
+        // Optimistic: the dropdown shows the new spot right away instead of
+        // waiting up to a second for its next Position poll, which then
+        // corrects it if the player clamped or ignored the seek.
+        player->position_us = position_us;
+    }
+    sd_bus_message_unref(msg);
+}
+
 static bool metadata_entry(sd_bus_message *m, const char *key, const char *contents, void *user_data) {
     MprisPlayer *item = user_data;
     if (strcmp(key, "xesam:title") == 0) {
@@ -248,6 +282,18 @@ static bool metadata_entry(sd_bus_message *m, const char *key, const char *conte
                 }
             }
             sd_bus_message_exit_container(m);
+        }
+        return true;
+    }
+    if (strcmp(key, "mpris:trackid") == 0 && (strcmp(contents, "o") == 0 || strcmp(contents, "s") == 0)) {
+        // The spec says an object path ("o"); some players send a plain
+        // string. Either way it has to be a valid object path to go back out
+        // in SetPosition(), so a string that isn't one is dropped (seeking
+        // then falls back to the relative Seek()).
+        const char *id = NULL;
+        sd_bus_message_read_basic(m, contents[0], &id);
+        if (id && sd_bus_object_path_is_valid(id) && strlen(id) < sizeof(item->track_id)) {
+            snprintf(item->track_id, sizeof(item->track_id), "%s", id);
         }
         return true;
     }
@@ -280,6 +326,7 @@ static void parse_metadata(sd_bus_message *m, MprisPlayer *item) {
     item->title[0] = '\0';
     item->artist[0] = '\0';
     item->album[0] = '\0';
+    item->track_id[0] = '\0';
     item->length_us = 0;
 
     dbus_dict_walk(m, metadata_entry, item);
@@ -295,13 +342,16 @@ static bool player_entry(sd_bus_message *m, const char *key, const char *content
         parse_metadata(m, item);
         return true;
     }
-    if (strcmp(contents, "b") == 0 && (strcmp(key, "CanGoNext") == 0 || strcmp(key, "CanGoPrevious") == 0)) {
+    if (strcmp(contents, "b") == 0 &&
+        (strcmp(key, "CanGoNext") == 0 || strcmp(key, "CanGoPrevious") == 0 || strcmp(key, "CanSeek") == 0)) {
         int v = 0;
         sd_bus_message_read_basic(m, SD_BUS_TYPE_BOOLEAN, &v);
         if (strcmp(key, "CanGoNext") == 0) {
             item->can_go_next = v != 0;
-        } else {
+        } else if (strcmp(key, "CanGoPrevious") == 0) {
             item->can_go_previous = v != 0;
+        } else {
+            item->can_seek = v != 0; // not in PlayerView: nothing drawn depends on it
         }
         return true;
     }

@@ -30,14 +30,19 @@ XML = """
   <interface name="org.mpris.MediaPlayer2.Player">
     <method name="PlayPause"/><method name="Next"/><method name="Previous"/>
     <method name="Play"/><method name="Pause"/>
+    <method name="SetPosition"><arg name="TrackId" type="o" direction="in"/><arg name="Position" type="x" direction="in"/></method>
+    <method name="Seek"><arg name="Offset" type="x" direction="in"/></method>
     <property name="PlaybackStatus" type="s" access="read"/>
     <property name="Metadata" type="a{sv}" access="read"/>
     <property name="Position" type="x" access="read"/>
     <property name="CanGoNext" type="b" access="read"/>
     <property name="CanGoPrevious" type="b" access="read"/>
+    <property name="CanSeek" type="b" access="read"/>
   </interface>
 </node>
 """
+
+TRACK_ID = "/org/stickbar/track/1"
 
 state = {"status": "Paused"}
 conn_ref = {}
@@ -53,15 +58,19 @@ def props(iface):
             "xesam:artist": GLib.Variant("as", ["Fake Artist"]),
             "xesam:album": GLib.Variant("s", "Fake Album"),
             "mpris:length": GLib.Variant("x", 200_000_000),
+            "mpris:trackid": GLib.Variant("o", TRACK_ID),
         }),
         "Position": GLib.Variant("x", 30_000_000),
         "CanGoNext": GLib.Variant("b", True),
         "CanGoPrevious": GLib.Variant("b", True),
+        "CanSeek": GLib.Variant("b", True),
     }
 
 
 def on_call(conn, sender, path, iface, method, params, inv):
-    LOG.write(f"{method}\n")
+    # SetPosition/Seek log their arguments too, e.g. "SetPosition /track/1 50000000".
+    args = " ".join(str(a) for a in params.unpack()) if params is not None else ""
+    LOG.write(f"{method} {args}".rstrip() + "\n")
     if method == "PlayPause":
         state["status"] = "Playing" if state["status"] != "Playing" else "Paused"
         conn.emit_signal(None, PATH, "org.freedesktop.DBus.Properties", "PropertiesChanged",

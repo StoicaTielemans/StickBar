@@ -38,18 +38,13 @@ typedef enum {
 // development. A "Stream/Input/Video" node is either a webcam or a
 // screen-share consumer; which one is resolved by following the PipeWire
 // link feeding it back to its source node and checking *that* node's own
-// media.class (see pipewire_client.c's classify_video_node() for the exact
+// media.class (see pipewire_client.c's video_node_is_webcam() for the exact
 // heuristic and its documented caveat -- this half is reasoned from
 // PipeWire's own node-role conventions, not independently verified against
 // real webcam hardware or a real screen-share session on this machine).
 bool pipewire_client_mic_active(void);
 bool pipewire_client_webcam_active(void);
 bool pipewire_client_screenshare_active(void);
-
-// True if any of the above three is true -- what modules/privacy/privacy.c
-// uses to decide whether to collapse to zero width, same "nothing to show"
-// check modules/media/media.c makes against mpris_active_player().
-bool pipewire_client_any_active(void);
 
 // Flattened list of every active stream across all three categories, for the
 // right-click dropdown. 0 <= index < pipewire_client_entry_count().

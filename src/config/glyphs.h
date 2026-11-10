@@ -90,10 +90,10 @@
 // against JetBrainsMonoNerdFont-Regular.ttf for glyph names containing
 // "webcam"/"monitor_share" -- same verification convention as every other
 // glyph in this file, not guessed from a Nerd Font cheat sheet.
-// Privacy dropdown header icon.
-#define GLYPH_ICON_PRIVACY 0xF0498u // md-shield
 #define GLYPH_ICON_WEBCAM      0xF05A0u // nf-md-webcam
 #define GLYPH_ICON_SCREENSHARE 0xF1483u // nf-md-monitor_share
+// Privacy dropdown header icon.
+#define GLYPH_ICON_PRIVACY 0xF0498u // md-shield
 
 // Arch logo + power menu icons, codepoints derived by reading them directly
 // out of the reference ArchLogoWidget.qml/PowerMenu.qml source via Python's

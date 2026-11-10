@@ -28,7 +28,7 @@ void hyprland_events_destroy(HyprlandEvents *ev);
 //
 // Returns false if the connection has dropped (EOF or a real read error) -- the
 // caller (main.c) owns what happens next (a single reconnect attempt, then giving
-// up on the workspace module -- see the project plan's documented policy). This
+// up on live workspace updates -- see main.c's reconnect_hypr_events()). This
 // module deliberately doesn't retry on its own, so that policy lives in one place.
 bool hyprland_events_pump(HyprlandEvents *ev, AppContext *app);
 

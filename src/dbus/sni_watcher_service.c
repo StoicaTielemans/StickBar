@@ -1,7 +1,6 @@
 #include "dbus/sni_watcher_service.h"
 
 #include <stdio.h>
-#include <string.h>
 
 #include "dbus/sni_registry.h"
 
@@ -24,7 +23,7 @@ static int method_register_item(sd_bus_message *m, void *userdata, sd_bus_error 
     }
 
     // Two real-world calling conventions, both confirmed against live items
-    // during this project's own testing (see sni_registry.c's split_bus_name_path,
+    // during this project's own testing (see sni_watcher.c's split_bus_name_path,
     // which parses the equivalent already-combined string on the client side):
     // Steam passes its own object path and expects the *caller's* bus name to be
     // used; EasyEffects (KDE convention) passes a bus name and expects the

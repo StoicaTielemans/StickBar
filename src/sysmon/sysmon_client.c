@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "util/file.h"
@@ -74,7 +73,6 @@ static int g_cpu_proc_count = 0;
 static bool g_gpu_available = false;
 static bool g_gpu_warned = false;
 static int g_gpu_percent = 0;
-static int g_gpu_mem_percent = 0;
 static int g_gpu_temp_c = 0;
 static int g_gpu_mem_used_mb = 0;
 static int g_gpu_mem_total_mb = 0;
@@ -87,7 +85,6 @@ static char g_gpu_name[96] = "";
 static char g_gpu_driver[80] = "";
 static double g_gpu_power_limit_w = 0.0;
 static int g_gpu_clock_max_mhz = 0;
-static int g_gpu_mem_clock_max_mhz = 0;
 
 // Dropdown-only live values, like VRAM/fan/power above.
 static int g_gpu_clock_mhz = 0;
@@ -499,9 +496,6 @@ static void nvml_init(void) {
     if (get_max_clock && get_max_clock(g_nvml.device, NVML_CLOCK_GRAPHICS, &value) == 0) {
         g_gpu_clock_max_mhz = (int)value;
     }
-    if (get_max_clock && get_max_clock(g_nvml.device, NVML_CLOCK_MEM, &value) == 0) {
-        g_gpu_mem_clock_max_mhz = (int)value;
-    }
 }
 
 
@@ -595,7 +589,6 @@ static void poll_gpu(void) {
         return;
     }
     g_gpu_percent = (int)util.gpu;
-    g_gpu_mem_percent = (int)util.memory;
 
     unsigned int value = 0;
     g_gpu_temp_c = g_nvml.get_temperature(g_nvml.device, NVML_TEMPERATURE_GPU, &value) == 0 ? (int)value : 0;
@@ -1008,7 +1001,6 @@ double sysmon_cpu_process_percent(int index) {
 
 bool sysmon_gpu_available(void) { return g_gpu_available; }
 int sysmon_gpu_percent(void) { return g_gpu_percent; }
-int sysmon_gpu_mem_percent(void) { return g_gpu_mem_percent; }
 int sysmon_gpu_temp_c(void) { return g_gpu_temp_c; }
 int sysmon_gpu_mem_used_mb(void) { return g_gpu_mem_used_mb; }
 int sysmon_gpu_mem_total_mb(void) { return g_gpu_mem_total_mb; }
@@ -1021,7 +1013,6 @@ double sysmon_gpu_power_limit_w(void) { return g_gpu_power_limit_w; }
 int sysmon_gpu_clock_mhz(void) { return g_gpu_clock_mhz; }
 int sysmon_gpu_clock_max_mhz(void) { return g_gpu_clock_max_mhz; }
 int sysmon_gpu_mem_clock_mhz(void) { return g_gpu_mem_clock_mhz; }
-int sysmon_gpu_mem_clock_max_mhz(void) { return g_gpu_mem_clock_max_mhz; }
 int sysmon_gpu_encoder_percent(void) { return g_gpu_encoder_percent; }
 int sysmon_gpu_decoder_percent(void) { return g_gpu_decoder_percent; }
 

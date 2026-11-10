@@ -9,9 +9,8 @@
 // packed bytes at `pixels` -- no row padding, per the SNI wire format) into a
 // cairo_surface_t* scaled to exactly `dest_size`x`dest_size`. Returns NULL on
 // failure. Pure function -- no D-Bus types -- see sni_icon.c for the byte-order
-// and premultiplication handling this performs, including the single riskiest
-// unverified assumption in the whole tray feature (whether source pixels are
-// premultiplied), and for the flat-colored-mask ("symbolic" icon) detection
+// and premultiplication handling this performs (verified against a real item,
+// see there), and for the flat-colored-mask ("symbolic" icon) detection
 // heuristic that recolors such icons to this bar's own text color instead of
 // rendering their dim baked-in color as-is.
 cairo_surface_t *sni_icon_convert(const uint8_t *pixels, int width, int height, int dest_size);

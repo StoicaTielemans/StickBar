@@ -10,7 +10,8 @@
 #include "wayland/shm_buffer.h"
 
 // Full per-output bar surface state. Opaque outside this file (see bar_surface.h) --
-// everything else interacts with it only through bar_surface_create/_destroy/_mark_dirty.
+// everything else interacts with it only through bar_surface_create/_destroy/_mark_dirty/
+// _mark_clock_dirty.
 struct BarSurface {
     AppContext *app;
     Output *output;

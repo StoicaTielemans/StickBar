@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/epoll.h>
-#include <unistd.h>
 
 int event_loop_create(void) {
     int fd = epoll_create1(EPOLL_CLOEXEC);

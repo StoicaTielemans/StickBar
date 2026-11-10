@@ -323,7 +323,7 @@ static void context_state_cb(pa_context *ctx, void *userdata) {
         break;
     case PA_CONTEXT_FAILED:
     case PA_CONTEXT_TERMINATED:
-        // No reconnect attempt in v1 -- matches this project's existing
+        // No reconnect attempt -- matches this project's existing
         // precedent for the Hyprland event socket (one connection attempt,
         // degrade gracefully rather than retry forever). Wakes up
         // pulse_client_init()'s wait loop if the failure happened before the

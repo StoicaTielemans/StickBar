@@ -2,7 +2,6 @@
 
 #include <linux/input-event-codes.h> // BTN_LEFT, BTN_RIGHT
 #include <stdio.h>
-#include <string.h>
 
 #include "config/config.h"
 #include "config/glyphs.h"

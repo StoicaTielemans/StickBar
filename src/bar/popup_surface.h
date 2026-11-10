@@ -13,7 +13,7 @@ typedef struct PopupSurface PopupSurface; // opaque
 // compositor-decides-width bar surface, this is meant for a short-lived surface
 // positioned at an arbitrary point (a popup menu near some other bar content)
 // or covering the whole output (a full-screen, invisible click-catcher) -- see
-// modules/tray/tray_context_menu.c for both use cases. No exclusive zone is
+// bar/popup_host.c for both, as every dropdown uses them. No exclusive zone is
 // set. `layer` lets the caller request e.g. LAYER_OVERLAY (to sit above the bar
 // and any click-catcher surface) instead of LAYER_TOP. Returns NULL on
 // failure. Written generically (no tray-specific knowledge) so other

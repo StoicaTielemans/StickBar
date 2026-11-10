@@ -11,7 +11,7 @@
 // as cpu_render()/gpu_render()/mem_render(), since this lives in the bar's
 // left region too. Unlike those three, this module collapses to zero width
 // (same convention modules/media/media.c uses for "nothing to show") when
-// pipewire_client_any_active() is false: no box is drawn and `x` is returned
+// none of mic/webcam/screen-share is active: no box is drawn and `x` is returned
 // unadvanced, so the next left-region module starts exactly where this one
 // would have. When at least one of mic/webcam/screen-share is active, draws
 // one box containing the glyph for each active category and records the

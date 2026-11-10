@@ -2,7 +2,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 static cairo_surface_t *load_and_scale_png(const char *path, int dest_size) {
     cairo_surface_t *src = cairo_image_surface_create_from_png(path);

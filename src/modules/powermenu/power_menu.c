@@ -59,9 +59,8 @@ static AppContext *g_app = NULL;
 
 // Which button (if any) the pointer currently sits over, and on which
 // output's overlay -- only one can ever be hovered at a time (a single
-// pointer), so this is process-wide state rather than per-overlay, same
-// "one hovered_index int" shape modules/media/media_popup.c already uses
-// for its own single-selection hover tracking.
+// pointer), so this is process-wide state rather than per-overlay, like
+// the dropdowns' own hover tracking.
 static OutputOverlay *g_hovered_overlay = NULL;
 static int g_hovered_button = -1;
 

@@ -14,10 +14,10 @@ void output_add(AppContext *app, uint32_t name, uint32_t version);
 // first if one had been created.
 void output_remove(AppContext *app, uint32_t name);
 
-// Marks every currently-known output's bar surface dirty (needs a redraw). Used by
-// the clock tick and by Hyprland IPC event handling, neither of which know or care
-// which specific output(s) are actually affected -- it's simpler and cheap enough at
-// this event rate to just redraw everything.
+// Marks every currently-known output's bar surface dirty (needs a redraw). Every
+// event source that can change the bar calls this rather than working out which
+// output(s) it affects -- a redraw that changes nothing on an output isn't
+// committed there anyway (see bar/bar_surface.c's do_render()).
 void output_mark_all_dirty(AppContext *app);
 
 // Same, but only the clock box needs repainting -- used by the 1-second clock

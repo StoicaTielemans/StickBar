@@ -13,9 +13,9 @@ void workspaces_refresh(void);
 // Draws `output`'s workspace pills (only occupied-or-focused ids within that
 // output's assigned range, see workspaces.c) left-to-right starting at (x, box_top),
 // vertically centered in a box of height `box_height`. Also records each pill's
-// screen-space rect for later hit-testing by workspaces_handle_click(). Returns the
-// x coordinate immediately after the last pill drawn, i.e. where the next
-// left-region widget should start.
+// screen-space rect for later hit-testing by workspaces_handle_click(). Returns
+// where the next left-region widget starts: just past the last pill drawn plus
+// BAR.item_spacing, like every other left-region module.
 double workspaces_render(cairo_t *cr, Output *output, double x, double box_top, double box_height);
 
 // Hit-tests (x, y) against `output`'s most recently rendered pill rects (from the

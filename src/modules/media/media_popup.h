@@ -25,10 +25,6 @@
 void media_popup_open(Output *output, Color accent, double box_x, double box_y, double box_w, double box_h);
 void media_popup_close(void);
 
-// Whether the dropdown is currently shown -- main.c runs the visualizer only
-// while it is.
-bool media_popup_is_open(void);
-
 bool media_popup_is_menu_surface(struct wl_surface *surface);
 bool media_popup_is_catcher_surface(struct wl_surface *surface);
 

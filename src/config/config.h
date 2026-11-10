@@ -14,10 +14,8 @@ typedef struct {
     double r, g, b, a;
 } Color;
 
-// Full Catppuccin Mocha palette. Only a subset (mantle, pink, lavender, base, mauve,
-// text) is used by the workspace/clock modules in this first pass, but the whole
-// palette is ported up front since every later module (volume, network, tray, ...)
-// picks its own accent color from it, same as the QML original.
+// Full Catppuccin Mocha palette, ported from the QML original: each module
+// picks its own accent color from it.
 typedef struct {
     Color rosewater, flamingo, pink, mauve, red, maroon, peach, yellow, green, teal,
           sky, sapphire, blue, lavender, text, subtext1, subtext0, overlay2, overlay1,

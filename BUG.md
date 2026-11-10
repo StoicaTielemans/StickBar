@@ -17,9 +17,6 @@ limitations, as opposed to bugs, are in `docs/limitations.md`.
   apply, so two `blackpearl-eq.py` processes can run at once and steal each other's
   replies on the DAC's hidraw node (see "Why a state file" in `docs/modules/eq.md`). Ignoring
   clicks while something is pending would fix it.
-- **Stale comment at `src/eq/eq_state.c:281`.** It says a `SIGCHLD` handler would
-  interfere with `sysmon_client.c`'s `popen()`/`pclose()` of `nvidia-smi`, which NVML
-  replaced. Harmless, but wrong.
 
 ## Fixed
 

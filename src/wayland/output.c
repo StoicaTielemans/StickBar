@@ -36,8 +36,8 @@ static void handle_mode(void *data, struct wl_output *wl_output, uint32_t flags,
 static void handle_scale(void *data, struct wl_output *wl_output, int32_t factor) {
     (void)wl_output;
     Output *output = data;
-    // HiDPI/fractional-scale-aware rendering is a known gap in this first pass (see
-    // project plan) -- the value isn't even stored, since nothing would read it yet.
+    // HiDPI/fractional-scale-aware rendering is a known gap (docs/limitations.md) --
+    // the value isn't even stored, since nothing would read it yet.
     (void)output; (void)factor;
 }
 

@@ -222,7 +222,7 @@ static int on_item_signal(sd_bus_message *m, void *userdata, sd_bus_error *ret_e
             output_mark_all_dirty(g_app);
         }
     }
-    // NewStatus/NewTitle/NewAttentionIcon/NewOverlayIcon/NewMenu: no-op for v1,
+    // NewStatus/NewTitle/NewAttentionIcon/NewOverlayIcon/NewMenu: no-op,
     // matching the reference Tray.qml's own lack of any handling for these
     // beyond whatever Quickshell's SystemTray service does implicitly.
     return 0;

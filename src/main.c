@@ -2,7 +2,6 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <sys/epoll.h>
 #include <sys/signalfd.h>
 #include <sys/timerfd.h>
@@ -165,7 +164,7 @@ static int start_optional(int epoll_fd, bool (*init)(void), int (*get_fd)(void),
 
 // Drops the current Hyprland event connection (if any) and tries once to
 // reconnect, re-registering the new fd on epoll. This is the "one reconnect
-// attempt, then disable the module" policy from the project plan -- it lives here
+// attempt, then disable the module" policy -- it lives here
 // in main.c (which owns epoll registration) rather than inside hyprland/ipc_events.c,
 // so the retry policy stays in one place instead of being split across two files.
 static HyprlandEvents *reconnect_hypr_events(int epoll_fd, HyprlandEvents *old, int old_fd) {
@@ -312,7 +311,7 @@ int main(void) {
     // the privacy module stays permanently collapsed for this run, not a
     // fatal error. Placed after pulse_client_init() (order between the two
     // doesn't matter -- no cross-dependency) but still after
-    // create_powermenu_signal_fd()'s sigprocmask() call above, for the same
+    // block_powermenu_signal()'s sigprocmask() at the top of main(), for the same
     // reason pulse_client_init() must be: pw_thread_loop_start() spawns a
     // background thread, which inherits the calling thread's signal mask at
     // creation time.

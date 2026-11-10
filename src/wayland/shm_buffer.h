@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <wayland-client.h>
 
-// A double-buffered wl_shm allocation for one output's bar surface. Two same-sized
+// A double-buffered wl_shm allocation for one surface (a bar, popup or strip). Two same-sized
 // buffers share a single memfd-backed pool; redraws ping-pong between them so we're
 // never writing into a buffer the compositor might still be reading from a
 // previously-attached frame.
@@ -20,7 +20,7 @@ typedef struct {
 
 // (Re)allocates the pool/buffers for the given pixel size. Safe to call again with a
 // different size later (e.g. output reconfigure) -- any previous allocation is torn
-// down first. Returns false on failure (sb is left zeroed).
+// down first. Returns false on failure (sb then holds no buffers or mapping).
 // `*sb` must be zero-initialized (e.g. `ShmBuffers sb = {0};`) before the first call.
 bool shm_buffers_resize(ShmBuffers *sb, struct wl_shm *shm, int width, int height);
 

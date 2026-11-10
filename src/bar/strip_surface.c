@@ -82,8 +82,8 @@ StripSurface *strip_surface_create(AppContext *app, struct wl_surface *parent) {
     // next commit -- the whole point (the parent isn't committed per frame).
     wl_subsurface_set_desync(strip->subsurface);
 
-    // An empty input region: pointer events fall through to the parent, so
-    // e.g. left-clicking the bars still toggles play/pause on the media box.
+    // An empty input region: pointer events fall through to the parent (the
+    // dropdown), exactly as if the graph weren't a separate surface.
     struct wl_region *region = wl_compositor_create_region(app->compositor);
     wl_surface_set_input_region(strip->surface, region);
     wl_region_destroy(region);

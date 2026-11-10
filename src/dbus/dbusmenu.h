@@ -5,7 +5,7 @@
 #include <systemd/sd-bus.h>
 
 // Generous fixed bound, matching this project's existing convention over
-// dynamic growth (see e.g. modules/workspaces.c's MAX_TRACKED_OUTPUTS).
+// dynamic growth (see docs/limitations.md's fixed-array caps).
 #define MAX_MENU_ENTRIES 32
 
 typedef enum {

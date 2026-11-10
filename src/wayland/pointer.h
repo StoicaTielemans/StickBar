@@ -9,7 +9,8 @@
 
 // wl_seat listener -- install once, right after binding the seat global. Requests a
 // wl_pointer when the seat reports pointer capability, and wires up enter/motion/
-// button routing (hover tracking + click-to-focus on workspace pills).
+// button/scroll routing: to whichever dropdown or catcher is under the pointer,
+// else to the bar modules' own click/scroll handlers.
 extern const struct wl_seat_listener seat_listener;
 
 // The routing behind the wl_pointer listener, split out so the test-control

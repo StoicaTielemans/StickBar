@@ -1,7 +1,6 @@
 #include "audio/mixer_popup.h"
 
 #include <linux/input-event-codes.h> // BTN_LEFT
-#include <math.h>
 #include <stdio.h>
 #include <string.h>
 

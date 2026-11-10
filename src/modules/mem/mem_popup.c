@@ -1,8 +1,6 @@
 #include "modules/mem/mem_popup.h"
 
-#include <math.h>
 #include <stdio.h>
-#include <string.h>
 
 #include "bar/popup_host.h"
 #include "bar/popup_surface.h"

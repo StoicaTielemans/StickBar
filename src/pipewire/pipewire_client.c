@@ -233,9 +233,9 @@ static void handle_node_global(uint32_t id, const struct spa_dict *props) {
     // filters, ...) just needs its media_class cached, never bound.
     //
     // The bar's own media visualizer (visualizer/visualizer.c) is a
-    // Stream/Input/Audio node too -- it captures the default sink's monitor
-    // whenever something plays. Left tracked, the privacy box would show a
-    // mic icon every time music plays, naming stickBar itself; it's still
+    // Stream/Input/Audio node too -- while the media dropdown is open it
+    // captures each playing player's audio. Left tracked, the privacy box
+    // would show a mic icon then, naming stickBar itself; it's still
     // kept in the table (harmless, and it keeps link lookups uniform), just
     // never counted as an active stream.
     const char *node_name = props ? spa_dict_lookup(props, PW_KEY_NODE_NAME) : NULL;
@@ -521,11 +521,6 @@ bool pipewire_client_screenshare_active(void) {
     }
     pw_thread_loop_unlock(g_loop);
     return active;
-}
-
-bool pipewire_client_any_active(void) {
-    return pipewire_client_mic_active() || pipewire_client_webcam_active() ||
-           pipewire_client_screenshare_active();
 }
 
 int pipewire_client_entry_count(void) {

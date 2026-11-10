@@ -1,9 +1,7 @@
 #include "modules/cpu/cpu_popup.h"
 
-#include <math.h>
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 
 #include "bar/popup_host.h"
 #include "bar/popup_surface.h"

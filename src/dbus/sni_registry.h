@@ -17,7 +17,8 @@ typedef struct SniItem SniItem; // opaque
 // once at startup, before sni_watcher_register_host().
 void sni_registry_init(AppContext *app);
 
-// Fetches this item's properties (Id, IconPixmap, Menu) via one GetAll call,
+// Fetches this item's properties (Id, Title, Menu, IconPixmap, IconName,
+// IconThemePath) via one GetAll call,
 // converts its best-matching IconPixmap entry to a cairo surface, and subscribes
 // to its signals. No-op if (bus_name, path) is already tracked.
 void sni_registry_add(sd_bus *bus, const char *bus_name, const char *path);

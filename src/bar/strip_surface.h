@@ -7,11 +7,11 @@
 #include "wayland/context.h"
 
 // A small wl_subsurface drawn and committed on its own, on top of a parent
-// surface (the bar, or a popup) -- for the spectrum bars, the only thing in
-// this project that animates continuously. Redrawing them as part of the
-// parent meant copying and diffing the whole 1920x20 bar (or the whole popup)
-// every frame just to change a few hundred pixels; a separate surface only
-// ever touches its own few KB, and the parent isn't touched at all. See
+// surface -- for the media dropdown's spectrum graphs, the only thing in this
+// project that animates continuously. Redrawing them as part of the parent
+// meant copying and diffing the whole popup (or, when they were on the bar,
+// the whole 1920x20 bar) every frame; a separate surface only ever touches
+// its own pixels, and the parent isn't touched at all. See
 // docs/modules/media.md for the measured difference.
 //
 // Desynchronized, so its commits show without a parent commit. Its position,

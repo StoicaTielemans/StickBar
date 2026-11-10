@@ -9,9 +9,9 @@ project('stickBar', 'c',
 )
 
 wayland_client = dependency('wayland-client')
-# wayland-cursor is intentionally not linked yet: this pass doesn't set a pointer
-# cursor image on hover (the bar still gets pointer input/clicks correctly without
-# it, just no visible cursor change) -- add it back when that's implemented.
+# wayland-cursor is intentionally not linked: the bar doesn't set a pointer
+# cursor image on hover (it still gets pointer input/clicks correctly without
+# it, just no visible cursor change) -- add it back if that's ever implemented.
 cairo          = dependency('cairo')
 pangocairo     = dependency('pangocairo')
 cjson          = dependency('libcjson')   # pkg-config module name is "libcjson", not "cjson"
@@ -23,9 +23,8 @@ libpulse       = dependency('libpulse')   # PulseAudio client library, used by
                                            # src/audio/pulse_client.c to talk to
                                            # pipewire-pulse (or any real PulseAudio
                                            # server) for the volume/mic modules --
-                                           # see CLAUDE.md's "PulseAudio / volume &
-                                           # mic" section for why libpulse rather
-                                           # than raw libpipewire
+                                           # see docs/modules/audio.md for why
+                                           # libpulse rather than raw libpipewire
 libpipewire    = dependency('libpipewire-0.3') # direct PipeWire client library
                                            # (unlike libpulse above, which only
                                            # ever talks the PulseAudio-compatible
@@ -34,9 +33,11 @@ libpipewire    = dependency('libpipewire-0.3') # direct PipeWire client library
                                            # to monitor the live stream graph for
                                            # the privacy indicator module (mic/
                                            # webcam/screen-share) -- see
-                                           # CLAUDE.md's "Privacy indicator"
-                                           # section for why this needed the raw
-                                           # PipeWire API rather than libpulse
+                                           # docs/modules/privacy.md for why this
+                                           # needed the raw PipeWire API rather
+                                           # than libpulse; also carries the media
+                                           # dropdown's spectrum capture streams
+                                           # (src/visualizer/)
 
 wayland_scanner = find_program('wayland-scanner')
 
@@ -53,8 +54,8 @@ wl_scanner_private_code = generator(wayland_scanner,
 )
 
 # The layer-shell protocol's get_popup request references xdg_popup. Compiling
-# against just a forward declaration works fine (no popups are actually used in this
-# pass), but wayland-scanner's generated *-protocol.c for layer-shell still emits a
+# against just a forward declaration works fine (the bar's popups are layer-shell
+# surfaces, not xdg_popups), but wayland-scanner's generated *-protocol.c for layer-shell still emits a
 # reference to the `xdg_popup_interface` symbol as part of that request's wl_message
 # signature -- so linking fails without xdg-shell.xml's own generated code to
 # actually define it, even though nothing here calls into xdg_popup itself. Pulled

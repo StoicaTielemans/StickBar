@@ -277,8 +277,8 @@ void eq_state_apply_profile(const char *name) {
     // Double fork: the intermediate child exits immediately and is reaped
     // right here, so the grandchild that actually runs the script is
     // reparented to init and never becomes a zombie of the bar -- without
-    // installing a global SIGCHLD handler, which would interfere with
-    // sysmon_client.c's own popen()/pclose() of nvidia-smi.
+    // installing a process-wide SIGCHLD handler, which would also reap the
+    // child the power menu's system() calls wait on themselves.
     pid_t pid = fork();
     if (pid < 0) {
         perror("stickBar: eq: fork");

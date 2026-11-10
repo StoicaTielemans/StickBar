@@ -776,10 +776,6 @@ void media_popup_close(void) {
     g_popup.hovered_button = -1;
 }
 
-bool media_popup_is_open(void) {
-    return g_popup.host.open;
-}
-
 bool media_popup_is_menu_surface(struct wl_surface *surface) {
     return popup_host_is_menu_surface(&g_popup.host, surface);
 }

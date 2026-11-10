@@ -108,7 +108,7 @@ cJSON *hyprland_ipc_request_json(const char *subcommand) {
     cJSON *json = cJSON_Parse(response);
     free(response);
     if (!json) {
-        fprintf(stderr, "stickBar: hyprctl %s returned invalid JSON\n", full_command);
+        fprintf(stderr, "stickBar: Hyprland request '%s' returned invalid JSON\n", full_command);
         return NULL;
     }
     return json;

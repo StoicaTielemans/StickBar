@@ -80,7 +80,6 @@ double sysmon_cpu_process_percent(int index);
 // a machine with no discrete NVIDIA GPU (or a driver that isn't loaded).
 bool sysmon_gpu_available(void);
 int sysmon_gpu_percent(void);
-int sysmon_gpu_mem_percent(void);
 int sysmon_gpu_temp_c(void);
 
 // Fetches the dropdown-only GPU fields below (VRAM, fan, power, P-state,
@@ -114,7 +113,6 @@ const char *sysmon_gpu_name(void);   // e.g. "NVIDIA GeForce RTX 3080"
 const char *sysmon_gpu_driver(void); // e.g. "615.78.08"
 double sysmon_gpu_power_limit_w(void);
 int sysmon_gpu_clock_max_mhz(void);
-int sysmon_gpu_mem_clock_max_mhz(void);
 
 // Usage % / temperature °C of the last SYSMON_GPU_HISTORY_LEN 5s polls (10
 // minutes), for the dropdown's graphs. Index 0 is the oldest.

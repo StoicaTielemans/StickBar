@@ -1,7 +1,6 @@
 #include "modules/privacy/privacy.h"
 
 #include <linux/input-event-codes.h> // BTN_RIGHT
-#include <stdio.h>
 #include <string.h>
 
 #include "config/config.h"

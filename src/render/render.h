@@ -8,9 +8,8 @@
 
 // Draws one full frame for `output` into `cr`, which is already backed by a
 // `width`x`height` pixel buffer (the bar surface's current size). Fills the
-// background, then dispatches to each bar module in its region: left (workspaces),
-// right (clock). The center region is intentionally left empty -- scaffolding for
-// modules added in later passes.
+// background, then draws each region's modules (render.c's LEFT_REGION and
+// RIGHT_REGION tables), then the media box centered between them.
 void render_output(cairo_t *cr, Output *output, int width, int height);
 
 // Repaints only the clock box, assuming `cr`'s buffer already holds the

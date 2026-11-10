@@ -2,7 +2,7 @@
 
 #include <arpa/inet.h> // ntohl()
 #include <stdbool.h>
-#include <string.h>
+#include <stddef.h>
 
 #include "config/config.h"
 

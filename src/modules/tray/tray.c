@@ -9,8 +9,9 @@
 #include "render/module_box.h"
 
 // How many different Output pointers we keep click-hit-rect state for -- sized
-// generously (this machine has 2 monitors), matching modules/workspaces.c's
-// MAX_TRACKED_OUTPUTS convention.
+// generously (this machine has 2 monitors), like render/box_rects.h's
+// BOX_RECT_MAX_OUTPUTS -- the tray keeps several rects per output, so it has
+// its own table.
 #define MAX_TRACKED_OUTPUTS 8
 
 // Mirrors dbus/sni_registry.h's MAX_TRAY_ITEMS, but that constant isn't part of
@@ -79,8 +80,8 @@ double tray_render(cairo_t *cr, Output *output, double right_edge_x, double box_
             cairo_paint(cr);
             cairo_restore(cr);
         } else {
-            // No IconPixmap was advertised (IconName-only items aren't
-            // supported in this pass -- see the project's known limitations).
+            // Neither an IconPixmap nor an IconName that the icon theme
+            // lookup (dbus/icon_theme.c) could resolve.
             // The reference QML's IconImage has no equivalent "missing icon"
             // fallback to mirror here, so this is an intentional, minimal
             // addition: a muted placeholder square rather than a blank gap.

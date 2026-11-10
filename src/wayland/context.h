@@ -56,6 +56,8 @@ struct AppContext {
     struct wl_seat *seat;
     struct zwlr_layer_shell_v1 *layer_shell;
     struct wp_viewporter *viewporter; // optional: NULL if the compositor lacks it
+    struct wl_subcompositor *subcompositor; // optional: NULL -> no spectrum bars
+                                            // (bar/strip_surface.c)
 
     struct wl_pointer *pointer;
 

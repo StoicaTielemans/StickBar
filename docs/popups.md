@@ -65,6 +65,11 @@ Shared by all of them; a module's own section only records what differs.
   Destroy-and-recreate is the same path every popup open already uses. The mixer,
   device and media popups do this when their rows change; the rest are a fixed size
   while open.
+- **Animation goes on a subsurface, not into the popup**: the media dropdown's
+  spectrum is a `bar/strip_surface.c` child of the popup surface, so the popup
+  itself still only repaints on discrete changes. When a popup surface is
+  recreated (height change), its strip must be destroyed first and recreated on
+  the new one.
 - **Live vs. snapshot**: audio and media re-read their always-current local cache on
   every update while open (`*_refresh_if_open()`, a no-op when closed), with fixed
   content widths (340px audio, 360px media) so only the height can change. The tray

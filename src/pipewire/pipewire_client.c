@@ -3,9 +3,12 @@
 #include <pipewire/pipewire.h>
 #include <spa/utils/dict.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/eventfd.h>
 #include <unistd.h>
+
+#include "visualizer/visualizer.h" // VISUALIZER_NODE_NAME
 
 // Fixed-size, matching this project's existing convention (audio/pulse_client.c's
 // MAX_PULSE_NODES, dbus/sni_registry.c's MAX_TRAY_ITEMS) of a bounded array over
@@ -14,6 +17,9 @@
 // 256 is generous headroom for both tables without being unbounded.
 #define MAX_PW_NODES 256
 #define MAX_PW_LINKS 256
+// Client objects (one per connection: apps, pipewire-pulse's per-app clients,
+// the session manager, ...) -- far fewer than nodes.
+#define MAX_PW_CLIENTS 128
 
 typedef struct {
     bool in_use;
@@ -21,11 +27,20 @@ typedef struct {
     char media_class[64];
     char display_name[128];
 
-    // Only meaningful when is_tracked_stream is true (Stream/Input/Audio or
-    // Stream/Input/Video) -- every other node (sinks, sources, filters, ...)
-    // is still tracked (its media_class is needed as a possible *link
-    // source* for classify-webcam-vs-screenshare below) but never bound, so
-    // `running`/`proxy` stay at their zeroed defaults for it.
+    // From the registry global's props: object.serial (what a capture
+    // stream's target.object names) and the owning client's global id. Used
+    // for Stream/Output/Audio nodes, to find a media player's own playback
+    // stream (pipewire_find_playback_for_pid()).
+    uint32_t serial;
+    uint32_t client_id;
+
+    // Only meaningful when is_tracked_stream is true (Stream/Input/Audio,
+    // Stream/Input/Video, or Stream/Output/Audio) -- every other node (sinks,
+    // sources, filters, ...) is still tracked (its media_class is needed as a
+    // possible *link source* for classify-webcam-vs-screenshare below) but
+    // never bound, so `running`/`proxy` stay at their zeroed defaults for it.
+    // The privacy accessors below match Stream/Input/* by name, so tracking
+    // playback streams here never shows up in the privacy indicator.
     bool is_tracked_stream;
     bool running;
     struct pw_proxy *proxy;
@@ -39,6 +54,20 @@ typedef struct {
     uint32_t input_node_id;
 } PwLink;
 
+// A client's process id, for matching playback streams to MPRIS players.
+// The registry global only carries pipewire.sec.pid -- the *connecting*
+// process, which for everything going through pipewire-pulse (browsers,
+// Steam, ...) is pipewire-pulse itself (seen live: all such clients showed
+// the same daemon pid). The real app pid is application.process.id, which
+// only the bound client's info carries, so every client is bound for that.
+typedef struct {
+    bool in_use;
+    uint32_t id;
+    int pid; // application.process.id if known, else pipewire.sec.pid, else 0
+    struct pw_proxy *proxy;
+    struct spa_hook proxy_listener;
+} PwClient;
+
 static struct pw_thread_loop *g_loop = NULL;
 static struct pw_context *g_context = NULL;
 static struct pw_core *g_core = NULL;
@@ -47,6 +76,7 @@ static struct spa_hook g_registry_listener;
 static int g_notify_fd = -1;
 
 static PwNode g_nodes[MAX_PW_NODES];
+static PwClient g_clients[MAX_PW_CLIENTS];
 static PwLink g_links[MAX_PW_LINKS];
 
 // Wakes up the main epoll loop to re-read the cache and redraw. Safe to call
@@ -142,6 +172,46 @@ static const struct pw_node_events g_node_events = {
     .info = node_info_cb,
 };
 
+static void client_info_cb(void *data, const struct pw_client_info *info) {
+    PwClient *client = data;
+    if (!info || !info->props) {
+        return;
+    }
+    const char *pid = spa_dict_lookup(info->props, PW_KEY_APP_PROCESS_ID);
+    if (pid && pid[0]) {
+        client->pid = atoi(pid);
+        notify_dirty(); // a stream may now match a player
+    }
+}
+
+static const struct pw_client_events g_client_events = {
+    .version = PW_VERSION_CLIENT_EVENTS,
+    .info = client_info_cb,
+};
+
+static void handle_client_global(uint32_t id, const struct spa_dict *props) {
+    PwClient *client = NULL;
+    for (int i = 0; i < MAX_PW_CLIENTS; i++) {
+        if (!g_clients[i].in_use) {
+            client = &g_clients[i];
+            break;
+        }
+    }
+    if (!client) {
+        return; // only costs a possible player<->stream match
+    }
+    memset(client, 0, sizeof(*client));
+    client->in_use = true;
+    client->id = id;
+    const char *sec_pid = props ? spa_dict_lookup(props, PW_KEY_SEC_PID) : NULL;
+    client->pid = sec_pid ? atoi(sec_pid) : 0; // until the info arrives
+    struct pw_proxy *proxy = pw_registry_bind(g_registry, id, PW_TYPE_INTERFACE_Client, PW_VERSION_CLIENT, 0);
+    if (proxy) {
+        client->proxy = proxy;
+        pw_client_add_listener((struct pw_client *)proxy, &client->proxy_listener, &g_client_events, client);
+    }
+}
+
 static void handle_node_global(uint32_t id, const struct spa_dict *props) {
     const char *media_class = props ? spa_dict_lookup(props, PW_KEY_MEDIA_CLASS) : NULL;
 
@@ -156,14 +226,28 @@ static void handle_node_global(uint32_t id, const struct spa_dict *props) {
     node->id = id;
     snprintf(node->media_class, sizeof(node->media_class), "%s", media_class ? media_class : "");
     resolve_display_name(props, node->display_name, sizeof(node->display_name));
+    const char *serial = props ? spa_dict_lookup(props, PW_KEY_OBJECT_SERIAL) : NULL;
+    const char *client_id = props ? spa_dict_lookup(props, PW_KEY_CLIENT_ID) : NULL;
+    node->serial = serial ? (uint32_t)strtoul(serial, NULL, 10) : 0;
+    node->client_id = client_id ? (uint32_t)strtoul(client_id, NULL, 10) : 0;
 
     // Only Stream/Input/{Audio,Video} nodes need their live running state
     // watched -- everything else (sinks, real device source nodes used only
     // as a link's *source* for the webcam/screen-share classification below,
     // filters, ...) just needs its media_class cached, never bound.
-    bool is_audio_input = strcmp(node->media_class, "Stream/Input/Audio") == 0;
+    //
+    // The bar's own media visualizer (visualizer/visualizer.c) is a
+    // Stream/Input/Audio node too -- it captures the default sink's monitor
+    // whenever something plays. Left tracked, the privacy box would show a
+    // mic icon every time music plays, naming stickBar itself; it's still
+    // kept in the table (harmless, and it keeps link lookups uniform), just
+    // never counted as an active stream.
+    const char *node_name = props ? spa_dict_lookup(props, PW_KEY_NODE_NAME) : NULL;
+    bool is_own_visualizer = node_name && strcmp(node_name, VISUALIZER_NODE_NAME) == 0;
+    bool is_audio_input = !is_own_visualizer && strcmp(node->media_class, "Stream/Input/Audio") == 0;
     bool is_video_input = strcmp(node->media_class, "Stream/Input/Video") == 0;
-    if (is_audio_input || is_video_input) {
+    bool is_audio_output = strcmp(node->media_class, "Stream/Output/Audio") == 0;
+    if (is_audio_input || is_video_input || is_audio_output) {
         node->is_tracked_stream = true;
         struct pw_proxy *proxy = pw_registry_bind(g_registry, id, PW_TYPE_INTERFACE_Node, PW_VERSION_NODE, 0);
         if (proxy) {
@@ -209,6 +293,8 @@ static void registry_event_global(void *data, uint32_t id, uint32_t permissions,
         handle_node_global(id, props);
     } else if (strcmp(type, PW_TYPE_INTERFACE_Link) == 0) {
         handle_link_global(id, props);
+    } else if (strcmp(type, PW_TYPE_INTERFACE_Client) == 0) {
+        handle_client_global(id, props);
     }
 }
 
@@ -228,6 +314,15 @@ static void registry_event_global_remove(void *data, uint32_t id) {
         if (g_links[i].in_use && g_links[i].id == id) {
             memset(&g_links[i], 0, sizeof(g_links[i]));
             notify_dirty();
+            return;
+        }
+    }
+    for (int i = 0; i < MAX_PW_CLIENTS; i++) {
+        if (g_clients[i].in_use && g_clients[i].id == id) {
+            if (g_clients[i].proxy) {
+                pw_proxy_destroy(g_clients[i].proxy);
+            }
+            memset(&g_clients[i], 0, sizeof(g_clients[i]));
             return;
         }
     }
@@ -346,8 +441,14 @@ void pipewire_client_shutdown(void) {
                 pw_proxy_destroy(g_nodes[i].proxy);
             }
         }
+        for (int i = 0; i < MAX_PW_CLIENTS; i++) {
+            if (g_clients[i].in_use && g_clients[i].proxy) {
+                pw_proxy_destroy(g_clients[i].proxy);
+            }
+        }
         memset(g_nodes, 0, sizeof(g_nodes));
         memset(g_links, 0, sizeof(g_links));
+        memset(g_clients, 0, sizeof(g_clients));
         if (g_core) {
             pw_core_disconnect(g_core);
             g_core = NULL;
@@ -482,5 +583,83 @@ bool pipewire_client_entry(int index, PrivacyCategory *category_out, char *app_n
         seen++;
     }
     pw_thread_loop_unlock(g_loop);
+    return found;
+}
+
+// --- Player <-> playback stream matching ---
+
+// Whether `pid` is `ancestor` or one of its descendants, by walking PPid: in
+// /proc/<pid>/status. Browsers play audio from a child process (Chromium's
+// audio service, a Firefox content process), while their MPRIS name is owned
+// by the main process -- so an exact pid match alone would miss them. Bounded
+// depth: real process trees are shallow, and it guards against a loop.
+static bool is_same_or_descendant(int pid, int ancestor) {
+    for (int depth = 0; depth < 16 && pid > 1; depth++) {
+        if (pid == ancestor) {
+            return true;
+        }
+        char path[64], line[128];
+        snprintf(path, sizeof(path), "/proc/%d/status", pid);
+        FILE *f = fopen(path, "re");
+        if (!f) {
+            return false;
+        }
+        int ppid = 0;
+        while (fgets(line, sizeof(line), f)) {
+            if (sscanf(line, "PPid: %d", &ppid) == 1) {
+                break;
+            }
+        }
+        fclose(f);
+        pid = ppid;
+    }
+    return false;
+}
+
+bool pipewire_find_playback_for_pid(int pid, uint32_t *serial_out) {
+    if (!g_loop || pid <= 0) {
+        return false;
+    }
+    // Snapshot the candidates under the lock; the /proc walk happens outside
+    // it so the PipeWire thread isn't held up by file reads.
+    struct { uint32_t serial; int pid; bool running; } cand[32];
+    int n = 0;
+    pw_thread_loop_lock(g_loop);
+    for (int i = 0; i < MAX_PW_NODES && n < (int)(sizeof(cand) / sizeof(cand[0])); i++) {
+        PwNode *node = &g_nodes[i];
+        if (!node->in_use || node->serial == 0 || strcmp(node->media_class, "Stream/Output/Audio") != 0) {
+            continue;
+        }
+        int client_pid = 0;
+        for (int c = 0; c < MAX_PW_CLIENTS; c++) {
+            if (g_clients[c].in_use && g_clients[c].id == node->client_id) {
+                client_pid = g_clients[c].pid;
+                break;
+            }
+        }
+        if (client_pid > 0) {
+            cand[n].serial = node->serial;
+            cand[n].pid = client_pid;
+            cand[n].running = node->running;
+            n++;
+        }
+    }
+    pw_thread_loop_unlock(g_loop);
+
+    // An app can hold several playback streams (Spotify keeps an idle one;
+    // a browser has one per playing tab) -- prefer one that's running.
+    bool found = false;
+    for (int i = 0; i < n; i++) {
+        if (!is_same_or_descendant(cand[i].pid, pid)) {
+            continue;
+        }
+        if (!found || cand[i].running) {
+            *serial_out = cand[i].serial;
+            found = true;
+            if (cand[i].running) {
+                break;
+            }
+        }
+    }
     return found;
 }

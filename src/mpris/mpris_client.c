@@ -147,6 +147,7 @@ MprisPlayer *mpris_active_player(void) {
 }
 
 const char *mpris_player_title(MprisPlayer *player) { return player->title; }
+int mpris_player_pid(MprisPlayer *player) { return (int)player->pid; }
 const char *mpris_player_artist(MprisPlayer *player) { return player->artist; }
 const char *mpris_player_identity(MprisPlayer *player) { return player->identity; }
 

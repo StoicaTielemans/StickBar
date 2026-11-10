@@ -56,6 +56,15 @@ and `modules/privacy/privacy.c` + `privacy_info_popup.c` are the bar-facing half
   re-check first** — most likely fix would be adjusting which `media.class`
   prefix (or which other property) actually distinguishes a portal-created
   screen-capture producer on the machine where it's wrong.
+- **The bar's own media visualizer is skipped** (matched by `node.name` ==
+  `VISUALIZER_NODE_NAME`, shared by all its capture streams): each graph in the
+  media dropdown captures a player's playback stream as a running
+  `Stream/Input/Audio` node, which would otherwise show a mic icon naming
+  stickBar whenever the dropdown is open during playback. See [media.md](media.md).
+- **Playback streams (`Stream/Output/Audio`) and Client objects are tracked too**,
+  only for the media visualizer's player <-> stream matching
+  (`pipewire_find_playback_for_pid()`); every privacy accessor matches
+  `Stream/Input/*` by name, so they never count here.
 - **Accent color is `COLORS.maroon`** — confirmed via a full-codebase grep that
   `rosewater`, `flamingo`, `maroon`, and `lavender` were the only Catppuccin
   Mocha palette entries no other module had claimed yet at the time this was

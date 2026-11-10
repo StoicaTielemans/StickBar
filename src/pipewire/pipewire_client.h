@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 // Connects directly to PipeWire (not via the PulseAudio-compatible protocol
 // audio/pulse_client.c uses -- volume/mic *control* has no equivalent need to
@@ -53,6 +54,14 @@ bool pipewire_client_any_active(void);
 // Flattened list of every active stream across all three categories, for the
 // right-click dropdown. 0 <= index < pipewire_client_entry_count().
 int pipewire_client_entry_count(void);
+
+// The object.serial of a playback stream (Stream/Output/Audio node) belonging
+// to process `pid` or one of its child processes -- a media player's own
+// audio, for its graph in the media dropdown (visualizer/visualizer.c captures
+// it). Prefers a running stream when the app has several. False if none.
+// Reads /proc, so call it on changes (popup open, PipeWire graph changes),
+// not per frame.
+bool pipewire_find_playback_for_pid(int pid, uint32_t *serial_out);
 bool pipewire_client_entry(int index, PrivacyCategory *category_out,
                             char *app_name_out, size_t app_name_out_len);
 

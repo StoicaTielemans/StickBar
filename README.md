@@ -42,8 +42,10 @@ cairo/pangocairo — no GTK, no other UI toolkit.
   `nvidia-smi`) — the module just shows `--` without one.
 - **Media player** — shows whatever's currently playing over MPRIS (Spotify,
   browsers, VLC, mpv, etc.), click to play/pause, right-click for a dropdown
-  with a card per open player: title, artist, a playback timeline and
-  prev/play-pause/next buttons.
+  with a card per open player: title, artist, a live stereo spectrum of that
+  player's own audio (braille dots like the network graph, left channel up,
+  right channel down), a playback timeline and prev/play-pause/next buttons.
+  The spectrum only runs while the dropdown is open — closed, it costs nothing.
 - **Network / Wi-Fi** — the interface currently holding your default route,
   live upload/download rate, right-click for a dropdown with a braille
   download/upload graph and IP/gateway/MAC/DNS details.
@@ -99,16 +101,20 @@ Debian/Ubuntu) plus a Nerd Font of your choice from
 ## Building & running
 
 ```sh
-meson setup build
-meson compile -C build
-./build/stickBar
+meson setup build-release --buildtype=release
+meson compile -C build-release
+./build-release/stickBar
 ```
+
+That's the optimized build to run day to day. For development there's also a
+debug build in `build/` (`meson setup build`, no optimization, easier to step
+through in a debugger), which is what the tests run against.
 
 There's no install step yet — run the built binary directly, or wire it into
 your Hyprland config's `exec-once` once you're happy with it:
 
 ```
-exec-once = /path/to/StickBar/build/stickBar
+exec-once = /path/to/StickBar/build-release/stickBar
 ```
 
 It's safe to run alongside another bar (like the Quickshell one it's modeled

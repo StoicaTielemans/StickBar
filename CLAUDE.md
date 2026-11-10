@@ -14,10 +14,15 @@ module, rather than guessing at parity).
 
 ## Build and test
 
+Two build directories, and **every build compiles both** (user's standing rule):
+`build/` is the debug build (`-O0`, what the tests run against), `build-release/`
+is the production build (`--buildtype=release`, what the user should run day to day).
+
 ```sh
-meson setup build      # first time only
-meson compile -C build
-./build/stickBar
+meson setup build                                   # first time only
+meson setup build-release --buildtype=release       # first time only
+meson compile -C build && meson compile -C build-release
+./build-release/stickBar
 ```
 
 ```sh
@@ -60,7 +65,7 @@ Modules:
 | [`docs/modules/audio.md`](docs/modules/audio.md) | Volume, mic, device dropdown, mixer, scrolling | `audio/`, `modules/volume/`, `modules/mic/` |
 | [`docs/modules/sysmon.md`](docs/modules/sysmon.md) | CPU, GPU, memory, NVML | `sysmon/`, `modules/cpu/`, `modules/gpu/`, `modules/mem/` |
 | [`docs/modules/clock.md`](docs/modules/clock.md) | The year calendar | `modules/clock/` |
-| [`docs/modules/media.md`](docs/modules/media.md) | MPRIS and the media widget | `mpris/`, `modules/media/` |
+| [`docs/modules/media.md`](docs/modules/media.md) | MPRIS, the media widget, its spectrum visualizer | `mpris/`, `modules/media/`, `visualizer/` |
 | [`docs/modules/network.md`](docs/modules/network.md) | Network status, rates, its graph | `network/`, `modules/network/`, `render/braille_graph.c` |
 | [`docs/modules/privacy.md`](docs/modules/privacy.md) | Mic/webcam/screen-share indicator, PipeWire | `pipewire/`, `modules/privacy/` |
 | [`docs/modules/power-menu.md`](docs/modules/power-menu.md) | Power menu, Arch logo, SIGUSR1 | `modules/powermenu/` |

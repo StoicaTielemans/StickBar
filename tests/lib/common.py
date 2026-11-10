@@ -46,11 +46,18 @@ def require_session():
         skip("needs a running Wayland session (WAYLAND_DISPLAY / XDG_RUNTIME_DIR unset)")
 
 
+# Test bars run without the media visualizer unless a test asks for it (only
+# test_visualizer.py does, by overriding this to ""): it would otherwise
+# capture whatever the user is playing, and its ~30fps repaints make commit
+# counts and timings depend on that (test_redraw.py, test_clock_alignment.py).
+NO_VISUALIZER = {"STICKBAR_TEST_NO_VISUALIZER": "1"}
+
+
 def start_bar(binary, stderr_path=None, env_extra=None, wayland_debug=False):
     """Starts a bar instance directly (not via `timeout`/a shell, so the Popen's
     pid really is the bar's own pid -- watching a wrapper's pid instead was a
     real mistake made while writing these)."""
-    env = dict(os.environ)
+    env = dict(os.environ, **NO_VISUALIZER)
     if wayland_debug:
         env["WAYLAND_DEBUG"] = "1"
     if env_extra:
@@ -162,7 +169,7 @@ class ControlledBar:
 
     def __init__(self, binary, output=None, wayland_debug=False, stderr_path=None, env_extra=None):
         self.output = output or pick_test_output()
-        env = dict(os.environ, STICKBAR_TEST_CONTROL="1", STICKBAR_TEST_OUTPUT=self.output)
+        env = dict(os.environ, STICKBAR_TEST_CONTROL="1", STICKBAR_TEST_OUTPUT=self.output, **NO_VISUALIZER)
         if env_extra:
             env.update(env_extra)
         if wayland_debug:

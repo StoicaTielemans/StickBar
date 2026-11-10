@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Fake MPRIS player for tests/test_media.py (run as a subprocess).
 
-    python3 fake_mpris.py LOGFILE LIFETIME_SECONDS
+    python3 fake_mpris.py LOGFILE LIFETIME_SECONDS [NAME]
 
-Owns org.mpris.MediaPlayer2.stickbartest (Identity "StickbarTestPlayer"),
+Owns org.mpris.MediaPlayer2.stickbartest (Identity "StickbarTestPlayer"), or
+with NAME, org.mpris.MediaPlayer2.stickbartest_NAME (Identity
+"StickbarTestPlayer-NAME") -- several can run at once. Plays no audio. It
 starts Paused with a fixed track, writes "owned" and then every method call
 it receives to LOGFILE (one per line), toggles PlaybackStatus on PlayPause
 (emitting PropertiesChanged, as a real player does), and exits after
@@ -16,6 +18,9 @@ from gi.repository import Gio, GLib
 LOG = open(sys.argv[1], "a", buffering=1)
 LIFETIME = int(sys.argv[2]) if len(sys.argv) > 2 else 60
 PATH = "/org/mpris/MediaPlayer2"
+NAME = sys.argv[3] if len(sys.argv) > 3 else ""
+BUS_NAME = "org.mpris.MediaPlayer2.stickbartest" + (f"_{NAME}" if NAME else "")
+IDENTITY = "StickbarTestPlayer" + (f"-{NAME}" if NAME else "")
 
 XML = """
 <node>
@@ -40,7 +45,7 @@ conn_ref = {}
 
 def props(iface):
     if iface == "org.mpris.MediaPlayer2":
-        return {"Identity": GLib.Variant("s", "StickbarTestPlayer")}
+        return {"Identity": GLib.Variant("s", IDENTITY)}
     return {
         "PlaybackStatus": GLib.Variant("s", state["status"]),
         "Metadata": GLib.Variant("a{sv}", {
@@ -80,7 +85,6 @@ def on_name(conn, name):
 
 
 loop = GLib.MainLoop()
-Gio.bus_own_name(Gio.BusType.SESSION, "org.mpris.MediaPlayer2.stickbartest", Gio.BusNameOwnerFlags.NONE,
-                 on_bus, on_name, None)
+Gio.bus_own_name(Gio.BusType.SESSION, BUS_NAME, Gio.BusNameOwnerFlags.NONE, on_bus, on_name, None)
 GLib.timeout_add_seconds(LIFETIME, loop.quit)
 loop.run()

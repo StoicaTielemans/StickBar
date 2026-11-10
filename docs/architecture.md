@@ -45,6 +45,9 @@ stickBar/
     │                             frame-callback throttling), created per-open and
     │                             destroyed on close -- every dropdown, click-catcher
     │                             and the power menu (see docs/popups.md)
+    │   └── strip_surface.c       small desync wl_subsurface drawn on its own --
+    │                             the media dropdown's spectrum graphs (the only
+    │                             continuous animation)
     ├── render/
     │   ├── render.c              top-level per-output draw dispatch + background
     │   ├── module_box.c          shared cairo/pango helpers: bordered box chrome,
@@ -52,7 +55,8 @@ stickBar/
     │   │                         tray's menu rows) -- used by every widget
     │   ├── braille_graph.c       btop-style braille-dot history graph (pure
     │   │                         cairo), used by the network/CPU/GPU/memory
-    │                             dropdowns
+    │   │                         dropdowns; plus a lit-sprite + column-rect path
+    │                             for the animated media spectrum
     │   └── meter_bar.c           segmented "how full" bar (btop's ▰▰▱▱ meters),
     │                             pure cairo, used by the CPU/GPU/memory dropdowns
     ├── hyprland/
@@ -97,7 +101,15 @@ stickBar/
     │   └── network_client.c      /proc, /sys, resolv.conf and getifaddrs() reads
     ├── pipewire/                 stream-graph monitor for the privacy module (see
     │                             docs/modules/privacy.md)
-    │   └── pipewire_client.c     pw_thread_loop, node/link tables, eventfd notification
+    │   └── pipewire_client.c     pw_thread_loop, node/link/client tables, eventfd
+    │                             notification, player <-> playback stream matching
+    ├── visualizer/               per-player stereo spectrum graphs in the media
+    │                             dropdown (see docs/modules/media.md); runs only
+    │                             while it's open
+    │   ├── visualizer.c          up to 4 pw_stream capture slots (a player's own
+    │   │                         stream, or the output mix), 15fps timerfd,
+    │   │                         smoothed levels + peaks per channel
+    │   └── spectrum.c            pure FFT + log-spaced bands, no PipeWire types
     ├── eq/                       DAC EQ plumbing for the EQ module (see
     │                             docs/modules/eq.md), on its own inotify fd
     │   ├── eq_state.c            state.json load + inotify watch + background
@@ -189,6 +201,11 @@ but a frame only reaches the compositor if it actually differs:
   there's no previous frame, or the clock box came out a different width (the
   boxes to its left would need to move). Any full redraw request wins over a
   clock-only one.
+- **Continuous animation goes on a subsurface, not through this path**: the
+  bars used to be on the bar too, and repainting them inside it (copy `prev` ->
+  draw -> diff -> commit, like the clock) cost about twice what a separate
+  `bar/strip_surface.c` subsurface does. The spectrum now lives only in the media
+  dropdown -- see [modules/media.md](modules/media.md).
 - **The clock timer is aligned to wall-clock seconds** (`arm_clock_timer()` in
   `main.c`): a `CLOCK_REALTIME` timerfd armed with `TFD_TIMER_ABSTIME` for the
   next whole second, 1s interval. `TFD_TIMER_CANCEL_ON_SET` makes a

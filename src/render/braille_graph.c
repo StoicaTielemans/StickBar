@@ -98,3 +98,45 @@ void braille_graph_draw(cairo_t *cr, double x, double y, int cells_w, int cells_
     }
     cairo_restore(cr);
 }
+
+// --- Sprite path ---
+
+int braille_graph_rows(int cells_h) {
+    return cells_h * DOTS_Y;
+}
+
+cairo_surface_t *braille_graph_render_lit(int cells_w, int cells_h, bool grow_up, const Color gradient[3]) {
+    int w = (int)ceil(braille_graph_width(cells_w)), h = (int)ceil(braille_graph_height(cells_h));
+    cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w > 0 ? w : 1, h > 0 ? h : 1);
+    cairo_t *cr = cairo_create(surf);
+    int columns = cells_w * DOTS_X, rows = cells_h * DOTS_Y;
+    for (int r = 0; r < rows; r++) {
+        double from_base = dot_offset(r, DOTS_Y, cell_h());
+        double cy = grow_up ? h - from_base : from_base;
+        Color c = gradient_at(gradient, rows > 1 ? (double)r / (rows - 1) : 0.0);
+        cairo_set_source_rgba(cr, c.r, c.g, c.b, c.a);
+        for (int col = 0; col < columns; col++) {
+            cairo_new_sub_path(cr);
+            cairo_arc(cr, dot_offset(col, DOTS_X, cell_w()), cy, DOT_RADIUS, 0, 2 * M_PI);
+        }
+        cairo_fill(cr); // one fill per row: a row shares its colour
+    }
+    cairo_destroy(cr);
+    return surf;
+}
+
+void braille_graph_column_rect(int cells_h, int col, int row_from, int row_to, bool grow_up, int *x, int *y,
+                               int *w, int *h) {
+    double height = braille_graph_height(cells_h);
+    double cx = dot_offset(col, DOTS_X, cell_w());
+    // Rows' extents along the axis from the base edge: each dot's centre
+    // +-DOT_PITCH/2, so the band covers whole dots and none of the next. Dot
+    // centres sit on half pixels with a whole-pixel pitch, so every edge here
+    // is a whole pixel.
+    double near = dot_offset(row_from, DOTS_Y, cell_h()) - DOT_PITCH / 2.0;
+    double far = dot_offset(row_to - 1, DOTS_Y, cell_h()) + DOT_PITCH / 2.0;
+    *x = (int)lround(cx - DOT_PITCH / 2.0);
+    *y = (int)lround(grow_up ? height - far : near);
+    *w = (int)DOT_PITCH;
+    *h = (int)lround(far - near);
+}

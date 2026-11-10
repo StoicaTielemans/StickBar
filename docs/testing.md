@@ -28,7 +28,9 @@ Hyprland IPC failures.
   is, from small hooks in those popups), `snapshot <png>` (re-runs the open
   popup's draw callback into an image -- exactly what was painted, no screen
   capture), `refresh <mem|cpu|cpu-reset|gpu|poll>` and `dump
-  <mem|cpu|gpu|net|audio|media|eq>`. Injected input goes through
+  <mem|cpu|gpu|net|audio|media|eq|visualizer>`, `vis-tone <slot> <channel> <hz>`
+  (synthetic audio for a media-spectrum slot; only with
+  `STICKBAR_TEST_VISUALIZER_SYNTH`, see [modules/media.md](modules/media.md)). Injected input goes through
   `pointer_dispatch_button()`/`_motion()`/`_scroll()` -- the same routing
   the wl_pointer listener uses -- so only the compositor's "which surface is
   under the cursor" step is skipped. `STICKBAR_TEST_OUTPUT=<name>` drops

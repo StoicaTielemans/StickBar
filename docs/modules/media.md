@@ -138,3 +138,99 @@ userdata pointer, `in_use`-gated iteration, `_count()`/`_get(index)` accessors).
 - **Deliberately out of scope**: no per-player volume/mute control (would need
   client-side mute-state bookkeeping like the reference's own `_mutedVolumes`, judged
   not essential for v1).
+
+## Spectrum visualizer
+
+No reference equivalent -- added per user request ("an audio wave thingy in the
+middle module"), then reshaped by several more: **only in the media dropdown**
+(not the bar, so a closed dropdown costs nothing), **one graph per player card**
+showing *that player's own* audio, drawn **like the network dropdown's graph**:
+braille dots (`render/braille_graph.c`), the **left channel rising** toward a
+centre line and the **right channel hanging** below it, one dot column per
+frequency band, soft faded ends.
+
+- **Layout** (`media_popup.c`): every card (up to `VISUALIZER_MAX_SOURCES` = 4)
+  gets the graph row, playing or not, so play/pause never changes the popup's
+  height. Panel = card inner width (340px), 41 braille cells = **82 dot columns
+  = 82 bands**, 4 cells = **16 dot rows per half**, a 5px centre gap with a 1px
+  `surface1` line (the network graph's `GRAPH_CENTER_GAP`). Colours by height:
+  **L** yellow -> peach -> red, **R** mauve -> pink -> red; a lone `text` dot
+  marks each column's recent peak (held 0.5s, then falling slower than the
+  column); the ends fade into the `mantle` panel over 28px.
+- **Runs only while the dropdown is open, and per card only while its player is
+  Playing.** `main.c` calls `media_popup_sync_visualizer()` once per loop
+  iteration, which calls `visualizer_set_source(slot, target, active)` per card;
+  a slot's stream is created the first time it's turned on and paused when
+  off. Closed dropdown: every slot off, levels zeroed, timer disarmed. Measured
+  (release, two players playing, dropdown closed): identical to a bar with the
+  visualizer disabled (0.13% / 0.20% for both).
+- **Each player's own stream** (`pipewire_find_playback_for_pid()` in
+  `pipewire/pipewire_client.c`): the MPRIS owner's pid (`mpris_player_pid()`) is
+  matched against each `Stream/Output/Audio` node's client's pid -- **or any of
+  that pid's ancestors** (`/proc/<pid>/status` `PPid:` walk), because browsers
+  play audio from a child process. The client pid has to come from the bound
+  client's info (`application.process.id`): the registry global only has
+  `pipewire.sec.pid`, which for everything going through pipewire-pulse is the
+  daemon's own pid (seen live: Steam, browsers, the bar's own libpulse client
+  all showed pid 1515). Prefers a running stream (Spotify keeps an idle one).
+  Re-resolved on open, when a card's player changes, and on every PipeWire graph
+  change (`media_popup_streams_changed()`), never per frame. No match -> the card
+  shows the default output's mix (`VISUALIZER_TARGET_MIX`, the sink monitor with
+  `stream.capture.sink`).
+- **Capture** (`visualizer/visualizer.c`): one `pw_thread_loop` + core, one
+  `pw_stream` per slot, stereo F32 FL/FR at 48kHz, `node.passive`. Per-app
+  streams set `target.object` to the node's `object.serial` **plus
+  `node.dont-fallback`/`node.dont-reconnect`**: without them, a target that's gone
+  (the app closed its stream between tracks) makes the session manager link a
+  capture stream to the default *source* -- the microphone.
+- **Analysis** (`visualizer/spectrum.c`, no PipeWire types): 4096-sample Hann
+  window (11.7Hz bins; 2048 left the bottom dozen of 82 log bands sharing bins),
+  as a half-size complex FFT over the samples packed in pairs plus an O(N)
+  untangling pass, precomputed twiddles. 82 log-spaced bands 50Hz-12kHz, peak
+  bin per band, dBFS with a +3dB/octave tilt around 500Hz, -62..-14dB -> 0..1.
+  Two FFTs per playing card per frame (L, R). Smoothing (fast attack, fixed
+  fall) and peak hold are derived from `VISUALIZER_FPS` (15, the user's pick).
+- **A Playing player doesn't mean audio is flowing.** Between tracks, or with a
+  stalled stream, PipeWire stops delivering buffers, which froze the graph
+  mid-pose. After 2 frames (~133ms) with no new samples the rings count as
+  silence.
+- **Drawing is memcpy, not cairo.** Three whole-panel images are rendered once
+  per open: the empty panel, the panel with every dot lit, and the same with
+  every dot in the peak colour, each with the fade baked in. A frame copies the
+  empty panel, then per column the lit rows' rectangle out of the lit image
+  (`braille_graph_column_rect()` gives it: dot centres on half pixels, 3px pitch,
+  so a column is an exact whole-pixel band), and the peak dot's out of the peak
+  image. Each graph is its own subsurface (`bar/strip_surface.c`, 340x129), so
+  the popup isn't touched; a frame where no dot changed isn't committed. The
+  popup also paints each graph under its subsurface (invisible) so `snapshot`
+  PNGs show it.
+- **Cost, dropdown open** (release, one output, synthetic noise players):
+  ~1.2-1.3% with one playing player, ~1.5-1.9% with two (an open dropdown
+  without graphs: ~0.3-0.5%). Per frame and playing card: analysis ~0.2ms, drawing
+  ~0.13ms; plus the capture thread (~0.15-0.2%) and the dropdown's existing 1s
+  full repaint (~2.4ms). How the drawing got there: per-dot antialiased arcs
+  (what the network graph's `braille_graph_draw()` does) would be thousands per
+  frame; per-column cairo fills from a sprite cost ~0.5ms/frame (call overhead,
+  not pixels); batched into one path ~0.36ms; plain memcpy from pre-composited
+  panels ~0.13ms. Earlier steps, while it was still bars: re-running the box's
+  Pango layout per frame cost ~7%; 30 -> 15fps; subsurfaces instead of repainting
+  inside the bar/popup; the real-input FFT.
+- **The privacy indicator ignores it**: every slot's node is a
+  `Stream/Input/Audio` named `VISUALIZER_NODE_NAME`, which `pipewire_client.c`
+  skips.
+- If PipeWire or `wl_subcompositor` is unavailable the dropdown has no graph
+  rows, laid out exactly as before.
+- **Tests never use real audio** (per user request): `test_visualizer.py` runs
+  the bar with `STICKBAR_TEST_VISUALIZER_SYNTH=1` -- no PipeWire connection, no
+  capture streams; an active slot analyses sine tones set over the test-control
+  channel (`vis-tone <slot> <channel> <hz>`), and everything from there on is
+  the real path. `STICKBAR_TEST_VISUALIZER_ONLY` limits capture to its fake
+  players. The flip side: player <-> stream matching, the capture itself and
+  the privacy filter aren't covered by tests -- they were checked live during
+  development: Spotify matched to its running stream by pid, the Helium
+  browser (Chromium-based) to its stream via the ancestor walk (a synthetic-mode
+  bar still resolves targets, so this needs no capture); and, in an earlier
+  version of the test that captured fake players' tones from a null sink,
+  child-process players matched, L/R tones landed in the right halves, and the
+  privacy icon stayed hidden. Every other test bar runs with the visualizer off
+  (`STICKBAR_TEST_NO_VISUALIZER=1`, `tests/lib/common.py`).

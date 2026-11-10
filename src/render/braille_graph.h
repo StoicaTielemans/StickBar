@@ -47,4 +47,33 @@ void braille_graph_draw(cairo_t *cr, double x, double y, int cells_w, int cells_
                         const double *samples, int n, double scale, bool grow_up,
                         const Color gradient[3]);
 
+// --- Sprite path, for graphs redrawn every frame (the media dropdown's
+// spectrum, 15fps) ---
+//
+// braille_graph_draw() fills one antialiased circle per lit dot -- fine for
+// the network graph's once-per-5s repaint, but up to thousands per frame for
+// an animated one. Instead, render every dot once, lit, into an image, and
+// per frame copy just the lit part of each column out of it: whole-pixel
+// rectangles (dot centres sit on half pixels with a 3px pitch, so a column is
+// exactly the 3px band around its centre). Same geometry and colours as
+// braille_graph_draw(), so the two look identical. The copying itself is the
+// caller's (modules/media/media_popup.c does it with memcpy: even batched
+// into one path per fill, cairo's per-call overhead cost more than the few
+// pixels moved).
+
+// A `braille_graph_width(cells_w)` x `braille_graph_height(cells_h)` image
+// with every dot lit, coloured by row like braille_graph_draw(); `grow_up`
+// picks which edge is level 0. Caller destroys it.
+cairo_surface_t *braille_graph_render_lit(int cells_w, int cells_h, bool grow_up, const Color gradient[3]);
+
+// Where dot rows [row_from, row_to) of column `col` are, graph-local whole
+// pixels (row_to > row_from): copying exactly this rectangle out of a
+// braille_graph_render_lit() image -- or out of a panel image with one
+// composited onto it -- lights those dots and nothing else.
+void braille_graph_column_rect(int cells_h, int col, int row_from, int row_to, bool grow_up, int *x, int *y,
+                               int *w, int *h);
+
+// Dot rows per column for a graph `cells_h` cells tall.
+int braille_graph_rows(int cells_h);
+
 #endif

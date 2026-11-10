@@ -31,6 +31,7 @@
 #include "modules/mem/mem_popup.h"
 #include "modules/network/network_info_popup.h"
 #include "pipewire/pipewire_client.h"
+#include "visualizer/visualizer.h"
 #include "sysmon/sysmon_client.h"
 #include "testing/test_control.h"
 #include "wayland/context.h"
@@ -334,6 +335,21 @@ int main(void) {
         }
     }
 
+    // Media visualizer (spectrum bars in the media box): optional, same
+    // "degrade gracefully" convention -- without it the media box just has no
+    // bars. Starts a thread, so it too must come after the sigprocmask() at
+    // the top of main(). Its timerfd is only armed while something plays.
+    bool visualizer_ok = visualizer_init();
+    int visualizer_fd = -1;
+    if (visualizer_ok) {
+        visualizer_fd = visualizer_timer_fd();
+        if (!event_loop_add_fd(epoll_fd, visualizer_fd, EPOLLIN)) {
+            visualizer_shutdown();
+            visualizer_ok = false;
+            visualizer_fd = -1;
+        }
+    }
+
     // DAC EQ (TRN Black Pearl): an optional module, same "degrade
     // gracefully" convention as everything above -- if the inotify watch
     // can't be set up, the EQ box still shows whatever state was loaded at
@@ -472,7 +488,21 @@ int main(void) {
                 // unconditional redraw here (rather than each module calling
                 // it granularly, the dbus_fd branch's approach) is correct.
                 pipewire_client_pump();
+                // Players' playback streams may have come or gone.
+                media_popup_streams_changed();
                 output_mark_all_dirty(&app);
+            } else if (visualizer_ok && fd == visualizer_fd) {
+                // Each graph lives on its own small subsurface in the media
+                // dropdown, so a frame never touches the popup's own pixels.
+                // A graph that can't show a new frame right now (the
+                // compositor hasn't presented its last one) isn't analysed
+                // this tick either.
+                uint32_t shown = 0, ready = 0;
+                media_popup_visualizer_status(&shown, &ready);
+                uint32_t changed = visualizer_pump(ready, shown);
+                if (changed) {
+                    media_popup_visualizer_frame(changed);
+                }
             } else if (eq_fd >= 0 && fd == eq_fd) {
                 // Fires on any write in ~/.cache/blackpearl-eq/; pump() only
                 // reports a change when state.json itself was (re)written and
@@ -499,6 +529,16 @@ int main(void) {
             wayland_dispatch_cancel(app.display);
         }
 
+        // The visualizer only captures for media-dropdown cards whose
+        // player is playing, while the dropdown is open -- closed, it costs
+        // nothing (streams paused, timer disarmed). That can change from
+        // several places (MPRIS signals on the D-Bus fd, clicks, players
+        // coming and going), so this syncs once per iteration; a no-op per
+        // slot unless its answer changed.
+        if (visualizer_ok) {
+            media_popup_sync_visualizer();
+        }
+
         if (hypr_broke) {
             hypr_events = reconnect_hypr_events(epoll_fd, hypr_events, hypr_fd);
             hypr_fd = hypr_events ? hyprland_events_fd(hypr_events) : -1;
@@ -520,6 +560,9 @@ int main(void) {
     }
     if (pipewire_ok) {
         pipewire_client_shutdown();
+    }
+    if (visualizer_ok) {
+        visualizer_shutdown();
     }
     if (eq_fd >= 0) {
         eq_state_shutdown();

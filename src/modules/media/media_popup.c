@@ -1,14 +1,20 @@
 #include "modules/media/media_popup.h"
 
 #include <ctype.h>
+#include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "bar/popup_surface.h"
+#include "bar/strip_surface.h"
 #include "config/glyphs.h"
 #include "modules/media/media.h"
+#include "pipewire/pipewire_client.h"
+#include "render/braille_graph.h"
 #include "render/meter_bar.h"
 #include "render/module_box.h"
+#include "visualizer/visualizer.h"
 
 // Sized generously (this machine has 2 monitors), matching the same
 // MAX_TRACKED_OUTPUTS convention used by every other popup in this project.
@@ -46,6 +52,26 @@
 #define COL_GAP 10.0
 #define TEXT_BUF_SIZE 600
 
+// Spectrum graph, one per player card (visualizer/visualizer.c captures each
+// player's own audio, stereo): drawn like the network dropdown's graph -- braille
+// dots (render/braille_graph.c), the left channel rising toward a centre line,
+// the right channel hanging below it, each half its own colour family, on a
+// dark rounded panel whose left and right ends fade out. One dot column per
+// frequency band (82 = 41 cells x 2) and 16 dot rows per half. Animated on its
+// own subsurface (bar/strip_surface.c) from cached sprites -- see
+// paint_graph() and media_popup_visualizer_frame().
+#define VIS_ROW_GAP 10.0
+#define VIS_CELLS 41          // braille cells across: 41 x 8px = 328px of the 340px panel
+#define VIS_CELLS_H 4         // per half, like network_info_popup.c's GRAPH_CELLS_H
+#define VIS_PAD_Y 6.0         // panel edge -> graph
+#define VIS_CENTER_GAP 5.0    // between the halves; the centre line runs through it
+                              // (network_info_popup.c's GRAPH_CENTER_GAP)
+#define VIS_RADIUS 4.0
+#define VIS_FADE_W 28.0       // soft left/right ends
+#define VIS_HALF_H (VIS_CELLS_H * 14.0) // braille_graph_height(VIS_CELLS_H): 14px cells
+#define VIS_ROW_H (2.0 * VIS_PAD_Y + 2.0 * VIS_HALF_H + VIS_CENTER_GAP) // whole panel
+_Static_assert(SPECTRUM_BAR_COUNT == VIS_CELLS * 2, "one spectrum band per braille dot column");
+
 // Prev/play-pause/next glyph size -- deliberately larger than the text so
 // the controls read as buttons. Local tuning, not a shared FONT token.
 #define CONTROL_ICON_PX 22
@@ -58,10 +84,31 @@
 
 enum { BUTTON_PREV, BUTTON_PLAYPAUSE, BUTTON_NEXT, BUTTON_COUNT };
 
+// One frame of a spectrum graph in dot rows, per channel: how many dots each
+// column has lit, and the row of its peak dot (0 = none). Compared whole with
+// memcmp() -- a frame where no dot changed isn't committed at all.
+typedef struct {
+    int level[VISUALIZER_CHANNELS][SPECTRUM_BAR_COUNT];
+    int peak[VISUALIZER_CHANNELS][SPECTRUM_BAR_COUNT];
+} VisFrame;
+
+// Per card (card index = visualizer slot, so only the first
+// VISUALIZER_MAX_SOURCES cards get a graph): its strip subsurface, the frame it
+// last drew, and which playback stream it captures.
+typedef struct {
+    StripSurface *strip;
+    bool shown;
+    VisFrame drawn;
+    MprisPlayer *player; // whose stream `target` was resolved for
+    uint32_t target;     // object.serial of its playback stream, or VISUALIZER_TARGET_MIX
+} CardGraph;
+
 typedef struct {
     MprisPlayer *player;
     double y, h;         // card rect, relative to the popup (x is always OUTER_MARGIN)
     bool has_artist;     // artist/album line shown (omitted if both are empty)
+    bool has_vis;        // spectrum graph shown (first VISUALIZER_MAX_SOURCES cards, if it runs)
+    double vis_y;        // top of the graph panel, when has_vis
     double buttons_y;    // top of the control chips
 } CardLayout;
 
@@ -71,6 +118,10 @@ typedef struct {
     Output *output;
     PopupSurface *popup;
     int top_margin, left_margin; // kept from open time, for recreating the surface
+
+    // One per graph-carrying card; strips are children of `popup` and are
+    // recreated with it.
+    CardGraph graphs[VISUALIZER_MAX_SOURCES];
 
     CardLayout cards[MAX_MEDIA_ROWS];
     int card_count;
@@ -211,6 +262,14 @@ static void compute_layout(void) {
         if (card->has_artist) {
             h += ARTIST_H;
         }
+        // Every card gets the row whether or not its player is playing, so
+        // play/pause never changes the popup's height (which would mean
+        // recreating its surface, see relayout_and_redraw()).
+        card->has_vis = visualizer_available() && i < VISUALIZER_MAX_SOURCES;
+        if (card->has_vis) {
+            card->vis_y = y + h + VIS_ROW_GAP;
+            h += VIS_ROW_GAP + VIS_ROW_H;
+        }
         h += TIMELINE_GAP + TIMELINE_ROW_H + CONTROLS_GAP;
         card->buttons_y = y + h;
         h += BUTTON_H + CARD_PAD;
@@ -304,6 +363,200 @@ static void paint_button(cairo_t *cr, int card_index, int button, double y) {
                                   enabled ? g_popup.accent : COLORS.overlay0);
 }
 
+static double vis_panel_x(void) { return inner_x(); } // = the strip subsurface's left edge
+static double vis_graph_x(void) { return floor((inner_w() - braille_graph_width(VIS_CELLS)) / 2.0); } // panel-local
+static double vis_top_y(void) { return VIS_PAD_Y; }                                  // L half, panel-local
+static double vis_bottom_y(void) { return VIS_PAD_Y + VIS_HALF_H + VIS_CENTER_GAP; } // R half
+
+static void compute_frame(int slot, VisFrame *out) {
+    int rows = braille_graph_rows(VIS_CELLS_H);
+    for (int ch = 0; ch < VISUALIZER_CHANNELS; ch++) {
+        const float *levels = visualizer_levels(slot, ch);
+        const float *peaks = visualizer_peaks(slot, ch);
+        for (int i = 0; i < SPECTRUM_BAR_COUNT; i++) {
+            out->level[ch][i] = (int)lround(levels[i] * rows);
+            int peak = (int)lround(peaks[i] * rows);
+            // A peak dot only where it sits clear of the column; resting on
+            // top it would just look like one more lit dot.
+            out->peak[ch][i] = peak > out->level[ch][i] ? peak : 0;
+        }
+    }
+}
+
+static void rounded_rect(cairo_t *cr, double x, double y, double w, double h, double r) {
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, x + w - r, y + r, r, -M_PI / 2.0, 0.0);
+    cairo_arc(cr, x + w - r, y + h - r, r, 0.0, M_PI / 2.0);
+    cairo_arc(cr, x + r, y + h - r, r, M_PI / 2.0, M_PI);
+    cairo_arc(cr, x + r, y + r, r, M_PI, 3.0 * M_PI / 2.0);
+    cairo_close_path(cr);
+}
+
+static void set_color(cairo_t *cr, Color c, double alpha) {
+    cairo_set_source_rgba(cr, c.r, c.g, c.b, c.a * alpha);
+}
+
+// Rendered once per open (on first use), shared by every card's graph, freed
+// in media_popup_close(). Three whole panels, all opaque and identical except
+// for the dots:
+//   g_vis_bg     the empty panel: the card's fill around its rounded corners,
+//                the `mantle` panel, its `surface0` border, the centre line,
+//                and the soft ends (`mantle` fading in over VIS_FADE_W at the
+//                left and right, inside the border).
+//   g_vis_lit    the same with every dot lit, coloured by height like the
+//                network graph: L yellow -> peach -> red rising, R mauve ->
+//                pink -> red hanging -- then the same fade on top.
+//   g_vis_peak   the same with every dot lit in `text` (the peak dots).
+// A frame is then a copy of g_vis_bg plus, per column, a copy of the lit
+// rows' rectangle out of g_vis_lit (and the peak dot's out of g_vis_peak) --
+// plain memcpy, see paint_graph(). The fade being baked into all three is
+// what makes a straight copy correct at the faded ends.
+static cairo_surface_t *g_vis_bg = NULL;
+static cairo_surface_t *g_vis_lit = NULL;
+static cairo_surface_t *g_vis_peak = NULL;
+
+// The fade over a whole panel image, inside its 1px border.
+static void paint_fade(cairo_t *cr, double w, double h) {
+    for (int side = 0; side < 2; side++) {
+        double x0 = side == 0 ? 1.0 : w - 1.0 - VIS_FADE_W;
+        cairo_pattern_t *grad = cairo_pattern_create_linear(x0, 0, x0 + VIS_FADE_W, 0);
+        double a0 = side == 0 ? 1.0 : 0.0, a1 = side == 0 ? 0.0 : 1.0;
+        cairo_pattern_add_color_stop_rgba(grad, 0.0, COLORS.mantle.r, COLORS.mantle.g, COLORS.mantle.b, a0);
+        cairo_pattern_add_color_stop_rgba(grad, 1.0, COLORS.mantle.r, COLORS.mantle.g, COLORS.mantle.b, a1);
+        cairo_set_source(cr, grad);
+        cairo_rectangle(cr, x0, 1.0, VIS_FADE_W, h - 2.0);
+        cairo_fill(cr);
+        cairo_pattern_destroy(grad);
+    }
+}
+
+// One whole panel image: the empty panel, optionally with both halves' dots
+// (`colors` = {L gradient, R gradient}) lit, then the fade.
+static cairo_surface_t *render_panel(const Color (*colors)[3]) {
+    double w = inner_w(), h = VIS_ROW_H;
+    cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, (int)w, (int)h);
+    cairo_t *cr = cairo_create(surf);
+    set_color(cr, COLORS.base, 1.0);
+    cairo_paint(cr);
+    rounded_rect(cr, 0.5, 0.5, w - 1.0, h - 1.0, VIS_RADIUS);
+    set_color(cr, COLORS.mantle, 1.0);
+    cairo_fill_preserve(cr);
+    set_color(cr, COLORS.surface0, 1.0);
+    cairo_set_line_width(cr, 1.0);
+    cairo_stroke(cr);
+    set_color(cr, COLORS.surface1, 1.0);
+    cairo_rectangle(cr, vis_graph_x(), floor(VIS_PAD_Y + VIS_HALF_H + VIS_CENTER_GAP / 2.0),
+                    braille_graph_width(VIS_CELLS), 1.0);
+    cairo_fill(cr);
+    if (colors) {
+        double half_y[VISUALIZER_CHANNELS] = {vis_top_y(), vis_bottom_y()};
+        for (int ch = 0; ch < VISUALIZER_CHANNELS; ch++) {
+            cairo_surface_t *dots = braille_graph_render_lit(VIS_CELLS, VIS_CELLS_H, ch == VISUALIZER_LEFT,
+                                                             colors[ch]);
+            cairo_set_source_surface(cr, dots, vis_graph_x(), half_y[ch]);
+            cairo_paint(cr);
+            cairo_surface_destroy(dots);
+        }
+    }
+    paint_fade(cr, w, h);
+    cairo_destroy(cr);
+    cairo_surface_flush(surf);
+    return surf;
+}
+
+static void build_vis_cache(void) {
+    const Color lit[VISUALIZER_CHANNELS][3] = {
+        {COLORS.yellow, COLORS.peach, COLORS.red}, // L, rising
+        {COLORS.mauve, COLORS.pink, COLORS.red},   // R, hanging
+    };
+    const Color peak[VISUALIZER_CHANNELS][3] = {
+        {COLORS.text, COLORS.text, COLORS.text},
+        {COLORS.text, COLORS.text, COLORS.text},
+    };
+    g_vis_bg = render_panel(NULL);
+    g_vis_lit = render_panel(lit);
+    g_vis_peak = render_panel(peak);
+}
+
+static void free_vis_cache(void) {
+    cairo_surface_t **all[] = {&g_vis_bg, &g_vis_lit, &g_vis_peak};
+    for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); i++) {
+        if (*all[i]) {
+            cairo_surface_destroy(*all[i]);
+            *all[i] = NULL;
+        }
+    }
+}
+
+// Copies panel-local rectangle (x, y, w, h) from `src` (a whole-panel image)
+// into the panel at `dst` (its top-left pixel; `dst_stride` bytes per row).
+static void copy_rect(uint8_t *dst, int dst_stride, cairo_surface_t *src, int x, int y, int w, int h) {
+    const uint8_t *s = cairo_image_surface_get_data(src);
+    int s_stride = cairo_image_surface_get_stride(src);
+    for (int row = 0; row < h; row++) {
+        memcpy(dst + (size_t)(y + row) * dst_stride + (size_t)x * 4, s + (size_t)(y + row) * s_stride + (size_t)x * 4,
+               (size_t)w * 4);
+    }
+}
+
+// Paints one whole graph panel at the current origin of `cr` (panel-local:
+// (0, 0) is its top-left) -- straight into the target's pixels, see the
+// cache comment above. Used for the subsurfaces' frames, and also inside the
+// popup's own full paint (translated): there it's hidden under the
+// subsurface, but it's what makes `snapshot` PNGs (which only re-run the
+// popup's draw callback) show it. Both targets are ARGB32 image surfaces.
+static void paint_graph(cairo_t *cr, const VisFrame *f) {
+    if (!g_vis_bg) {
+        build_vis_cache();
+    }
+    cairo_surface_t *target = cairo_get_target(cr);
+    if (cairo_surface_get_type(target) != CAIRO_SURFACE_TYPE_IMAGE ||
+        cairo_image_surface_get_format(target) != CAIRO_FORMAT_ARGB32) {
+        return;
+    }
+    double ox = 0.0, oy = 0.0;
+    cairo_user_to_device(cr, &ox, &oy); // where the panel's (0, 0) lands
+    cairo_surface_flush(target);
+    int stride = cairo_image_surface_get_stride(target);
+    uint8_t *dst = cairo_image_surface_get_data(target) + (size_t)lround(oy) * stride + (size_t)lround(ox) * 4;
+
+    int w = (int)inner_w(), h = (int)VIS_ROW_H;
+    copy_rect(dst, stride, g_vis_bg, 0, 0, w, h);
+    int gx = (int)vis_graph_x();
+    int half_y[VISUALIZER_CHANNELS] = {(int)vis_top_y(), (int)vis_bottom_y()};
+    for (int ch = 0; ch < VISUALIZER_CHANNELS; ch++) {
+        bool grow_up = ch == VISUALIZER_LEFT;
+        for (int col = 0; col < SPECTRUM_BAR_COUNT; col++) {
+            int rx, ry, rw, rh;
+            if (f->level[ch][col] > 0) {
+                braille_graph_column_rect(VIS_CELLS_H, col, 0, f->level[ch][col], grow_up, &rx, &ry, &rw, &rh);
+                copy_rect(dst, stride, g_vis_lit, gx + rx, half_y[ch] + ry, rw, rh);
+            }
+            if (f->peak[ch][col] > 0) {
+                int p = f->peak[ch][col];
+                braille_graph_column_rect(VIS_CELLS_H, col, p - 1, p, grow_up, &rx, &ry, &rw, &rh);
+                copy_rect(dst, stride, g_vis_peak, gx + rx, half_y[ch] + ry, rw, rh);
+            }
+        }
+    }
+    cairo_surface_mark_dirty(target);
+}
+
+static void paint_strip(cairo_t *cr, int w, int h, void *user_data) {
+    (void)w;
+    (void)h;
+    paint_graph(cr, user_data);
+}
+
+static void paint_visualizer(cairo_t *cr, int slot, double y) {
+    VisFrame f;
+    compute_frame(slot, &f);
+    cairo_save(cr);
+    cairo_translate(cr, vis_panel_x(), y);
+    paint_graph(cr, &f);
+    cairo_restore(cr);
+}
+
 static void paint_card(cairo_t *cr, int i) {
     CardLayout *card = &g_popup.cards[i];
     MprisPlayer *player = card->player;
@@ -346,6 +599,11 @@ static void paint_card(cairo_t *cr, int i) {
         y += ARTIST_H;
     }
 
+    if (card->has_vis) {
+        paint_visualizer(cr, i, card->vis_y);
+        y = card->vis_y + VIS_ROW_H;
+    }
+
     paint_timeline(cr, player, y + TIMELINE_GAP);
     for (int b = 0; b < BUTTON_COUNT; b++) {
         paint_button(cr, i, b, card->buttons_y);
@@ -367,6 +625,9 @@ static void redraw(void) {
         popup_surface_render_now(g_popup.popup, draw_popup, NULL);
     }
 }
+
+static void update_graphs(void); // below, with the rest of the visualizer code
+static void destroy_graphs(void);
 
 static PopupSurface *create_menu_surface(void) {
     return popup_surface_create(g_popup.output->app, g_popup.output, (int)g_popup.popup_width,
@@ -392,6 +653,7 @@ static void relayout_and_redraw(void) {
         g_popup.hovered_button = -1;
     }
     if (g_popup.popup_height != old_h) {
+        destroy_graphs(); // the strips are children of the surface about to go away
         popup_surface_destroy(g_popup.popup);
         g_popup.popup = create_menu_surface();
         if (!g_popup.popup) {
@@ -399,7 +661,146 @@ static void relayout_and_redraw(void) {
             return;
         }
     }
+    update_graphs();
     redraw();
+}
+
+static void destroy_graphs(void) {
+    for (int i = 0; i < VISUALIZER_MAX_SOURCES; i++) {
+        strip_surface_destroy(g_popup.graphs[i].strip);
+        g_popup.graphs[i].strip = NULL;
+        g_popup.graphs[i].shown = false;
+    }
+}
+
+// Which playback stream card `i`'s graph should capture: the player's own
+// (matched by process, see pipewire_find_playback_for_pid()), or the whole
+// output mix if it can't be found -- better a graph of everything than none.
+static void resolve_target(int i) {
+    CardGraph *g = &g_popup.graphs[i];
+    g->player = g_popup.cards[i].player;
+    uint32_t serial = 0;
+    g->target = pipewire_find_playback_for_pid(mpris_player_pid(g->player), &serial) ? serial
+                                                                                    : VISUALIZER_TARGET_MIX;
+}
+
+// Places each graph-carrying card's strip subsurface over its graph row
+// (creating it on the current popup surface if needed) and draws it; hides
+// the rest. Called after every relayout -- rows move when players come and go
+// -- before the popup's own commit, which is what applies new positions. A
+// card whose player changed gets its stream re-resolved (it isn't re-resolved
+// otherwise; see media_popup_streams_changed()).
+static void update_graphs(void) {
+    struct wl_surface *parent = g_popup.popup ? popup_surface_wl_surface(g_popup.popup) : NULL;
+    for (int i = 0; i < VISUALIZER_MAX_SOURCES; i++) {
+        CardGraph *g = &g_popup.graphs[i];
+        if (g->strip && strip_surface_parent(g->strip) != parent) {
+            strip_surface_destroy(g->strip); // popup surface was recreated
+            g->strip = NULL;
+            g->shown = false;
+        }
+        const CardLayout *card = i < g_popup.card_count ? &g_popup.cards[i] : NULL;
+        if (!card || !card->has_vis || !parent) {
+            if (g->strip) {
+                strip_surface_hide(g->strip);
+            }
+            g->shown = false;
+            g->player = NULL;
+            continue;
+        }
+        if (g->player != card->player) {
+            resolve_target(i);
+        }
+        if (!g->strip) {
+            g->strip = strip_surface_create(g_popup.output->app, parent);
+            if (!g->strip) {
+                continue;
+            }
+        }
+        strip_surface_place(g->strip, (int)vis_panel_x(), (int)card->vis_y, (int)inner_w(), (int)VIS_ROW_H);
+        compute_frame(i, &g->drawn);
+        strip_surface_draw(g->strip, paint_strip, &g->drawn);
+        g->shown = true;
+    }
+}
+
+// Test-only: tests/test_visualizer.py sets STICKBAR_TEST_VISUALIZER_ONLY to
+// its fake players' name prefix, so its bar never captures (or reads) a real
+// player the user has playing at the time.
+static bool capture_allowed(MprisPlayer *player) {
+    static const char *only = NULL;
+    static bool read_env = false;
+    if (!read_env) {
+        only = getenv("STICKBAR_TEST_VISUALIZER_ONLY");
+        read_env = true;
+    }
+    if (!only || !only[0]) {
+        return true;
+    }
+    char app[64];
+    mpris_player_app_name(player, app, sizeof(app));
+    return strncmp(app, only, strlen(only)) == 0;
+}
+
+void media_popup_sync_visualizer(void) {
+    for (int i = 0; i < VISUALIZER_MAX_SOURCES; i++) {
+        CardGraph *g = &g_popup.graphs[i];
+        bool active = g_popup.open && g->shown && g->player && mpris_player_is_playing(g->player) &&
+                      capture_allowed(g->player);
+        visualizer_set_source(i, g->target, active);
+    }
+}
+
+void media_popup_streams_changed(void) {
+    if (!g_popup.open) {
+        return;
+    }
+    // Streams come and go (a browser opens a new one per track, Spotify keeps
+    // an idle one around), so re-match every shown card. The next
+    // media_popup_sync_visualizer() moves a slot whose target changed.
+    for (int i = 0; i < VISUALIZER_MAX_SOURCES; i++) {
+        if (g_popup.graphs[i].shown) {
+            resolve_target(i);
+        }
+    }
+}
+
+void media_popup_visualizer_frame(uint32_t changed_mask) {
+    if (!g_popup.open) {
+        return;
+    }
+    for (int i = 0; i < VISUALIZER_MAX_SOURCES; i++) {
+        CardGraph *g = &g_popup.graphs[i];
+        if (!(changed_mask & (1u << i)) || !g->shown) {
+            continue;
+        }
+        VisFrame f;
+        compute_frame(i, &f);
+        if (memcmp(&f, &g->drawn, sizeof(f)) == 0) {
+            continue; // no dot changed -- no commit
+        }
+        g->drawn = f;
+        // Only this graph's own strip -- the popup's text, timeline and
+        // buttons aren't touched.
+        strip_surface_draw(g->strip, paint_strip, &g->drawn);
+    }
+}
+
+void media_popup_visualizer_status(uint32_t *shown_mask, uint32_t *ready_mask) {
+    *shown_mask = 0;
+    *ready_mask = 0;
+    if (!g_popup.open) {
+        return;
+    }
+    for (int i = 0; i < VISUALIZER_MAX_SOURCES; i++) {
+        CardGraph *g = &g_popup.graphs[i];
+        if (g->shown) {
+            *shown_mask |= 1u << i;
+            if (strip_surface_ready(g->strip)) {
+                *ready_mask |= 1u << i;
+            }
+        }
+    }
 }
 
 void media_popup_refresh_if_open(void) {
@@ -486,6 +887,7 @@ void media_popup_open(Output *output, Color accent, double box_x, double box_y, 
 
     create_catchers(output->app);
     g_popup.open = true;
+    update_graphs();
     redraw();
 }
 
@@ -493,6 +895,11 @@ void media_popup_close(void) {
     if (!g_popup.open) {
         return;
     }
+    destroy_graphs(); // before their parent
+    for (int i = 0; i < VISUALIZER_MAX_SOURCES; i++) {
+        g_popup.graphs[i].player = NULL;
+    }
+    free_vis_cache();
     popup_surface_destroy(g_popup.popup);
     g_popup.popup = NULL;
     destroy_catchers();
@@ -501,6 +908,10 @@ void media_popup_close(void) {
     g_popup.card_count = 0;
     g_popup.hovered_card = -1;
     g_popup.hovered_button = -1;
+}
+
+bool media_popup_is_open(void) {
+    return g_popup.open;
 }
 
 bool media_popup_is_menu_surface(struct wl_surface *surface) {
@@ -579,6 +990,25 @@ void media_popup_handle_click(double x, double y) {
 // ---- Test-control hooks (testing/test_control.c) ---------------------------------
 
 int media_popup_test_card_count(void) { return g_popup.open ? g_popup.card_count : -1; }
+
+bool media_popup_test_graph(int card, MediaPopupTestGraph *out) {
+    if (!g_popup.open || card < 0 || card >= g_popup.card_count || !g_popup.cards[card].has_vis) {
+        return false;
+    }
+    mpris_player_app_name(g_popup.cards[card].player, out->app, sizeof(out->app));
+    out->slot = card;
+    out->target = g_popup.graphs[card].target;
+    out->panel_x = vis_panel_x();
+    out->panel_y = g_popup.cards[card].vis_y;
+    out->panel_w = inner_w();
+    out->panel_h = VIS_ROW_H;
+    out->graph_x = vis_panel_x() + vis_graph_x();
+    out->top_y = g_popup.cards[card].vis_y + vis_top_y();
+    out->bottom_y = g_popup.cards[card].vis_y + vis_bottom_y();
+    out->half_h = VIS_HALF_H;
+    out->rows = braille_graph_rows(VIS_CELLS_H);
+    return true;
+}
 
 bool media_popup_test_target(const char *app_name, const char *button, double *x, double *y) {
     if (!g_popup.open) {

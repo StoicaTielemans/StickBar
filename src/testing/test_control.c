@@ -24,6 +24,7 @@
 #include "network/network_client.h"
 #include "render/render.h"
 #include "sysmon/sysmon_client.h"
+#include "visualizer/visualizer.h"
 #include "wayland/pointer.h"
 
 static AppContext *g_app = NULL;
@@ -289,6 +290,53 @@ static cJSON *dump_eq(void) {
     return o;
 }
 
+static cJSON *levels_array(const float *levels) {
+    cJSON *a = cJSON_CreateArray();
+    for (int i = 0; i < SPECTRUM_BAR_COUNT; i++) {
+        cJSON_AddItemToArray(a, cJSON_CreateNumber(levels[i]));
+    }
+    return a;
+}
+
+// Per media-dropdown card with a graph: its player, slot, captured stream,
+// geometry, and the slot's current levels.
+static cJSON *dump_visualizer(void) {
+    cJSON *o = ok_obj();
+    cJSON_AddBoolToObject(o, "available", visualizer_available());
+    cJSON *graphs = cJSON_AddArrayToObject(o, "graphs");
+    MediaPopupTestGraph g;
+    for (int card = 0; media_popup_test_card_count() > card; card++) {
+        if (!media_popup_test_graph(card, &g)) {
+            continue;
+        }
+        cJSON *j = cJSON_CreateObject();
+        cJSON_AddStringToObject(j, "app", g.app);
+        cJSON_AddNumberToObject(j, "slot", g.slot);
+        cJSON_AddNumberToObject(j, "target", g.target);
+        cJSON_AddNumberToObject(j, "panel_x", g.panel_x);
+        cJSON_AddNumberToObject(j, "panel_y", g.panel_y);
+        cJSON_AddNumberToObject(j, "panel_w", g.panel_w);
+        cJSON_AddNumberToObject(j, "panel_h", g.panel_h);
+        cJSON_AddNumberToObject(j, "graph_x", g.graph_x);
+        cJSON_AddNumberToObject(j, "top_y", g.top_y);
+        cJSON_AddNumberToObject(j, "bottom_y", g.bottom_y);
+        cJSON_AddNumberToObject(j, "half_h", g.half_h);
+        cJSON_AddNumberToObject(j, "rows", g.rows);
+        cJSON_AddItemToObject(j, "levels_l", levels_array(visualizer_levels(g.slot, VISUALIZER_LEFT)));
+        cJSON_AddItemToObject(j, "levels_r", levels_array(visualizer_levels(g.slot, VISUALIZER_RIGHT)));
+        cJSON_AddItemToArray(graphs, j);
+    }
+    // Every slot, shown or not -- a closed dropdown must leave them all at 0.
+    cJSON *slots = cJSON_AddArrayToObject(o, "slots");
+    for (int slot = 0; slot < VISUALIZER_MAX_SOURCES; slot++) {
+        cJSON *j = cJSON_CreateObject();
+        cJSON_AddItemToObject(j, "levels_l", levels_array(visualizer_levels(slot, VISUALIZER_LEFT)));
+        cJSON_AddItemToObject(j, "levels_r", levels_array(visualizer_levels(slot, VISUALIZER_RIGHT)));
+        cJSON_AddItemToArray(slots, j);
+    }
+    return o;
+}
+
 // ---- Commands -----------------------------------------------------------------
 // Coordinates are surface-local pixels: bar-surface for `click`, popup-local
 // for the menu-* commands (what `target` returns).
@@ -506,6 +554,17 @@ static void dispatch(char *line) {
         reply(ok_obj());
     } else if (strcmp(cmd, "target") == 0 && rest) {
         cmd_target(rest);
+    } else if (strcmp(cmd, "vis-tone") == 0 && rest) {
+        // vis-tone <slot> <channel 0=L 1=R> <hz>: synthetic audio for one
+        // visualizer slot (only in STICKBAR_TEST_VISUALIZER_SYNTH mode).
+        int slot = -1, channel = -1;
+        double hz = -1.0;
+        if (sscanf(rest, "%d %d %lf", &slot, &channel, &hz) == 3 && hz >= 0.0) {
+            visualizer_test_set_tone(slot, channel, hz);
+            reply(ok_obj());
+        } else {
+            reply_error("usage: vis-tone <slot> <channel> <hz>");
+        }
     } else if (strcmp(cmd, "refresh") == 0 && rest) {
         // refresh <mem|cpu|cpu-reset|gpu|poll>: run a details refresh (what an
         // open dropdown does) or a full 5s-style poll, without waiting for it.
@@ -534,6 +593,7 @@ static void dispatch(char *line) {
         else if (strcmp(rest, "audio") == 0) reply(dump_audio());
         else if (strcmp(rest, "media") == 0) reply(dump_media());
         else if (strcmp(rest, "eq") == 0) reply(dump_eq());
+        else if (strcmp(rest, "visualizer") == 0) reply(dump_visualizer());
         else reply_error("unknown dump section");
     } else {
         reply_error("unknown command");

@@ -29,7 +29,9 @@ Limitations explained in a module's own section aren't repeated here.
   popup rows (`MAX_DEVICE_ROWS`, 32), mixer streams (`MAX_PULSE_STREAMS`, 32), media
   players (`MAX_MPRIS_PLAYERS`, 16), DNS servers (`MAX_DNS_SERVERS`, 8, above the 3
   glibc's resolver honors), PipeWire nodes and links (`MAX_PW_NODES`/`MAX_PW_LINKS`,
-  256 each), privacy entries (`MAX_PRIVACY_ENTRIES`, 32). CPU cores
+  256 each; clients `MAX_PW_CLIENTS`, 128), privacy entries (`MAX_PRIVACY_ENTRIES`,
+  32), media-dropdown spectrum graphs (`VISUALIZER_MAX_SOURCES`, 4: later cards get
+  no graph; an app with several playback streams shows the running one). CPU cores
   (`MAX_CPU_CORES`, 128): past it, excess cores are dropped from the dropdown's
   per-core grid, but `/proc/stat`'s aggregate `cpu` line still sets the overall
   percentage.

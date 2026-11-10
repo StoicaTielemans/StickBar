@@ -101,6 +101,7 @@ sources = files(
   'src/dbus/icon_theme.c',
   'src/dbus/dbusmenu.c',
   'src/bar/popup_surface.c',
+  'src/bar/strip_surface.c',
   'src/modules/tray/tray.c',
   'src/modules/tray/tray_context_menu.c',
   'src/audio/pulse_client.c',
@@ -124,6 +125,8 @@ sources = files(
   'src/modules/powermenu/arch_logo.c',
   'src/modules/powermenu/power_menu.c',
   'src/pipewire/pipewire_client.c',
+  'src/visualizer/visualizer.c',
+  'src/visualizer/spectrum.c',
   'src/modules/privacy/privacy.c',
   'src/modules/privacy/privacy_info_popup.c',
   'src/eq/eq_state.c',
@@ -137,9 +140,11 @@ sources = files(
 # On glibc >= 2.34 these live in libc itself and libdl is an empty stub, so this
 # is optional and usually resolves to nothing at all.
 libdl = meson.get_compiler('c').find_library('dl', required: false)
+# sqrtf/log10f/cosf for the visualizer's FFT (visualizer/spectrum.c).
+libm = meson.get_compiler('c').find_library('m', required: false)
 
 executable('stickBar',
   sources + generated_sources + generated_headers,
-  dependencies: [wayland_client, cairo, pangocairo, cjson, libsystemd, libpulse, libpipewire, libdl],
+  dependencies: [wayland_client, cairo, pangocairo, cjson, libsystemd, libpulse, libpipewire, libdl, libm],
   include_directories: include_directories('src'),
 )

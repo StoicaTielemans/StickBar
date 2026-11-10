@@ -47,6 +47,10 @@ const char *mpris_player_album(MprisPlayer *player);    // "" if unreported
 void mpris_player_app_name(MprisPlayer *player, char *out, size_t out_size);
 const char *mpris_player_identity(MprisPlayer *player); // app-provided display name, used as a title fallback
 bool mpris_player_is_playing(MprisPlayer *player);
+
+// Process owning the player's bus name (read once when it appears), 0 if the
+// bus wouldn't say. Used to find the player's own PipeWire playback stream.
+int mpris_player_pid(MprisPlayer *player);
 // Raw PlaybackStatus: "Playing" | "Paused" | "Stopped", or "" if never fetched.
 const char *mpris_player_status(MprisPlayer *player);
 bool mpris_player_can_go_next(MprisPlayer *player);

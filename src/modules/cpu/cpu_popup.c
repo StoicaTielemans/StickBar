@@ -74,18 +74,6 @@ static double monotonic_seconds(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
-static double text_width(const char *text, int size, bool bold) {
-    double w, h;
-    module_box_measure_text(text, size, bold, &w, &h);
-    (void)h;
-    return w;
-}
-
-static void draw_text_right(cairo_t *cr, double right_x, double y, double h, const char *text, int size, bool bold,
-                            Color color) {
-    module_box_draw_text_left(cr, right_x - text_width(text, size, bold), y, h, text, size, bold, color);
-}
-
 // The graph fills its card: as many cells as fit (one 5s sample per dot
 // column), up to the whole history. GRAPH_MIN_CELLS_W (5 minutes) only sets
 // the card's minimum width; a wider card shows a longer stretch of history.
@@ -136,9 +124,9 @@ static void counts_text(char *out, size_t out_size) {
 
 // One core cell: "12 ▰▰▱▱▱▱  34% 4.4G". Widths fixed from sample strings
 // (the font is monospace), so cells line up and never shift as values change.
-static double core_index_w(void) { return text_width("00", FONT.sm, false); }
-static double core_percent_w(void) { return text_width("100%", FONT.sm, false); }
-static double core_ghz_w(void) { return text_width("0.0G", FONT.xs, false); }
+static double core_index_w(void) { return module_box_text_width("00", FONT.sm, false); }
+static double core_percent_w(void) { return module_box_text_width("100%", FONT.sm, false); }
+static double core_ghz_w(void) { return module_box_text_width("0.0G", FONT.xs, false); }
 static double core_cell_w(void) {
     return core_index_w() + CELL_GAP + CORE_METER_W + CELL_GAP + core_percent_w() + CELL_GAP + core_ghz_w();
 }
@@ -146,7 +134,7 @@ static double core_cell_w(void) {
 static void draw_core_cell(cairo_t *cr, double x, double y, int core) {
     char buf[16];
     snprintf(buf, sizeof(buf), "%d", core);
-    draw_text_right(cr, x + core_index_w(), y, CORE_ROW_H, buf, FONT.sm, false, COLORS.overlay0);
+    module_box_draw_text_right(cr, x + core_index_w(), y, CORE_ROW_H, buf, FONT.sm, false, COLORS.overlay0);
     double cx = x + core_index_w() + CELL_GAP;
     Color gradient[3];
     heat_gradient(gradient);
@@ -155,7 +143,7 @@ static void draw_core_cell(cairo_t *cr, double x, double y, int core) {
                    CORE_METER_SEGMENTS, gradient, COLORS.surface0);
     cx += CORE_METER_W + CELL_GAP;
     snprintf(buf, sizeof(buf), "%.0f%%", pct);
-    draw_text_right(cr, cx + core_percent_w(), y, CORE_ROW_H, buf, FONT.sm, false, COLORS.text);
+    module_box_draw_text_right(cr, cx + core_percent_w(), y, CORE_ROW_H, buf, FONT.sm, false, COLORS.text);
     cx += core_percent_w() + CELL_GAP;
     double ghz = sysmon_cpu_core_ghz(core);
     if (ghz > 0.0) {
@@ -214,16 +202,16 @@ static double paint_header(cairo_t *cr, double x, double y, double w) {
     short_model(model, sizeof(model));
     counts_text(counts, sizeof(counts));
     module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, COLORS.peach);
-    double tx = x + text_width(icon, FONT.heading, false) + 8.0;
+    double tx = x + module_box_text_width(icon, FONT.heading, false) + 8.0;
     module_box_draw_text_left(cr, tx, y, HEADER_H, model, FONT.md, true, COLORS.text);
-    tx += text_width(model, FONT.md, true);
+    tx += module_box_text_width(model, FONT.md, true);
     module_box_draw_text_left(cr, tx, y, HEADER_H, counts, FONT.sm, false, COLORS.subtext0);
 
     // Load pill: the same three buckets as the GPU's P-state pill.
     double usage = sysmon_cpu_percent();
     Color fill = usage < 15.0 ? COLORS.green : usage < 60.0 ? COLORS.yellow : COLORS.peach;
     const char *word = usage < 15.0 ? "idle" : usage < 60.0 ? "active" : "busy";
-    double pill_w = text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
+    double pill_w = module_box_text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
     double pill_x = x + w - pill_w;
     double pill_y = y + (HEADER_H - PILL_H) / 2.0;
     module_box_draw_rect(cr, pill_x, pill_y, pill_w, PILL_H, fill, COLORS.mantle, 0.0);
@@ -234,7 +222,7 @@ static double paint_header(cairo_t *cr, double x, double y, double w) {
 static void graph_label_row(cairo_t *cr, double x, double y, double w, const char *left, Color left_color,
                             const char *right) {
     module_box_draw_text_left(cr, x, y, GRAPH_LABEL_H, left, FONT.sm, true, left_color);
-    draw_text_right(cr, x + w, y, GRAPH_LABEL_H, right, FONT.xs, false, COLORS.overlay0);
+    module_box_draw_text_right(cr, x + w, y, GRAPH_LABEL_H, right, FONT.xs, false, COLORS.overlay0);
 }
 
 static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
@@ -298,7 +286,7 @@ static const char *ROW_LABELS[] = {"LOAD", "CLOCK", "UPTIME"};
 static double label_col_w(void) {
     double w = 0.0;
     for (size_t i = 0; i < sizeof(ROW_LABELS) / sizeof(ROW_LABELS[0]); i++) {
-        double lw = text_width(ROW_LABELS[i], FONT.xs, true);
+        double lw = module_box_text_width(ROW_LABELS[i], FONT.xs, true);
         if (lw > w) {
             w = lw;
         }
@@ -352,7 +340,7 @@ static double paint_rows(cairo_t *cr, double x, double y) {
 // /proc/PID/comm names are at most 15 characters and the font is monospace
 // (see gpu_popup.c's app_name_col_w()).
 static double app_name_col_w(void) {
-    return text_width("000000000000000", FONT.label, false) + COL_GAP;
+    return module_box_text_width("000000000000000", FONT.label, false) + COL_GAP;
 }
 
 // "TOP PROCESSES": always SYSMON_CPU_MAX_PROCS rows tall (fixed size).
@@ -381,7 +369,7 @@ static double paint_apps(cairo_t *cr, double x, double y, double w) {
                        app_gradient, COLORS.surface0);
         char pct[32];
         snprintf(pct, sizeof(pct), "%.1f%%", sysmon_cpu_process_percent(i));
-        draw_text_right(cr, x + w, ry, ROW_H, pct, FONT.label, false, COLORS.subtext0);
+        module_box_draw_text_right(cr, x + w, ry, ROW_H, pct, FONT.label, false, COLORS.subtext0);
     }
     return h;
 }
@@ -395,7 +383,7 @@ static double paint_content(cairo_t *cr, double w) {
         char span[24];
         braille_graph_span_label(span, sizeof(span), graph_cells(w), 5.0);
         module_box_draw_text_left(cr, x, y + 2.0, AXIS_H, span, FONT.xs, false, COLORS.overlay0);
-        draw_text_right(cr, x + w, y + 2.0, AXIS_H, "now", FONT.xs, false, COLORS.overlay0);
+        module_box_draw_text_right(cr, x + w, y + 2.0, AXIS_H, "now", FONT.xs, false, COLORS.overlay0);
     }
     y += AXIS_H + 2.0 + SECTION_GAP;
     y += paint_cores(cr, x, y);
@@ -417,9 +405,9 @@ static double content_width(void) {
     glyph_utf8(GLYPH_ICON_CPU, icon);
     short_model(model, sizeof(model));
     counts_text(counts, sizeof(counts));
-    double header_w = text_width(icon, FONT.heading, false) + 8.0 + text_width(model, FONT.md, true) +
-                      text_width(counts, FONT.sm, false) + 16.0 + text_width("active", FONT.xs, true) +
-                      PILL_PAD_X * 2.0;
+    double header_w = module_box_text_width(icon, FONT.heading, false) + 8.0 +
+                      module_box_text_width(model, FONT.md, true) + module_box_text_width(counts, FONT.sm, false) +
+                      16.0 + module_box_text_width("active", FONT.xs, true) + PILL_PAD_X * 2.0;
     if (header_w > w) {
         w = header_w;
     }
@@ -429,12 +417,12 @@ static double content_width(void) {
     // Task counts can grow while open; measure with some headroom.
     const char *values[] = {load, clock, "00.00 00.00 00.00 · 00 running / 00000 tasks"};
     for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
-        double rw = label_col_w() + COL_GAP + text_width(values[i], FONT.label, false);
+        double rw = label_col_w() + COL_GAP + module_box_text_width(values[i], FONT.label, false);
         if (rw > w) {
             w = rw;
         }
     }
-    double apps_w = app_name_col_w() + APP_BAR_W + COL_GAP + text_width("100.0%", FONT.label, false);
+    double apps_w = app_name_col_w() + APP_BAR_W + COL_GAP + module_box_text_width("100.0%", FONT.label, false);
     return apps_w > w ? apps_w : w;
 }
 

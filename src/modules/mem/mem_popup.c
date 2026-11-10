@@ -9,6 +9,7 @@
 #include "modules/cpu/cpu_popup.h"
 #include "modules/gpu/gpu_popup.h"
 #include "render/braille_graph.h"
+#include "render/color.h"
 #include "render/meter_bar.h"
 #include "render/module_box.h"
 #include "sysmon/sysmon_client.h"
@@ -58,18 +59,6 @@ typedef struct {
 } MemPopupState;
 
 static MemPopupState g_popup;
-
-static double text_width(const char *text, int size, bool bold) {
-    double w, h;
-    module_box_measure_text(text, size, bold, &w, &h);
-    (void)h;
-    return w;
-}
-
-static void draw_text_right(cairo_t *cr, double right_x, double y, double h, const char *text, int size, bool bold,
-                            Color color) {
-    module_box_draw_text_left(cr, right_x - text_width(text, size, bold), y, h, text, size, bold, color);
-}
 
 // The graph fills its card: as many cells as fit (one 5s sample per dot
 // column), up to the whole history. GRAPH_MIN_CELLS_W (5 minutes) only sets
@@ -130,15 +119,15 @@ static double paint_header(cairo_t *cr, double x, double y, double w) {
     glyph_utf8(GLYPH_ICON_MEM, icon);
     header_text(rest, sizeof(rest));
     module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, COLORS.yellow);
-    double tx = x + text_width(icon, FONT.heading, false) + 8.0;
+    double tx = x + module_box_text_width(icon, FONT.heading, false) + 8.0;
     module_box_draw_text_left(cr, tx, y, HEADER_H, "Memory", FONT.md, true, COLORS.text);
-    tx += text_width("Memory", FONT.md, true);
+    tx += module_box_text_width("Memory", FONT.md, true);
     module_box_draw_text_left(cr, tx, y, HEADER_H, rest, FONT.sm, false, COLORS.subtext0);
 
     const char *word;
     Color fill;
     pill_state(&word, &fill);
-    double pill_w = text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
+    double pill_w = module_box_text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
     double pill_x = x + w - pill_w;
     double pill_y = y + (HEADER_H - PILL_H) / 2.0;
     module_box_draw_rect(cr, pill_x, pill_y, pill_w, PILL_H, fill, COLORS.mantle, 0.0);
@@ -148,7 +137,7 @@ static double paint_header(cairo_t *cr, double x, double y, double w) {
 
 static void graph_label_row(cairo_t *cr, double x, double y, double w, const char *left, const char *right) {
     module_box_draw_text_left(cr, x, y, GRAPH_LABEL_H, left, FONT.sm, true, COLORS.yellow);
-    draw_text_right(cr, x + w, y, GRAPH_LABEL_H, right, FONT.xs, false, COLORS.overlay0);
+    module_box_draw_text_right(cr, x + w, y, GRAPH_LABEL_H, right, FONT.xs, false, COLORS.overlay0);
 }
 
 static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
@@ -227,7 +216,7 @@ static double paint_split(cairo_t *cr, double x, double y, double w) {
     for (int i = 0; i < SPLIT_SEGMENTS; i++) {
         double centre = (i + 0.5) / SPLIT_SEGMENTS;
         Color c = centre < apps_end ? COLORS.yellow : centre < cache_end ? COLORS.blue : COLORS.surface1;
-        cairo_set_source_rgba(cr, c.r, c.g, c.b, c.a);
+        color_set_source(cr, c);
         cairo_rectangle(cr, x + i * (seg_w + SPLIT_SEGMENT_GAP), y, seg_w, SPLIT_BAR_H);
         cairo_fill(cr);
     }
@@ -243,11 +232,11 @@ static double paint_split(cairo_t *cr, double x, double y, double w) {
                              COLORS.mantle, 0.0);
         lx += LEGEND_SWATCH + 5.0;
         module_box_draw_text_left(cr, lx, ly, ROW_H, names[i], FONT.xs, true, COLORS.overlay0);
-        lx += text_width(names[i], FONT.xs, true) + 5.0;
+        lx += module_box_text_width(names[i], FONT.xs, true) + 5.0;
         char value[24];
         format_gb(value, sizeof(value), values[i]);
         module_box_draw_text_left(cr, lx, ly, ROW_H, value, FONT.label, false, COLORS.text);
-        lx += text_width(value, FONT.label, false) + LEGEND_GAP;
+        lx += module_box_text_width(value, FONT.label, false) + LEGEND_GAP;
     }
     return h;
 }
@@ -257,7 +246,7 @@ static const char *ROW_LABELS[] = {"RAM", "SWAP", "ZRAM", "AVAIL", "PRESS"};
 static double label_col_w(void) {
     double w = 0.0;
     for (size_t i = 0; i < sizeof(ROW_LABELS) / sizeof(ROW_LABELS[0]); i++) {
-        double lw = text_width(ROW_LABELS[i], FONT.xs, true);
+        double lw = module_box_text_width(ROW_LABELS[i], FONT.xs, true);
         if (lw > w) {
             w = lw;
         }
@@ -311,7 +300,7 @@ static void meter_row(cairo_t *cr, double x, double y, double w, const char *lab
     module_box_draw_text_left(cr, mx + METER_W + COL_GAP, y, ROW_H, value, FONT.label, false, COLORS.text);
     char pct[16];
     snprintf(pct, sizeof(pct), "%d%%", percent);
-    draw_text_right(cr, x + w, y, ROW_H, pct, FONT.label, false, COLORS.subtext0);
+    module_box_draw_text_right(cr, x + w, y, ROW_H, pct, FONT.label, false, COLORS.subtext0);
 }
 
 static double paint_rows(cairo_t *cr, double x, double y, double w) {
@@ -352,7 +341,7 @@ static double paint_rows(cairo_t *cr, double x, double y, double w) {
 // /proc/PID/comm names are at most 15 characters and the font is monospace
 // (see gpu_popup.c's app_name_col_w()).
 static double app_name_col_w(void) {
-    return text_width("000000000000000", FONT.label, false) + COL_GAP;
+    return module_box_text_width("000000000000000", FONT.label, false) + COL_GAP;
 }
 
 // "TOP APPS": always SYSMON_MEM_MAX_PROCS rows tall (fixed size).
@@ -373,7 +362,7 @@ static double paint_apps(cairo_t *cr, double x, double y, double w) {
                        app_gradient, COLORS.surface0);
         char size[24];
         snprintf(size, sizeof(size), "%.2f GB", sysmon_mem_process_gb(i));
-        draw_text_right(cr, x + w, ry, ROW_H, size, FONT.label, false, COLORS.subtext0);
+        module_box_draw_text_right(cr, x + w, ry, ROW_H, size, FONT.label, false, COLORS.subtext0);
     }
     return h;
 }
@@ -387,7 +376,7 @@ static double paint_content(cairo_t *cr, double w) {
         char span[24];
         braille_graph_span_label(span, sizeof(span), graph_cells(w), 5.0);
         module_box_draw_text_left(cr, x, y + 2.0, AXIS_H, span, FONT.xs, false, COLORS.overlay0);
-        draw_text_right(cr, x + w, y + 2.0, AXIS_H, "now", FONT.xs, false, COLORS.overlay0);
+        module_box_draw_text_right(cr, x + w, y + 2.0, AXIS_H, "now", FONT.xs, false, COLORS.overlay0);
     }
     y += AXIS_H + 2.0 + SECTION_GAP;
     y += paint_split(cr, x, y, w);
@@ -404,9 +393,9 @@ static double content_width(void) {
     char icon[5], rest[96];
     glyph_utf8(GLYPH_ICON_MEM, icon);
     header_text(rest, sizeof(rest));
-    double header_w = text_width(icon, FONT.heading, false) + 8.0 + text_width("Memory", FONT.md, true) +
-                      text_width(rest, FONT.sm, false) + 16.0 + text_width("thrashing", FONT.xs, true) +
-                      PILL_PAD_X * 2.0;
+    double header_w = module_box_text_width(icon, FONT.heading, false) + 8.0 +
+                      module_box_text_width("Memory", FONT.md, true) + module_box_text_width(rest, FONT.sm, false) +
+                      16.0 + module_box_text_width("thrashing", FONT.xs, true) + PILL_PAD_X * 2.0;
     if (header_w > w) {
         w = header_w;
     }
@@ -421,17 +410,18 @@ static double content_width(void) {
         "zstd · 000 MB -> 000 MB (0.0x) · uses 000 MB",
     };
     for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
-        double rw = label_col_w() + COL_GAP + text_width(values[i], FONT.label, false);
+        double rw = label_col_w() + COL_GAP + module_box_text_width(values[i], FONT.label, false);
         if (rw > w) {
             w = rw;
         }
     }
-    double meter_w = label_col_w() + COL_GAP + METER_W + COL_GAP + text_width("000 MB / 00.0 GB", FONT.label, false) +
-                     COL_GAP + text_width("100%", FONT.label, false);
+    double meter_w = label_col_w() + COL_GAP + METER_W + COL_GAP + module_box_text_width("000 MB / 00.0 GB",
+                                                                                         FONT.label, false) +
+                     COL_GAP + module_box_text_width("100%", FONT.label, false);
     if (meter_w > w) {
         w = meter_w;
     }
-    double apps_w = app_name_col_w() + APP_BAR_W + COL_GAP + text_width("00.00 GB", FONT.label, false);
+    double apps_w = app_name_col_w() + APP_BAR_W + COL_GAP + module_box_text_width("00.00 GB", FONT.label, false);
     return apps_w > w ? apps_w : w;
 }
 

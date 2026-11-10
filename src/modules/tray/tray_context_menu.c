@@ -70,23 +70,16 @@ typedef struct {
 
 static MenuState g_menu = { .hovered_index = -1 };
 
-static double text_width(const char *text, int size, bool bold) {
-    double w, h;
-    module_box_measure_text(text, size, bold, &w, &h);
-    (void)h;
-    return w;
-}
-
 static double toggle_col_w(void) {
     char buf[5];
     glyph_utf8(GLYPH_ICON_CHECKBOX_ON, buf);
-    return text_width(buf, FONT.label, false) + COL_GAP;
+    return module_box_text_width(buf, FONT.label, false) + COL_GAP;
 }
 
 static double chevron_w(void) {
     char buf[5];
     glyph_utf8(GLYPH_CHEVRON_RIGHT, buf);
-    return text_width(buf, FONT.xs, false);
+    return module_box_text_width(buf, FONT.xs, false);
 }
 
 static double card_inner_x(void) { return OUTER_MARGIN + CARD_PAD; }
@@ -150,7 +143,7 @@ static void draw_menu(cairo_t *cr, void *user_data) {
     }
     double tx = x + HEADER_ICON + 8.0;
     module_box_draw_text_left(cr, tx, y, HEADER_H, g_menu.title, FONT.md, true, COLORS.text);
-    tx += text_width(g_menu.title, FONT.md, true);
+    tx += module_box_text_width(g_menu.title, FONT.md, true);
     char summary[48];
     header_summary(summary, sizeof(summary));
     module_box_draw_text_left(cr, tx, y, HEADER_H, summary, FONT.sm, false, COLORS.subtext0);
@@ -188,7 +181,8 @@ static void compute_layout(void) {
         }
         g_menu.item_count++;
         g_menu.any_toggle |= entry->toggle != DBUSMENU_TOGGLE_NONE;
-        double w = text_width(entry->label, FONT.label, false) + (entry->has_submenu ? COL_GAP + chevron_w() : 0.0);
+        double w = module_box_text_width(entry->label, FONT.label, false) +
+                   (entry->has_submenu ? COL_GAP + chevron_w() : 0.0);
         if (w > max_row_w) {
             max_row_w = w;
         }
@@ -196,7 +190,8 @@ static void compute_layout(void) {
     double row_w = ROW_PAD_X * 2.0 + (g_menu.any_toggle ? toggle_col_w() : 0.0) + max_row_w + CARD_PAD * 2.0;
     char summary[48];
     header_summary(summary, sizeof(summary));
-    double header_w = HEADER_ICON + 8.0 + text_width(g_menu.title, FONT.md, true) + text_width(summary, FONT.sm, false);
+    double header_w = HEADER_ICON + 8.0 + module_box_text_width(g_menu.title, FONT.md, true) +
+                      module_box_text_width(summary, FONT.sm, false);
     g_menu.content_width = row_w > header_w ? row_w : header_w;
     if (g_menu.content_width < MIN_CONTENT_W) {
         g_menu.content_width = MIN_CONTENT_W;

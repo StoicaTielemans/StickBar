@@ -16,6 +16,7 @@
 #include "modules/tray/tray.h"
 #include "modules/volume/volume.h"
 #include "modules/workspaces/workspaces.h"
+#include "render/color.h"
 
 // Module box rects per output, for render_module_rect(). Sized like every
 // other per-output table in this project (MAX_TRACKED_OUTPUTS = 8).
@@ -100,7 +101,7 @@ void render_output(cairo_t *cr, Output *output, int width, int height) {
     // Background fill. This also implicitly erases everything from the previous
     // frame (e.g. a workspace pill that's since stopped being occupied), so no
     // separate clear/memset step is needed anywhere else in the render path.
-    cairo_set_source_rgba(cr, COLORS.mantle.r, COLORS.mantle.g, COLORS.mantle.b, COLORS.mantle.a);
+    color_set_source(cr, COLORS.mantle);
     cairo_paint(cr);
 
     // Left region: matches the reference bar's actual leftLayout order --
@@ -162,7 +163,7 @@ bool render_output_clock_only(cairo_t *cr, Output *output, int width, int height
     cairo_save(cr);
     cairo_rectangle(cr, x, y, w, h);
     cairo_clip(cr);
-    cairo_set_source_rgba(cr, COLORS.mantle.r, COLORS.mantle.g, COLORS.mantle.b, COLORS.mantle.a);
+    color_set_source(cr, COLORS.mantle);
     cairo_paint(cr);
     clock_render(cr, output, x + w, 0.0, (double)height);
     cairo_restore(cr);

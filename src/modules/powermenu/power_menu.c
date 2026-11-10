@@ -146,13 +146,6 @@ static void action_shutdown(void) {
     }
 }
 
-static double text_width(const char *text, int size, bool bold) {
-    double w, h;
-    module_box_measure_text(text, size, bold, &w, &h);
-    (void)h;
-    return w;
-}
-
 // Same language as the dropdowns' cards: `base` with a grey border, lightening
 // on hover -- plus the action's own colour on the border, so it's clear which
 // one a click would run.
@@ -184,7 +177,7 @@ static void draw_header(cairo_t *cr, ButtonRect *panel) {
     double text_right = x + CONTENT_W;
 
     if (g_uptime[0]) {
-        double pill_w = text_width(g_uptime, FONT.xs, true) + PILL_PAD_X * 2.0;
+        double pill_w = module_box_text_width(g_uptime, FONT.xs, true) + PILL_PAD_X * 2.0;
         double pill_x = x + CONTENT_W - pill_w;
         double pill_y = y + (HEADER_H - PILL_H) / 2.0;
         module_box_draw_rect(cr, pill_x, pill_y, pill_w, PILL_H, COLORS.sapphire, COLORS.mantle, 0.0);
@@ -200,9 +193,9 @@ static void draw_header(cairo_t *cr, ButtonRect *panel) {
     glyph_utf8(GLYPH_ICON_SHUTDOWN, icon);
     snprintf(summary, sizeof(summary), "  ·  %s", g_identity);
     module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, COLORS.sapphire);
-    double tx = x + text_width(icon, FONT.heading, false) + 8.0;
+    double tx = x + module_box_text_width(icon, FONT.heading, false) + 8.0;
     module_box_draw_text_left(cr, tx, y, HEADER_H, "Power", FONT.md, true, COLORS.text);
-    tx += text_width("Power", FONT.md, true);
+    tx += module_box_text_width("Power", FONT.md, true);
     module_box_draw_text_left(cr, tx, y, HEADER_H, summary, FONT.sm, false, COLORS.subtext0);
     cairo_restore(cr);
 }

@@ -8,6 +8,7 @@
 #include "config/glyphs.h"
 #include "eq/eq_curve.h"
 #include "eq/eq_state.h"
+#include "render/color.h"
 #include "render/module_box.h"
 #include "wayland/output.h"
 
@@ -96,18 +97,6 @@ static double profile_card_y(int i) {
     return PROFILES_Y + i * (PROFILE_CARD_H + CARD_GAP);
 }
 
-static double text_width(const char *text, int size, bool bold) {
-    double w, h;
-    module_box_measure_text(text, size, bold, &w, &h);
-    (void)h;
-    return w;
-}
-
-static void draw_text_right(cairo_t *cr, double right_x, double y, double h, const char *text, int size, bool bold,
-                            Color color) {
-    module_box_draw_text_left(cr, right_x - text_width(text, size, bold), y, h, text, size, bold, color);
-}
-
 // ---- Painting ----------------------------------------------------------------
 
 // The pill: whether the EQ is actually doing anything right now. Applying
@@ -134,7 +123,7 @@ static void paint_header(cairo_t *cr) {
 
     Color fill;
     const char *word = pill_word(&fill);
-    double pill_w = text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
+    double pill_w = module_box_text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
     double pill_x = x + CONTENT_W - pill_w;
     double pill_y = y + (HEADER_H - PILL_H) / 2.0;
 
@@ -146,7 +135,7 @@ static void paint_header(cairo_t *cr) {
     char icon[5];
     glyph_utf8(GLYPH_ICON_EQUALIZER, icon);
     module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, COLORS.lavender);
-    double tx = x + text_width(icon, FONT.heading, false) + 8.0;
+    double tx = x + module_box_text_width(icon, FONT.heading, false) + 8.0;
     const char *title = !eq_state_available()      ? "No EQ state yet"
                         : eq_state_profile()[0]    ? eq_state_profile()
                                                    : "custom EQ";
@@ -154,7 +143,7 @@ static void paint_header(cairo_t *cr) {
     if (eq_state_gain()[0]) {
         char summary[48];
         snprintf(summary, sizeof(summary), "  ·  %s gain", eq_state_gain());
-        tx += text_width(title, FONT.md, true);
+        tx += module_box_text_width(title, FONT.md, true);
         module_box_draw_text_left(cr, tx, y, HEADER_H, summary, FONT.sm, false, COLORS.subtext0);
     }
     cairo_restore(cr);
@@ -164,7 +153,7 @@ static void paint_header(cairo_t *cr) {
 }
 
 static void stroke_line(cairo_t *cr, double x0, double y0, double x1, double y1, Color c) {
-    cairo_set_source_rgba(cr, c.r, c.g, c.b, c.a);
+    color_set_source(cr, c);
     cairo_set_line_width(cr, 1.0);
     cairo_move_to(cr, x0, y0);
     cairo_line_to(cr, x1, y1);
@@ -188,7 +177,8 @@ static void paint_graph_card(cairo_t *cr) {
         snprintf(preamp, sizeof(preamp), "preamp %+.1f dB", eq_state_preamp());
         snprintf(extent, sizeof(extent), "peak %+.1f  min %+.1f dB", eq_state_peak_db(), eq_state_min_db());
         module_box_draw_text_left(cr, INNER_X, label_y, GRAPH_LABEL_H, preamp, FONT.sm, false, COLORS.subtext0);
-        draw_text_right(cr, INNER_X + INNER_W, label_y, GRAPH_LABEL_H, extent, FONT.xs, false, COLORS.overlay0);
+        module_box_draw_text_right(cr, INNER_X + INNER_W, label_y, GRAPH_LABEL_H, extent, FONT.xs, false,
+                                   COLORS.overlay0);
     } else {
         module_box_draw_text_left(cr, INNER_X, label_y, GRAPH_LABEL_H, "run blackpearl-eq.py state", FONT.sm, false,
                                   COLORS.subtext0);
@@ -205,7 +195,8 @@ static void paint_graph_card(cairo_t *cr) {
         if (fabs(db) < 0.001) {
             snprintf(label, sizeof(label), "0");
         }
-        draw_text_right(cr, gx - 4.0, y - AXIS_LABEL_H / 2.0, AXIS_LABEL_H, label, FONT.xs, false, COLORS.overlay0);
+        module_box_draw_text_right(cr, gx - 4.0, y - AXIS_LABEL_H / 2.0, AXIS_LABEL_H, label, FONT.xs, false,
+                                   COLORS.overlay0);
     }
 
     static const double DECADES[] = { 100.0, 1000.0, 10000.0 };
@@ -213,7 +204,7 @@ static void paint_graph_card(cairo_t *cr) {
     for (int i = 0; i < 3; i++) {
         double x = floor(eq_curve_freq_to_x(DECADES[i], gx, GRAPH_W)) + 0.5;
         stroke_line(cr, x, gy, x, gy + GRAPH_H, COLORS.surface0);
-        double lw = text_width(DECADE_LABELS[i], FONT.xs, false);
+        double lw = module_box_text_width(DECADE_LABELS[i], FONT.xs, false);
         module_box_draw_text_left(cr, x - lw / 2.0, gy + GRAPH_H + FREQ_LABEL_GAP, AXIS_LABEL_H, DECADE_LABELS[i],
                                   FONT.xs, false, COLORS.overlay0);
     }
@@ -241,12 +232,12 @@ static void paint_profile_card(cairo_t *cr, int i) {
     const char *tag = pending ? "applying..." : active ? "active" : hovered ? "apply" : "";
     Color tag_color = pending ? COLORS.yellow : active ? COLORS.lavender : COLORS.overlay0;
     if (tag[0]) {
-        double tag_x = INNER_X + text_width(name, FONT.label, true) + COL_GAP;
+        double tag_x = INNER_X + module_box_text_width(name, FONT.label, true) + COL_GAP;
         module_box_draw_text_left(cr, tag_x, y, PROFILE_CARD_H, tag, FONT.xs, true, tag_color);
     }
 
-    draw_text_right(cr, INNER_X + INNER_W, y, PROFILE_CARD_H, PROFILES[i].description, FONT.sm, false,
-                    COLORS.subtext0);
+    module_box_draw_text_right(cr, INNER_X + INNER_W, y, PROFILE_CARD_H, PROFILES[i].description, FONT.sm, false,
+                               COLORS.subtext0);
 }
 
 static void draw_popup(cairo_t *cr, void *user_data) {

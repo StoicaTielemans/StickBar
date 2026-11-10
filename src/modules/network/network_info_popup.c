@@ -6,6 +6,7 @@
 #include "config/glyphs.h"
 #include "network/network_client.h"
 #include "render/braille_graph.h"
+#include "render/color.h"
 #include "render/module_box.h"
 
 // Sized generously (this machine has 2 monitors), matching the same
@@ -100,18 +101,6 @@ static uint32_t status_icon_glyph(void) {
     return network_is_wifi() ? GLYPH_ICON_WIFI_ON : GLYPH_ICON_ETHERNET_ON;
 }
 
-static double text_width(const char *text, int size, bool bold) {
-    double w, h;
-    module_box_measure_text(text, size, bold, &w, &h);
-    (void)h;
-    return w;
-}
-
-static void draw_text_right(cairo_t *cr, double right_x, double y, double h, const char *text, int size, bool bold,
-                            Color color) {
-    module_box_draw_text_left(cr, right_x - text_width(text, size, bold), y, h, text, size, bold, color);
-}
-
 // ---- Details grid ----------------------------------------------------------
 
 // One label/value row of the details grid. Built fresh on every paint (the
@@ -166,7 +155,7 @@ static double grid_label_col_w(void) {
     static const char *labels[] = {"IP", "GATEWAY", "MAC", "MTU", "LINK", "SINCE BOOT", "DNS"};
     double w = 0.0;
     for (size_t i = 0; i < sizeof(labels) / sizeof(labels[0]); i++) {
-        double lw = text_width(labels[i], FONT.xs, true);
+        double lw = module_box_text_width(labels[i], FONT.xs, true);
         if (lw > w) {
             w = lw;
         }
@@ -207,7 +196,7 @@ static void draw_rate_label_row(cairo_t *cr, double x, double y, double w, bool 
     snprintf(label, sizeof(label), "%s %s", arrow, rate);
     snprintf(peak_label, sizeof(peak_label), "peak %s", peak_rate);
     module_box_draw_text_left(cr, x, y, GRAPH_LABEL_H, label, FONT.sm, true, rx ? COLORS.teal : COLORS.mauve);
-    draw_text_right(cr, x + w, y, GRAPH_LABEL_H, peak_label, FONT.xs, false, COLORS.overlay0);
+    module_box_draw_text_right(cr, x + w, y, GRAPH_LABEL_H, peak_label, FONT.xs, false, COLORS.overlay0);
 }
 
 // Graph card: download label, download dots rising toward the centre line,
@@ -253,7 +242,7 @@ static double paint_graph_card(cairo_t *cr, double x, double y, double w) {
     cy += half_h;
 
     cairo_save(cr);
-    cairo_set_source_rgba(cr, COLORS.surface1.r, COLORS.surface1.g, COLORS.surface1.b, COLORS.surface1.a);
+    color_set_source(cr, COLORS.surface1);
     cairo_rectangle(cr, graph_x, cy + GRAPH_CENTER_GAP / 2.0 - 0.5, graph_w, 1.0);
     cairo_fill(cr);
     cairo_restore(cr);
@@ -273,7 +262,7 @@ static double paint_header(cairo_t *cr, double x, double y, double w) {
     char icon[5];
     glyph_utf8(status_icon_glyph(), icon);
     module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, COLORS.teal);
-    double tx = x + text_width(icon, FONT.heading, false) + 8.0;
+    double tx = x + module_box_text_width(icon, FONT.heading, false) + 8.0;
 
     const char *iface = network_interface_name();
     if (!iface[0]) {
@@ -281,14 +270,14 @@ static double paint_header(cairo_t *cr, double x, double y, double w) {
         return HEADER_H;
     }
     module_box_draw_text_left(cr, tx, y, HEADER_H, iface, FONT.md, true, COLORS.text);
-    tx += text_width(iface, FONT.md, true);
+    tx += module_box_text_width(iface, FONT.md, true);
     module_box_draw_text_left(cr, tx, y, HEADER_H, network_is_wifi() ? "  ·  Wi-Fi" : "  ·  Ethernet", FONT.sm,
                               false, COLORS.subtext0);
 
     // Status pill: filled, borderless, at the header's right edge.
     bool up = network_connected();
     const char *pill_text = up ? "connected" : "down";
-    double pill_w = text_width(pill_text, FONT.xs, true) + PILL_PAD_X * 2.0;
+    double pill_w = module_box_text_width(pill_text, FONT.xs, true) + PILL_PAD_X * 2.0;
     double pill_x = x + w - pill_w;
     double pill_y = y + (HEADER_H - PILL_H) / 2.0;
     module_box_draw_rect(cr, pill_x, pill_y, pill_w, PILL_H, up ? COLORS.teal : COLORS.red, COLORS.mantle, 0.0);
@@ -304,7 +293,7 @@ static double paint_dns_tags(cairo_t *cr, double x, double y, double w) {
     double row_y = 0.0, tag_x = 0.0;
     for (int i = 0; i < count; i++) {
         const char *server = network_dns_get(i);
-        double tag_w = text_width(server, FONT.sm, false) + TAG_PAD_X * 2.0;
+        double tag_w = module_box_text_width(server, FONT.sm, false) + TAG_PAD_X * 2.0;
         if (tag_x > 0.0 && tag_x + tag_w > w) {
             tag_x = 0.0;
             row_y += TAG_H + TAG_GAP;
@@ -355,7 +344,7 @@ static double paint_content(cairo_t *cr, double w) {
             char span[24];
             braille_graph_span_label(span, sizeof(span), graph_cells(w), 5.0);
             module_box_draw_text_left(cr, x, y + 2.0, AXIS_H, span, FONT.xs, false, COLORS.overlay0);
-            draw_text_right(cr, x + w, y + 2.0, AXIS_H, "now", FONT.xs, false, COLORS.overlay0);
+            module_box_draw_text_right(cr, x + w, y + 2.0, AXIS_H, "now", FONT.xs, false, COLORS.overlay0);
         }
         y += AXIS_H + 2.0 + SECTION_GAP;
         y += paint_details(cr, x, y, w);
@@ -370,12 +359,13 @@ static double content_width(void) {
 
     char icon[5];
     glyph_utf8(status_icon_glyph(), icon);
-    double header_w = text_width(icon, FONT.heading, false) + 8.0 +
-                      text_width(network_interface_name(), FONT.md, true) +
-                      text_width("  ·  Ethernet", FONT.sm, false) + 16.0 +
-                      text_width("connected", FONT.xs, true) + PILL_PAD_X * 2.0;
+    double header_w = module_box_text_width(icon, FONT.heading, false) + 8.0 +
+                      module_box_text_width(network_interface_name(), FONT.md, true) +
+                      module_box_text_width("  ·  Ethernet", FONT.sm, false) + 16.0 +
+                      module_box_text_width("connected", FONT.xs, true) + PILL_PAD_X * 2.0;
     if (!network_interface_name()[0]) {
-        header_w = text_width(icon, FONT.heading, false) + 8.0 + text_width("No active connection", FONT.md, true);
+        header_w = module_box_text_width(icon, FONT.heading, false) + 8.0 +
+                   module_box_text_width("No active connection", FONT.md, true);
     }
     if (header_w > w) {
         w = header_w;
@@ -385,7 +375,7 @@ static double content_width(void) {
     int n = build_grid_rows(rows);
     double value_x = grid_label_col_w() + GRID_COL_GAP;
     for (int i = 0; i < n; i++) {
-        double row_w = value_x + text_width(rows[i].value, FONT.label, false);
+        double row_w = value_x + module_box_text_width(rows[i].value, FONT.label, false);
         if (row_w > w) {
             w = row_w;
         }

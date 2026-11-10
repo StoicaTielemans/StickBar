@@ -86,18 +86,6 @@ typedef struct {
 
 static DevicePopupState g_popup = { .hovered_card = -1 };
 
-static double text_width(const char *text, int size, bool bold) {
-    double w, h;
-    module_box_measure_text(text, size, bold, &w, &h);
-    (void)h;
-    return w;
-}
-
-static void draw_text_right(cairo_t *cr, double right_x, double y, double h, const char *text, int size, bool bold,
-                            Color color) {
-    module_box_draw_text_left(cr, right_x - text_width(text, size, bold), y, h, text, size, bold, color);
-}
-
 // The sink popup's mute-chip icon mirrors VolumeWidget.qml's own 4-level
 // icon()/muteIcon() thresholds (muted/<34/<67/else); the source popup's is
 // the mic's simple 2-state one -- exactly matching AudioDevicesPopup.qml's
@@ -113,51 +101,6 @@ static uint32_t status_icon_glyph(bool is_sink, int pct, bool muted) {
     return muted ? GLYPH_ICON_MIC_MUTED : GLYPH_ICON_MIC;
 }
 
-// Truncates `text` to the longest prefix that, with "..." appended, still
-// fits within `max_w` -- mirrors the reference's `elide: Text.ElideRight`.
-// Candidates are cut on UTF-8 codepoint boundaries (not raw byte counts):
-// every description seen from this project's own hardware is plain ASCII,
-// but it costs nothing and matches the fix modules/media needed after
-// multi-byte titles produced Pango "Invalid UTF-8 string" warnings.
-static void truncate_to_width(const char *text, double max_w, int font_px, bool bold,
-                               char *out, size_t out_size) {
-    if (text_width(text, font_px, bold) <= max_w) {
-        snprintf(out, out_size, "%s", text);
-        return;
-    }
-
-    size_t len = strlen(text);
-    size_t offsets[DESC_BUF_SIZE];
-    size_t n = 0;
-    for (size_t i = 0; i < len && n < DESC_BUF_SIZE - 1;) {
-        offsets[n++] = i;
-        unsigned char c = (unsigned char)text[i];
-        size_t clen = 1;
-        if ((c & 0xE0) == 0xC0) {
-            clen = 2;
-        } else if ((c & 0xF0) == 0xE0) {
-            clen = 3;
-        } else if ((c & 0xF8) == 0xF0) {
-            clen = 4;
-        }
-        i += clen;
-    }
-    offsets[n] = len;
-
-    size_t lo = 0, hi = n;
-    while (lo < hi) {
-        size_t mid = (lo + hi + 1) / 2;
-        char candidate[DESC_BUF_SIZE + 4];
-        snprintf(candidate, sizeof(candidate), "%.*s...", (int)offsets[mid], text);
-        if (text_width(candidate, font_px, bold) <= max_w) {
-            lo = mid;
-        } else {
-            hi = mid - 1;
-        }
-    }
-    snprintf(out, out_size, "%.*s...", (int)offsets[lo], text);
-}
-
 // ---- Card geometry ---------------------------------------------------------------
 // Every card has the same shape, so the x positions are shared and only the
 // card's own top varies.
@@ -167,7 +110,7 @@ static double inner_x(void) { return OUTER_MARGIN + CARD_PAD; }
 static double inner_w(void) { return CONTENT_W - CARD_PAD * 2.0; }
 static double controls_y(const CardLayout *card) { return card->y + CARD_PAD + NAME_H + DETAIL_H + CONTROL_GAP; }
 static double mute_x(void) { return inner_x() + inner_w() - CHIP_W; }
-static double percent_col_w(void) { return text_width("200%", FONT.sm, false); }
+static double percent_col_w(void) { return module_box_text_width("200%", FONT.sm, false); }
 static double meter_x(void) { return inner_x(); }
 static double meter_w(void) { return mute_x() - COL_GAP - percent_col_w() - COL_GAP - meter_x(); }
 
@@ -215,9 +158,9 @@ static void paint_header(cairo_t *cr) {
     const char *title = g_popup.is_sink ? "Output" : "Input";
     snprintf(summary, sizeof(summary), "  ·  %d device%s", g_popup.card_count, g_popup.card_count == 1 ? "" : "s");
     module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, g_popup.accent);
-    double tx = x + text_width(icon, FONT.heading, false) + 8.0;
+    double tx = x + module_box_text_width(icon, FONT.heading, false) + 8.0;
     module_box_draw_text_left(cr, tx, y, HEADER_H, title, FONT.md, true, COLORS.text);
-    tx += text_width(title, FONT.md, true);
+    tx += module_box_text_width(title, FONT.md, true);
     module_box_draw_text_left(cr, tx, y, HEADER_H, summary, FONT.sm, false, COLORS.subtext0);
 
     // Pill: the default device's volume, or "muted". Omitted if the default
@@ -235,7 +178,7 @@ static void paint_header(cairo_t *cr) {
             snprintf(word, sizeof(word), "%d%%", displayed_percent(node));
         }
         Color fill = muted ? COLORS.red : g_popup.accent;
-        double pill_w = text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
+        double pill_w = module_box_text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
         double pill_x = x + CONTENT_W - pill_w;
         double pill_y = y + (HEADER_H - PILL_H) / 2.0;
         module_box_draw_rect(cr, pill_x, pill_y, pill_w, PILL_H, fill, COLORS.mantle, 0.0);
@@ -295,14 +238,14 @@ static void paint_card(cairo_t *cr, int i) {
 
     double y = card->y + CARD_PAD;
     const char *tag = is_default ? "default" : body_hovered ? "set default" : "";
-    double tag_w = tag[0] ? text_width(tag, FONT.xs, true) + COL_GAP : 0.0;
+    double tag_w = tag[0] ? module_box_text_width(tag, FONT.xs, true) + COL_GAP : 0.0;
     char name[DESC_BUF_SIZE];
-    truncate_to_width(pulse_node_description(node), inner_w() - tag_w, FONT.label, true, name, sizeof(name));
+    module_box_truncate_to_width(pulse_node_description(node), inner_w() - tag_w, FONT.label, true, name, sizeof(name));
     module_box_draw_text_left(cr, inner_x(), y, NAME_H, name, FONT.label, true,
                               is_default ? g_popup.accent : COLORS.text);
     if (tag[0]) {
-        draw_text_right(cr, inner_x() + inner_w(), y, NAME_H, tag, FONT.xs, true,
-                        is_default ? g_popup.accent : COLORS.overlay0);
+        module_box_draw_text_right(cr, inner_x() + inner_w(), y, NAME_H, tag, FONT.xs, true,
+                                   is_default ? g_popup.accent : COLORS.overlay0);
     }
     y += NAME_H;
 
@@ -317,7 +260,8 @@ static void paint_card(cairo_t *cr, int i) {
                                                           : COLORS.overlay0;
         char tail[24];
         snprintf(tail, sizeof(tail), "%s%s", detail[0] ? " · " : "", state);
-        module_box_draw_text_left(cr, inner_x() + text_width(detail, FONT.xs, false), y, DETAIL_H, tail, FONT.xs,
+        module_box_draw_text_left(cr, inner_x() + module_box_text_width(detail, FONT.xs, false), y, DETAIL_H, tail,
+                                  FONT.xs,
                                   false, state_color);
     }
 
@@ -334,8 +278,8 @@ static void paint_card(cairo_t *cr, int i) {
                    (double)pct / METER_MAX_PERCENT, METER_SEGMENTS, gradient, COLORS.surface0);
     char pct_text[16];
     snprintf(pct_text, sizeof(pct_text), "%d%%", pct);
-    draw_text_right(cr, mute_x() - COL_GAP, cy, CHIP_H, pct_text, FONT.sm, false,
-                    muted ? COLORS.overlay0 : COLORS.subtext0);
+    module_box_draw_text_right(cr, mute_x() - COL_GAP, cy, CHIP_H, pct_text, FONT.sm, false,
+                               muted ? COLORS.overlay0 : COLORS.subtext0);
     bool mute_hovered = i == g_popup.hovered_card && g_popup.hovered_part == PART_MUTE;
     paint_chip(cr, mute_x(), cy, mute_hovered, status_icon_glyph(g_popup.is_sink, pct, muted),
                muted ? COLORS.overlay0 : g_popup.accent);

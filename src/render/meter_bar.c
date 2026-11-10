@@ -2,12 +2,9 @@
 
 #include <math.h>
 
-#define SEGMENT_GAP 1.0
+#include "render/color.h"
 
-static Color mix(Color a, Color b, double f) {
-    Color c = {a.r + (b.r - a.r) * f, a.g + (b.g - a.g) * f, a.b + (b.b - a.b) * f, a.a + (b.a - a.a) * f};
-    return c;
-}
+#define SEGMENT_GAP 1.0
 
 void meter_bar_draw(cairo_t *cr, double x, double y, double w, double h, double fraction, int segments,
                     const Color gradient[3], Color empty) {
@@ -33,9 +30,9 @@ void meter_bar_draw(cairo_t *cr, double x, double y, double w, double h, double 
         Color c = empty;
         if (i < lit) {
             double t = segments > 1 ? (double)i / (segments - 1) : 0.0;
-            c = t < 0.5 ? mix(gradient[0], gradient[1], t * 2.0) : mix(gradient[1], gradient[2], (t - 0.5) * 2.0);
+            c = color_gradient3(gradient, t);
         }
-        cairo_set_source_rgba(cr, c.r, c.g, c.b, c.a);
+        color_set_source(cr, c);
         cairo_rectangle(cr, x + i * (seg_w + SEGMENT_GAP), y, seg_w, h);
         cairo_fill(cr);
     }

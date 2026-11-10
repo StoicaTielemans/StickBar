@@ -8,6 +8,7 @@
 
 #include "bar/popup_surface.h"
 #include "config/glyphs.h"
+#include "render/color.h"
 #include "render/module_box.h"
 
 // Sized generously (this machine has 2 monitors), matching the same
@@ -136,11 +137,6 @@ static bool is_before_today(int year, int month0, int mday) {
     return mday < g_popup.today_mday;
 }
 
-static Color with_alpha(Color c, double factor) {
-    c.a *= factor;
-    return c;
-}
-
 static bool rect_contains(Rect r, double x, double y) {
     return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
 }
@@ -264,12 +260,12 @@ static void draw_month_card(cairo_t *cr, int m, double card_x, double card_y) {
 
             Color text_color = wd >= 5 ? COLORS.red : COLORS.text;
             if (is_before_today(year, m, day_num)) {
-                text_color = with_alpha(text_color, PAST_ALPHA);
+                text_color = color_with_alpha(text_color, PAST_ALPHA);
             }
             if (is_today) {
                 cairo_save(cr);
                 cairo_arc(cr, cell_x + CELL_SIZE / 2.0, row_y + CELL_SIZE / 2.0, CELL_SIZE / 2.0, 0, 2 * M_PI);
-                cairo_set_source_rgba(cr, COLORS.mauve.r, COLORS.mauve.g, COLORS.mauve.b, COLORS.mauve.a);
+                color_set_source(cr, COLORS.mauve);
                 cairo_fill(cr);
                 cairo_restore(cr);
                 text_color = COLORS.base;

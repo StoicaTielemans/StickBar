@@ -89,67 +89,12 @@ typedef struct {
 
 static MixerPopupState g_mixer = { .hovered_index = -1 };
 
-static double text_width(const char *text, int size, bool bold) {
-    double w, h;
-    module_box_measure_text(text, size, bold, &w, &h);
-    (void)h;
-    return w;
-}
-
-static void draw_text_right(cairo_t *cr, double right_x, double y, double h, const char *text, int size, bool bold,
-                            Color color) {
-    module_box_draw_text_left(cr, right_x - text_width(text, size, bold), y, h, text, size, bold, color);
-}
-
 // Same 4-level thresholds as modules/volume's own status icon.
 static uint32_t status_icon_glyph(int percent, bool muted) {
     if (muted || percent == 0) return GLYPH_ICON_VOLUME_MUTED;
     if (percent < 34) return GLYPH_ICON_VOLUME_LOW;
     if (percent < 67) return GLYPH_ICON_VOLUME_MEDIUM;
     return GLYPH_ICON_VOLUME_HIGH;
-}
-
-// Same UTF-8-boundary-safe binary-search truncation as audio/device_popup.c's
-// truncate_to_width() (kept as a local copy, matching how modules/media keeps
-// its own copies) -- app names, unlike device descriptions, can genuinely be
-// non-ASCII, so the codepoint-boundary handling matters more here.
-static void truncate_to_width(const char *text, double max_w, int font_px, bool bold,
-                               char *out, size_t out_size) {
-    if (text_width(text, font_px, bold) <= max_w) {
-        snprintf(out, out_size, "%s", text);
-        return;
-    }
-
-    size_t len = strlen(text);
-    size_t offsets[NAME_BUF_SIZE];
-    size_t n = 0;
-    for (size_t i = 0; i < len && n < NAME_BUF_SIZE - 1;) {
-        offsets[n++] = i;
-        unsigned char c = (unsigned char)text[i];
-        size_t clen = 1;
-        if ((c & 0xE0) == 0xC0) {
-            clen = 2;
-        } else if ((c & 0xF0) == 0xE0) {
-            clen = 3;
-        } else if ((c & 0xF8) == 0xF0) {
-            clen = 4;
-        }
-        i += clen;
-    }
-    offsets[n] = len;
-
-    size_t lo = 0, hi = n;
-    while (lo < hi) {
-        size_t mid = (lo + hi + 1) / 2;
-        char candidate[NAME_BUF_SIZE + 4];
-        snprintf(candidate, sizeof(candidate), "%.*s...", (int)offsets[mid], text);
-        if (text_width(candidate, font_px, bold) <= max_w) {
-            lo = mid;
-        } else {
-            hi = mid - 1;
-        }
-    }
-    snprintf(out, out_size, "%.*s...", (int)offsets[lo], text);
 }
 
 // ---- Card geometry ---------------------------------------------------------------
@@ -160,7 +105,7 @@ static double card_h(void) { return CARD_PAD + CHIP_H + SLIDER_GAP + SLIDER_ROW_
 static double inner_x(void) { return OUTER_MARGIN + CARD_PAD; }
 static double inner_w(void) { return CONTENT_W - CARD_PAD * 2.0; }
 static double mute_x(void) { return inner_x() + inner_w() - CHIP_W; }
-static double percent_col_w(void) { return text_width("200%", FONT.sm, false); }
+static double percent_col_w(void) { return module_box_text_width("200%", FONT.sm, false); }
 static double slider_x(void) { return inner_x(); }
 static double slider_w(void) { return inner_w(); }
 static double slider_row_y(const RowLayout *row) { return row->y + CARD_PAD + CHIP_H + SLIDER_GAP; }
@@ -224,17 +169,18 @@ static void paint_header(cairo_t *cr) {
     } else {
         snprintf(word, sizeof(word), "%d%%", pulse_default_sink_volume_percent());
     }
-    double pill_w = text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
+    double pill_w = module_box_text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
 
     char icon[5], summary[NAME_BUF_SIZE], summary_full[NAME_BUF_SIZE];
     glyph_utf8(GLYPH_ICON_VOLUME_HIGH, icon);
     snprintf(summary_full, sizeof(summary_full), "  ·  %d app%s%s%s", g_mixer.row_count,
              g_mixer.row_count == 1 ? "" : "s", sink_name[0] ? "  ·  " : "", sink_name);
     module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, g_mixer.accent);
-    double tx = x + text_width(icon, FONT.heading, false) + 8.0;
+    double tx = x + module_box_text_width(icon, FONT.heading, false) + 8.0;
     module_box_draw_text_left(cr, tx, y, HEADER_H, "Mixer", FONT.md, true, COLORS.text);
-    tx += text_width("Mixer", FONT.md, true);
-    truncate_to_width(summary_full, x + CONTENT_W - pill_w - COL_GAP - tx, FONT.sm, false, summary, sizeof(summary));
+    tx += module_box_text_width("Mixer", FONT.md, true);
+    module_box_truncate_to_width(summary_full, x + CONTENT_W - pill_w - COL_GAP - tx, FONT.sm, false, summary,
+                                 sizeof(summary));
     module_box_draw_text_left(cr, tx, y, HEADER_H, summary, FONT.sm, false, COLORS.subtext0);
 
     Color fill = muted ? COLORS.red : g_mixer.accent;
@@ -257,14 +203,14 @@ static void draw_row(cairo_t *cr, int i) {
     double y = row->y + CARD_PAD;
     char name[NAME_BUF_SIZE];
     double name_max_w = mute_x() - COL_GAP - percent_col_w() - COL_GAP - inner_x();
-    truncate_to_width(pulse_stream_name(stream), name_max_w, FONT.label, true, name, sizeof(name));
+    module_box_truncate_to_width(pulse_stream_name(stream), name_max_w, FONT.label, true, name, sizeof(name));
     module_box_draw_text_left(cr, inner_x(), y, CHIP_H, name, FONT.label, true,
                               muted ? COLORS.overlay0 : COLORS.text);
 
     char pct_text[16];
     snprintf(pct_text, sizeof(pct_text), "%d%%", percent);
-    draw_text_right(cr, mute_x() - COL_GAP, y, CHIP_H, pct_text, FONT.sm, false,
-                    muted ? COLORS.overlay0 : COLORS.subtext0);
+    module_box_draw_text_right(cr, mute_x() - COL_GAP, y, CHIP_H, pct_text, FONT.sm, false,
+                               muted ? COLORS.overlay0 : COLORS.subtext0);
 
     bool chip_hovered = hovered && g_mixer.hovered_mute;
     module_box_draw_rect(cr, mute_x(), y, CHIP_W, CHIP_H, chip_hovered ? COLORS.surface1 : COLORS.surface0,

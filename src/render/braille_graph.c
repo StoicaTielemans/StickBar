@@ -3,6 +3,8 @@
 #include <math.h>
 #include <stdio.h>
 
+#include "render/color.h"
+
 // Braille cell geometry: 2x4 dots per cell, DOT_PITCH apart within a cell
 // and CELL_GAP extra between cells -- the extra gap is what makes it read
 // as characters in a terminal rather than a plain dot matrix.
@@ -41,19 +43,6 @@ static double dot_offset(int index, int dots_per_cell, double cell_size) {
     return cell * cell_size + CELL_GAP / 2.0 + sub * DOT_PITCH + DOT_PITCH / 2.0;
 }
 
-static Color gradient_at(const Color gradient[3], double t) {
-    const Color *a = t < 0.5 ? &gradient[0] : &gradient[1];
-    const Color *b = t < 0.5 ? &gradient[1] : &gradient[2];
-    double f = t < 0.5 ? t * 2.0 : (t - 0.5) * 2.0;
-    Color c = {
-        a->r + (b->r - a->r) * f,
-        a->g + (b->g - a->g) * f,
-        a->b + (b->b - a->b) * f,
-        a->a + (b->a - a->a) * f,
-    };
-    return c;
-}
-
 void braille_graph_draw(cairo_t *cr, double x, double y, int cells_w, int cells_h,
                         const double *samples, int n, double scale, bool grow_up,
                         const Color gradient[3]) {
@@ -89,8 +78,8 @@ void braille_graph_draw(cairo_t *cr, double x, double y, int cells_w, int cells_
             // edge when growing up and the top edge when hanging down.
             double from_base = dot_offset(r, DOTS_Y, cell_h());
             double cy = grow_up ? y + height - from_base : y + from_base;
-            Color c = gradient_at(gradient, rows > 1 ? (double)r / (rows - 1) : 0.0);
-            cairo_set_source_rgba(cr, c.r, c.g, c.b, c.a);
+            Color c = color_gradient3(gradient, rows > 1 ? (double)r / (rows - 1) : 0.0);
+            color_set_source(cr, c);
             cairo_new_sub_path(cr);
             cairo_arc(cr, cx, cy, DOT_RADIUS, 0, 2 * M_PI);
             cairo_fill(cr);
@@ -113,8 +102,8 @@ cairo_surface_t *braille_graph_render_lit(int cells_w, int cells_h, bool grow_up
     for (int r = 0; r < rows; r++) {
         double from_base = dot_offset(r, DOTS_Y, cell_h());
         double cy = grow_up ? h - from_base : from_base;
-        Color c = gradient_at(gradient, rows > 1 ? (double)r / (rows - 1) : 0.0);
-        cairo_set_source_rgba(cr, c.r, c.g, c.b, c.a);
+        Color c = color_gradient3(gradient, rows > 1 ? (double)r / (rows - 1) : 0.0);
+        color_set_source(cr, c);
         for (int col = 0; col < columns; col++) {
             cairo_new_sub_path(cr);
             cairo_arc(cr, dot_offset(col, DOTS_X, cell_w()), cy, DOT_RADIUS, 0, 2 * M_PI);

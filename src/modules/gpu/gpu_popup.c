@@ -58,18 +58,6 @@ typedef struct {
 
 static GpuPopupState g_popup;
 
-static double text_width(const char *text, int size, bool bold) {
-    double w, h;
-    module_box_measure_text(text, size, bold, &w, &h);
-    (void)h;
-    return w;
-}
-
-static void draw_text_right(cairo_t *cr, double right_x, double y, double h, const char *text, int size, bool bold,
-                            Color color) {
-    module_box_draw_text_left(cr, right_x - text_width(text, size, bold), y, h, text, size, bold, color);
-}
-
 // The graph fills its card: as many cells as fit (one 5s sample per dot
 // column), up to the whole history. GRAPH_MIN_CELLS_W (5 minutes) only sets
 // the card's minimum width; a wider card shows a longer stretch of history.
@@ -123,7 +111,7 @@ static const char *ROW_LABELS[] = {"VRAM", "POWER", "FAN", "CLOCK", "VIDEO"};
 static double label_col_w(void) {
     double w = 0.0;
     for (size_t i = 0; i < sizeof(ROW_LABELS) / sizeof(ROW_LABELS[0]); i++) {
-        double lw = text_width(ROW_LABELS[i], FONT.xs, true);
+        double lw = module_box_text_width(ROW_LABELS[i], FONT.xs, true);
         if (lw > w) {
             w = lw;
         }
@@ -135,7 +123,7 @@ static double label_col_w(void) {
 // characters (the kernel's TASK_COMM_LEN minus the NUL), and the font is
 // monospace, so 15 of any glyph is exactly the widest a name can get.
 static double app_name_col_w(void) {
-    return text_width("000000000000000", FONT.label, false) + COL_GAP;
+    return module_box_text_width("000000000000000", FONT.label, false) + COL_GAP;
 }
 
 static void row_label(cairo_t *cr, double x, double y, const char *label) {
@@ -180,7 +168,7 @@ static double paint_header(cairo_t *cr, double x, double y, double w) {
     char icon[5];
     glyph_utf8(GLYPH_ICON_GPU, icon);
     module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, COLORS.green);
-    double tx = x + text_width(icon, FONT.heading, false) + 8.0;
+    double tx = x + module_box_text_width(icon, FONT.heading, false) + 8.0;
 
     if (!sysmon_gpu_available()) {
         module_box_draw_text_left(cr, tx, y, HEADER_H, "No NVIDIA GPU detected", FONT.md, true, COLORS.text);
@@ -190,7 +178,7 @@ static double paint_header(cairo_t *cr, double x, double y, double w) {
     char name[96];
     short_gpu_name(name, sizeof(name));
     module_box_draw_text_left(cr, tx, y, HEADER_H, name, FONT.md, true, COLORS.text);
-    tx += text_width(name, FONT.md, true);
+    tx += module_box_text_width(name, FONT.md, true);
     if (sysmon_gpu_driver()[0]) {
         char driver[96];
         snprintf(driver, sizeof(driver), "  ·  driver %s", sysmon_gpu_driver());
@@ -203,7 +191,7 @@ static double paint_header(cairo_t *cr, double x, double y, double w) {
         const char *word = pstate_word(atoi(pstate + 1), &fill);
         char pill[32];
         snprintf(pill, sizeof(pill), "%s %s", pstate, word);
-        double pill_w = text_width(pill, FONT.xs, true) + PILL_PAD_X * 2.0;
+        double pill_w = module_box_text_width(pill, FONT.xs, true) + PILL_PAD_X * 2.0;
         double pill_x = x + w - pill_w;
         double pill_y = y + (HEADER_H - PILL_H) / 2.0;
         module_box_draw_rect(cr, pill_x, pill_y, pill_w, PILL_H, fill, COLORS.mantle, 0.0);
@@ -215,7 +203,7 @@ static double paint_header(cairo_t *cr, double x, double y, double w) {
 static void graph_label_row(cairo_t *cr, double x, double y, double w, const char *left, Color left_color,
                             const char *right) {
     module_box_draw_text_left(cr, x, y, GRAPH_LABEL_H, left, FONT.sm, true, left_color);
-    draw_text_right(cr, x + w, y, GRAPH_LABEL_H, right, FONT.xs, false, COLORS.overlay0);
+    module_box_draw_text_right(cr, x + w, y, GRAPH_LABEL_H, right, FONT.xs, false, COLORS.overlay0);
 }
 
 // Graph card: usage (rising, 0-100%) over temperature (rising, 30-90 °C),
@@ -335,7 +323,7 @@ static double paint_apps(cairo_t *cr, double x, double y, double w) {
                        app_gradient, COLORS.surface0);
         char mib[32];
         snprintf(mib, sizeof(mib), "%d MiB", sysmon_gpu_process_mib(i));
-        draw_text_right(cr, x + w, ry, ROW_H, mib, FONT.label, false, COLORS.subtext0);
+        module_box_draw_text_right(cr, x + w, ry, ROW_H, mib, FONT.label, false, COLORS.subtext0);
     }
     return h;
 }
@@ -356,7 +344,7 @@ static double paint_content(cairo_t *cr, double w) {
         char span[24];
         braille_graph_span_label(span, sizeof(span), graph_cells(w), 5.0);
         module_box_draw_text_left(cr, x, y + 2.0, AXIS_H, span, FONT.xs, false, COLORS.overlay0);
-        draw_text_right(cr, x + w, y + 2.0, AXIS_H, "now", FONT.xs, false, COLORS.overlay0);
+        module_box_draw_text_right(cr, x + w, y + 2.0, AXIS_H, "now", FONT.xs, false, COLORS.overlay0);
     }
     y += AXIS_H + 2.0 + SECTION_GAP;
     y += paint_rows(cr, x, y);
@@ -370,17 +358,18 @@ static double content_width(void) {
     double w = braille_graph_width(GRAPH_MIN_CELLS_W) + CARD_PAD * 2.0;
     char icon[5];
     glyph_utf8(GLYPH_ICON_GPU, icon);
-    double icon_w = text_width(icon, FONT.heading, false) + 8.0;
+    double icon_w = module_box_text_width(icon, FONT.heading, false) + 8.0;
     if (!sysmon_gpu_available()) {
-        double hw = icon_w + text_width("No NVIDIA GPU detected", FONT.md, true);
+        double hw = icon_w + module_box_text_width("No NVIDIA GPU detected", FONT.md, true);
         return hw > w ? hw : w;
     }
 
     char name[96], driver[96];
     short_gpu_name(name, sizeof(name));
     snprintf(driver, sizeof(driver), "  ·  driver %s", sysmon_gpu_driver());
-    double header_w = icon_w + text_width(name, FONT.md, true) + text_width(driver, FONT.sm, false) + 16.0 +
-                      text_width("P12 active", FONT.xs, true) + PILL_PAD_X * 2.0;
+    double header_w = icon_w + module_box_text_width(name, FONT.md, true) +
+                      module_box_text_width(driver, FONT.sm, false) + 16.0 +
+                      module_box_text_width("P12 active", FONT.xs, true) + PILL_PAD_X * 2.0;
     if (header_w > w) {
         w = header_w;
     }
@@ -393,19 +382,19 @@ static double content_width(void) {
     // measure against a wide sample rather than the current reading.
     const char *meter_values[] = {vram, power, fan, "000 / 000 W", "100%"};
     for (size_t i = 0; i < sizeof(meter_values) / sizeof(meter_values[0]); i++) {
-        double rw = value_x + METER_W + COL_GAP + text_width(meter_values[i], FONT.label, false);
+        double rw = value_x + METER_W + COL_GAP + module_box_text_width(meter_values[i], FONT.label, false);
         if (rw > w) {
             w = rw;
         }
     }
     const char *lines[] = {clock, video, "0000 / 0000 MHz · mem 00000 MHz"};
     for (size_t i = 0; i < sizeof(lines) / sizeof(lines[0]); i++) {
-        double rw = value_x + text_width(lines[i], FONT.label, false);
+        double rw = value_x + module_box_text_width(lines[i], FONT.label, false);
         if (rw > w) {
             w = rw;
         }
     }
-    double apps_w = app_name_col_w() + APP_BAR_W + COL_GAP + text_width("00000 MiB", FONT.label, false);
+    double apps_w = app_name_col_w() + APP_BAR_W + COL_GAP + module_box_text_width("00000 MiB", FONT.label, false);
     return apps_w > w ? apps_w : w;
 }
 

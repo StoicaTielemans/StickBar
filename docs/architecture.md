@@ -51,8 +51,10 @@ stickBar/
     ├── render/
     │   ├── render.c              top-level per-output draw dispatch + background
     │   ├── module_box.c          shared cairo/pango helpers: bordered box chrome,
-    │   │                         centered text, left-aligned text (added for the
-    │   │                         tray's menu rows) -- used by every widget
+    │   │                         text measure/draw (left/centered/right) through
+    │   │                         a cache of shaped Pango layouts, ellipsis
+    │   │                         truncation -- all text goes through here
+    │   ├── color.h               Color helpers: set source, alpha, 3-stop gradient
     │   ├── braille_graph.c       btop-style braille-dot history graph (pure
     │   │                         cairo), used by the network/CPU/GPU/memory
     │   │                         dropdowns; plus a lit-sprite + column-rect path

@@ -12,6 +12,7 @@
 #include "modules/media/media.h"
 #include "pipewire/pipewire_client.h"
 #include "render/braille_graph.h"
+#include "render/color.h"
 #include "render/meter_bar.h"
 #include "render/module_box.h"
 #include "visualizer/visualizer.h"
@@ -135,64 +136,6 @@ typedef struct {
 
 static MediaPopupState g_popup = { .hovered_card = -1, .hovered_button = -1 };
 
-static double text_width(const char *text, int size, bool bold) {
-    double w, h;
-    module_box_measure_text(text, size, bold, &w, &h);
-    (void)h;
-    return w;
-}
-
-static void draw_text_right(cairo_t *cr, double right_x, double y, double h, const char *text, int size, bool bold,
-                            Color color) {
-    module_box_draw_text_left(cr, right_x - text_width(text, size, bold), y, h, text, size, bold, color);
-}
-
-// Binary-search ellipsis truncation over UTF-8 codepoint boundaries -- see
-// modules/media/media.c's own copy of this same algorithm (and
-// audio/device_popup.c's original) for why it's duplicated locally rather
-// than shared. Track titles/artists (unlike device_popup.c's ASCII-only
-// device descriptions) routinely contain multi-byte UTF-8, so candidates are
-// cut at codepoint offsets, not raw byte counts -- cutting mid-sequence
-// produces invalid UTF-8 that pango_layout_set_text() (inside
-// module_box_measure_text()) warns about and silently drops.
-static void truncate_to_width(const char *text, double max_w, int font_px, bool bold, char *out, size_t out_size) {
-    if (text_width(text, font_px, bold) <= max_w) {
-        snprintf(out, out_size, "%s", text);
-        return;
-    }
-
-    size_t len = strlen(text);
-    size_t offsets[TEXT_BUF_SIZE];
-    size_t n = 0;
-    for (size_t i = 0; i < len && n < TEXT_BUF_SIZE - 1;) {
-        offsets[n++] = i;
-        unsigned char c = (unsigned char)text[i];
-        size_t clen = 1;
-        if ((c & 0xE0) == 0xC0) {
-            clen = 2;
-        } else if ((c & 0xF0) == 0xE0) {
-            clen = 3;
-        } else if ((c & 0xF8) == 0xF0) {
-            clen = 4;
-        }
-        i += clen;
-    }
-    offsets[n] = len;
-
-    size_t lo = 0, hi = n;
-    while (lo < hi) {
-        size_t mid = (lo + hi + 1) / 2;
-        char candidate[TEXT_BUF_SIZE + 4];
-        snprintf(candidate, sizeof(candidate), "%.*s...", (int)offsets[mid], text);
-        if (text_width(candidate, font_px, bold) <= max_w) {
-            lo = mid;
-        } else {
-            hi = mid - 1;
-        }
-    }
-    snprintf(out, out_size, "%.*s...", (int)offsets[lo], text);
-}
-
 // "m:ss", or "h:mm:ss" from an hour up (long podcasts, videos) -- below an
 // hour this matches MediaPopup.qml's own formatTime() exactly.
 static void format_time(int64_t us, char *out, size_t out_size) {
@@ -290,9 +233,9 @@ static void paint_header(cairo_t *cr) {
     glyph_utf8(GLYPH_ICON_MEDIA_PLAY, icon);
     snprintf(summary, sizeof(summary), "  ·  %d player%s", g_popup.card_count, g_popup.card_count == 1 ? "" : "s");
     module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, g_popup.accent);
-    double tx = x + text_width(icon, FONT.heading, false) + 8.0;
+    double tx = x + module_box_text_width(icon, FONT.heading, false) + 8.0;
     module_box_draw_text_left(cr, tx, y, HEADER_H, "Media", FONT.md, true, COLORS.text);
-    tx += text_width("Media", FONT.md, true);
+    tx += module_box_text_width("Media", FONT.md, true);
     module_box_draw_text_left(cr, tx, y, HEADER_H, summary, FONT.sm, false, COLORS.subtext0);
 
     // Pill: the "liveliest" state across players -- playing beats paused
@@ -305,7 +248,7 @@ static void paint_header(cairo_t *cr) {
     }
     const char *word = any_playing ? "playing" : any_paused ? "paused" : "stopped";
     Color fill = any_playing ? COLORS.green : any_paused ? COLORS.yellow : COLORS.overlay1;
-    double pill_w = text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
+    double pill_w = module_box_text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
     double pill_x = x + CONTENT_W - pill_w;
     double pill_y = y + (HEADER_H - PILL_H) / 2.0;
     module_box_draw_rect(cr, pill_x, pill_y, pill_w, PILL_H, fill, COLORS.mantle, 0.0);
@@ -335,13 +278,13 @@ static void paint_timeline(cairo_t *cr, MprisPlayer *player, double y) {
     }
     // Reserve the widest the label can get, so the meter never shifts as
     // the seconds tick over (the font is monospace).
-    double text_col_w = text_width("00:00:00 / 00:00:00", FONT.sm, false);
+    double text_col_w = module_box_text_width("00:00:00 / 00:00:00", FONT.sm, false);
     double meter_w = inner_w() - text_col_w - COL_GAP;
     const Color gradient[3] = {g_popup.accent, g_popup.accent, COLORS.peach};
     double fraction = has_length ? (double)pos_us / (double)length_us : 0.0;
     meter_bar_draw(cr, inner_x(), y + (TIMELINE_ROW_H - TIMELINE_METER_H) / 2.0, meter_w, TIMELINE_METER_H, fraction,
                    TIMELINE_SEGMENTS, gradient, COLORS.surface0);
-    draw_text_right(cr, inner_x() + inner_w(), y, TIMELINE_ROW_H, text, FONT.sm, false, COLORS.subtext0);
+    module_box_draw_text_right(cr, inner_x() + inner_w(), y, TIMELINE_ROW_H, text, FONT.sm, false, COLORS.subtext0);
 }
 
 static void paint_button(cairo_t *cr, int card_index, int button, double y) {
@@ -392,10 +335,6 @@ static void rounded_rect(cairo_t *cr, double x, double y, double w, double h, do
     cairo_close_path(cr);
 }
 
-static void set_color(cairo_t *cr, Color c, double alpha) {
-    cairo_set_source_rgba(cr, c.r, c.g, c.b, c.a * alpha);
-}
-
 // Rendered once per open (on first use), shared by every card's graph, freed
 // in media_popup_close(). Three whole panels, all opaque and identical except
 // for the dots:
@@ -436,15 +375,15 @@ static cairo_surface_t *render_panel(const Color (*colors)[3]) {
     double w = inner_w(), h = VIS_ROW_H;
     cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, (int)w, (int)h);
     cairo_t *cr = cairo_create(surf);
-    set_color(cr, COLORS.base, 1.0);
+    color_set_source(cr, COLORS.base);
     cairo_paint(cr);
     rounded_rect(cr, 0.5, 0.5, w - 1.0, h - 1.0, VIS_RADIUS);
-    set_color(cr, COLORS.mantle, 1.0);
+    color_set_source(cr, COLORS.mantle);
     cairo_fill_preserve(cr);
-    set_color(cr, COLORS.surface0, 1.0);
+    color_set_source(cr, COLORS.surface0);
     cairo_set_line_width(cr, 1.0);
     cairo_stroke(cr);
-    set_color(cr, COLORS.surface1, 1.0);
+    color_set_source(cr, COLORS.surface1);
     cairo_rectangle(cr, vis_graph_x(), floor(VIS_PAD_Y + VIS_HALF_H + VIS_CENTER_GAP / 2.0),
                     braille_graph_width(VIS_CELLS), 1.0);
     cairo_fill(cr);
@@ -574,27 +513,21 @@ static void paint_card(cairo_t *cr, int i) {
     }
     Color status_color;
     const char *status = status_word(player, &status_color);
-    double status_w = text_width(status, FONT.xs, true);
-    truncate_to_width(app, inner_w() - status_w - COL_GAP, FONT.xs, true, line, sizeof(line));
+    double status_w = module_box_text_width(status, FONT.xs, true);
+    module_box_truncate_to_width(app, inner_w() - status_w - COL_GAP, FONT.xs, true, line, sizeof(line));
     module_box_draw_text_left(cr, inner_x(), y, TOP_LINE_H, line, FONT.xs, true, COLORS.overlay0);
-    draw_text_right(cr, inner_x() + inner_w(), y, TOP_LINE_H, status, FONT.xs, true, status_color);
+    module_box_draw_text_right(cr, inner_x() + inner_w(), y, TOP_LINE_H, status, FONT.xs, true, status_color);
     y += TOP_LINE_H;
 
-    const char *title = mpris_player_title(player);
-    if (!title[0]) {
-        title = mpris_player_identity(player);
-    }
-    if (!title[0]) {
-        title = "Unknown";
-    }
-    truncate_to_width(title, inner_w(), FONT.label, true, line, sizeof(line));
+    const char *title = media_display_title(player);
+    module_box_truncate_to_width(title, inner_w(), FONT.label, true, line, sizeof(line));
     module_box_draw_text_left(cr, inner_x(), y, TITLE_H, line, FONT.label, true, COLORS.text);
     y += TITLE_H;
 
     if (card->has_artist) {
         char artist[TEXT_BUF_SIZE];
         artist_text(player, artist, sizeof(artist));
-        truncate_to_width(artist, inner_w(), FONT.md, false, line, sizeof(line));
+        module_box_truncate_to_width(artist, inner_w(), FONT.md, false, line, sizeof(line));
         module_box_draw_text_left(cr, inner_x(), y, ARTIST_H, line, FONT.md, false, COLORS.subtext0);
         y += ARTIST_H;
     }

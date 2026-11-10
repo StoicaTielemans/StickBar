@@ -9,14 +9,10 @@
 #include "mpris/mpris_client.h"
 #include "wayland/context.h"
 
-// Formats `player`'s "artist - title" display text (falling back to its own
-// identity, then "Unknown", when no title is reported) -- matches
-// MediaWidget.qml's trackText(). Shared with modules/media/media_popup.c so
-// both the bar widget and its dropdown format a player's track text
-// identically, unlike the byte-based ellipsis truncation each applies
-// afterward (kept as separate local copies -- see media.c's own comment on
-// why that one is duplicated instead).
-void media_build_track_text(MprisPlayer *player, char *out, size_t out_size);
+// The title to show for `player`: its track title, else its own identity
+// (some players report no title), else "Unknown" -- matches MediaWidget.qml's
+// trackText() fallback. Shared by the bar box and the dropdown cards.
+const char *media_display_title(MprisPlayer *player);
 
 // Draws the active MPRIS player's module box horizontally centered within a
 // `bar_width`-wide bar, vertically spanning box_top..box_top+box_height --

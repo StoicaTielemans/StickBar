@@ -54,18 +54,6 @@ typedef struct {
 
 static InfoPopupState g_popup;
 
-static double text_width(const char *text, int size, bool bold) {
-    double w, h;
-    module_box_measure_text(text, size, bold, &w, &h);
-    (void)h;
-    return w;
-}
-
-static void draw_text_right(cairo_t *cr, double right_x, double y, double h, const char *text, int size, bool bold,
-                            Color color) {
-    module_box_draw_text_left(cr, right_x - text_width(text, size, bold), y, h, text, size, bold, color);
-}
-
 static const char *category_title(PrivacyCategory category) {
     switch (category) {
     case PRIVACY_CATEGORY_MIC: return "MICROPHONE";
@@ -113,7 +101,7 @@ static void snapshot_entries(void) {
 static void compute_layout(void) {
     double w = MIN_CONTENT_W;
     for (int i = 0; i < g_popup.entry_count; i++) {
-        double needed = text_width(g_popup.entries[i].name, FONT.md, false) + CARD_PAD * 2.0;
+        double needed = module_box_text_width(g_popup.entries[i].name, FONT.md, false) + CARD_PAD * 2.0;
         if (needed > w) {
             w = needed;
         }
@@ -139,13 +127,13 @@ static void paint_header(cairo_t *cr) {
     glyph_utf8(GLYPH_ICON_PRIVACY, icon);
     snprintf(summary, sizeof(summary), "  ·  %d stream%s", g_popup.entry_count, g_popup.entry_count == 1 ? "" : "s");
     module_box_draw_text_left(cr, x, y, HEADER_H, icon, FONT.heading, false, COLORS.maroon);
-    double tx = x + text_width(icon, FONT.heading, false) + 8.0;
+    double tx = x + module_box_text_width(icon, FONT.heading, false) + 8.0;
     module_box_draw_text_left(cr, tx, y, HEADER_H, "Privacy", FONT.md, true, COLORS.text);
-    tx += text_width("Privacy", FONT.md, true);
+    tx += module_box_text_width("Privacy", FONT.md, true);
     module_box_draw_text_left(cr, tx, y, HEADER_H, summary, FONT.sm, false, COLORS.subtext0);
 
     const char *word = "in use";
-    double pill_w = text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
+    double pill_w = module_box_text_width(word, FONT.xs, true) + PILL_PAD_X * 2.0;
     double pill_x = x + g_popup.content_w - pill_w;
     double pill_y = y + (HEADER_H - PILL_H) / 2.0;
     module_box_draw_rect(cr, pill_x, pill_y, pill_w, PILL_H, COLORS.maroon, COLORS.mantle, 0.0);
@@ -163,10 +151,11 @@ static double paint_category_card(cairo_t *cr, PrivacyCategory category, int cou
     char icon[5], count_text[16];
     glyph_utf8(category_glyph(category), icon);
     module_box_draw_text_left(cr, inner_x, row_y, CARD_TITLE_H, icon, FONT.md, false, COLORS.maroon);
-    module_box_draw_text_left(cr, inner_x + text_width(icon, FONT.md, false) + CARD_TITLE_ICON_GAP, row_y, CARD_TITLE_H,
+    module_box_draw_text_left(cr, inner_x + module_box_text_width(icon, FONT.md, false) + CARD_TITLE_ICON_GAP, row_y,
+                              CARD_TITLE_H,
                               category_title(category), FONT.xs, true, COLORS.overlay0);
     snprintf(count_text, sizeof(count_text), "%d", count);
-    draw_text_right(cr, inner_x + inner_w, row_y, CARD_TITLE_H, count_text, FONT.xs, true, COLORS.overlay0);
+    module_box_draw_text_right(cr, inner_x + inner_w, row_y, CARD_TITLE_H, count_text, FONT.xs, true, COLORS.overlay0);
     row_y += CARD_TITLE_H;
 
     // Clipped to the card: a name past MAX_CONTENT_W is cut off at the edge

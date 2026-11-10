@@ -3,13 +3,14 @@
 
 #include <cairo.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "config/config.h"
 
 // Fills an (x, y, w, h) rect with `fill` and strokes a `border_width`-thick border
 // in `border` around it. This is the shared "module box" chrome every bar widget
-// (workspace pills, the clock, and future modules) uses for its background --
-// individual widgets vary only in the colors/border width/size they pass in.
+// and popup card uses for its background -- callers vary only in the
+// colors/border width/size they pass in.
 void module_box_draw_rect(cairo_t *cr, double x, double y, double w, double h,
                            Color fill, Color border, double border_width);
 
@@ -21,8 +22,14 @@ void module_box_draw_rect(cairo_t *cr, double x, double y, double w, double h,
 // ink once this project's usual +12px module padding is added, but not
 // always: see module_box_measure_text_ink() below for the one glyph (so far)
 // where it doesn't.
+// All text goes through a cache of shaped Pango layouts (see module_box.c):
+// measuring and then drawing the same string shapes it once, and strings
+// unchanged since the last redraw aren't shaped again at all.
 void module_box_measure_text(const char *text, int font_size_px, bool bold,
                               double *out_w, double *out_h);
+
+// Just the logical width -- what nearly every caller wants.
+double module_box_text_width(const char *text, int font_size_px, bool bold);
 
 // Like module_box_measure_text(), but returns Pango's *ink* extent (the
 // glyph's actual rendered pixels) instead of its logical/advance extent.
@@ -51,5 +58,19 @@ void module_box_draw_text_centered(cairo_t *cr, double x, double y, double w, do
 // left-aligned, not centered, unlike every module box used so far).
 void module_box_draw_text_left(cairo_t *cr, double x, double y, double h,
                                 const char *text, int font_size_px, bool bold, Color color);
+
+// Draws `text` right-aligned so it ends at `right_x`, vertically centered
+// within y..y+h.
+void module_box_draw_text_right(cairo_t *cr, double right_x, double y, double h,
+                                 const char *text, int font_size_px, bool bold, Color color);
+
+// Copies `text` into `out`, cut at a codepoint boundary with "..." appended
+// if it's wider than `max_w` at the given font -- the longest such prefix
+// (binary search). Never cuts a multi-byte UTF-8 sequence (titles and device
+// names routinely have them; pango drops invalid UTF-8 with a warning).
+// Results are memoised, so re-truncating the same string every repaint is
+// cheap.
+void module_box_truncate_to_width(const char *text, double max_w, int font_size_px, bool bold,
+                                   char *out, size_t out_size);
 
 #endif

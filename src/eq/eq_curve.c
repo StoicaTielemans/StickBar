@@ -3,6 +3,7 @@
 #include <math.h>
 
 #include "eq/eq_state.h"
+#include "render/color.h"
 
 // Matches the script's own curve span (CURVE_FMIN/CURVE_FMAX in
 // blackpearl-eq.py) -- the curve's points are log-spaced across exactly this.
@@ -37,7 +38,7 @@ void eq_curve_draw(cairo_t *cr, double x, double y, double w, double h, double r
     cairo_clip(cr);
 
     if (zero_line) {
-        cairo_set_source_rgba(cr, zero_color.r, zero_color.g, zero_color.b, zero_color.a);
+        color_set_source(cr, zero_color);
         cairo_set_line_width(cr, 1.0);
         // +0.5 so a 1px line lands on a pixel row instead of straddling two
         // (cairo's coordinates are pixel *edges*, not pixel centers).
@@ -48,7 +49,7 @@ void eq_curve_draw(cairo_t *cr, double x, double y, double w, double h, double r
 
     int n = eq_state_curve_count();
     if (n >= 2) {
-        cairo_set_source_rgba(cr, color.r, color.g, color.b, color.a);
+        color_set_source(cr, color);
         cairo_set_line_width(cr, line_width);
         cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
         cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);

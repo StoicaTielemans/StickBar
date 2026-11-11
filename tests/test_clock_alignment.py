@@ -7,6 +7,10 @@ from startup, which made the shown seconds lag real time by up to ~1s.
 Reads the wall-clock timestamps WAYLAND_DEBUG puts on every request: every
 second of the run should have a wl_surface.commit within MAX_LAG_MS of the
 second boundary (the clock-only redraw commits right after the tick).
+
+The bar normally hides seconds (one commit a minute), so this runs it with
+STICKBAR_TEST_CLOCK_SECONDS to get a per-second change: the timer and its
+alignment are the same either way, only the shown text differs.
 """
 
 import sys
@@ -19,6 +23,7 @@ import common  # noqa: E402
 RUN_S = 8
 WARMUP_S = 2        # ignore startup (font loading delays the first frames)
 MAX_LAG_MS = 50.0   # measured ~0.1-2ms; generous for a loaded machine
+CLOCK_SECONDS = {"STICKBAR_TEST_CLOCK_SECONDS": "1"}
 
 
 def main():
@@ -28,7 +33,7 @@ def main():
 
     with tempfile.TemporaryDirectory() as tmp:
         log = Path(tmp) / "wl.log"
-        bar = common.start_bar(binary, stderr_path=log, wayland_debug=True)
+        bar = common.start_bar(binary, stderr_path=log, wayland_debug=True, env_extra=CLOCK_SECONDS)
         common.wait(RUN_S)
         common.stop_bar(bar)
         commits = [t for t, _sid, req, _ in common.parse_wayland_log(log) if req == "commit"]

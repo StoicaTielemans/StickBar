@@ -17,6 +17,9 @@ Checks the redraw path in bar/bar_surface.c from the outside, via WAYLAND_DEBUG:
    checks the commit count in that window stays at what the clock alone and at
    most one 5s poll would produce. Skipped if pactl isn't available. This does
    touch the real default sink, but only ever sets it to what it already is.
+
+Both checks count on a clock tick every second, so the bar runs with
+STICKBAR_TEST_CLOCK_SECONDS (it normally hides seconds and ticks once a minute).
 """
 
 import re
@@ -35,6 +38,7 @@ SMALL_DAMAGE_PX = 2000
 MIN_SMALL = 3
 NOOP_CALLS = 20
 NOOP_WINDOW_S = 2.0
+CLOCK_SECONDS = {"STICKBAR_TEST_CLOCK_SECONDS": "1"}
 
 
 def current_sink_state():
@@ -55,7 +59,7 @@ def main():
 
     with tempfile.TemporaryDirectory() as tmp:
         log = Path(tmp) / "wl.log"
-        bar = common.start_bar(binary, stderr_path=log, wayland_debug=True)
+        bar = common.start_bar(binary, stderr_path=log, wayland_debug=True, env_extra=CLOCK_SECONDS)
         try:
             time.sleep(WARMUP_S + 3)
             burst_start = burst_end = None

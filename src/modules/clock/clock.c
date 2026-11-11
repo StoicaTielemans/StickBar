@@ -2,6 +2,8 @@
 
 #include <linux/input-event-codes.h> // BTN_RIGHT
 #include <stdio.h>
+#include <stdlib.h> // getenv
+#include <string.h>
 #include <time.h>
 
 #include "config/config.h"
@@ -10,15 +12,27 @@
 #include "render/box_rects.h"
 #include "render/module_box.h"
 
-// Cached formatted string, e.g. "󰃮 04/08/26 󰥔 14:03:07" -- refreshed once per
+// Cached formatted string, e.g. "󰃮 04/08/26 󰥔 14:03" -- refreshed once per
 // second by clock_tick() (driven from main.c's timerfd), read by clock_render() on
 // every frame without reformatting.
 static char g_time_str[64] = "";
 
+// Seconds are hidden by default: the text then changes once a minute, so the bar
+// commits once a minute instead of every second (see clock_tick()'s return value).
+// STICKBAR_TEST_CLOCK_SECONDS brings them back so the clock tests still get a
+// per-second change to measure (tests/test_clock_alignment.py, test_redraw.py).
+static bool show_seconds(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        cached = getenv("STICKBAR_TEST_CLOCK_SECONDS") != NULL;
+    }
+    return cached;
+}
+
 // Where this box was last drawn, per output (render/box_rects.h).
 static BoxRectTable g_rects;
 
-void clock_tick(void) {
+bool clock_tick(void) {
     char calendar_glyph[5];
     char clock_glyph[5];
     glyph_utf8(GLYPH_ICON_CALENDAR, calendar_glyph);
@@ -28,14 +42,24 @@ void clock_tick(void) {
     struct tm local;
     localtime_r(&now, &local);
 
-    // Matches the reference Time.qml's format exactly: "{cal} dd/mm/yy {clock} hh:mm:ss".
+    // The reference Time.qml's format minus the seconds: "{cal} dd/mm/yy {clock} hh:mm".
     // tm_year is years since 1900; %100 gives the last two digits the same way the
     // QML original computes `now.getFullYear() % 100`.
-    snprintf(g_time_str, sizeof(g_time_str), "%s %02d/%02d/%02d %s %02d:%02d:%02d",
-              calendar_glyph,
-              local.tm_mday, local.tm_mon + 1, local.tm_year % 100,
-              clock_glyph,
-              local.tm_hour, local.tm_min, local.tm_sec);
+    char next[sizeof(g_time_str)];
+    int n = snprintf(next, sizeof(next), "%s %02d/%02d/%02d %s %02d:%02d",
+                     calendar_glyph,
+                     local.tm_mday, local.tm_mon + 1, local.tm_year % 100,
+                     clock_glyph,
+                     local.tm_hour, local.tm_min);
+    if (show_seconds() && n > 0 && (size_t)n < sizeof(next)) {
+        snprintf(next + n, sizeof(next) - (size_t)n, ":%02d", local.tm_sec);
+    }
+
+    if (strcmp(next, g_time_str) == 0) {
+        return false;
+    }
+    memcpy(g_time_str, next, sizeof(g_time_str));
+    return true;
 }
 
 double clock_render(cairo_t *cr, Output *output, double right_edge_x, double box_top, double box_height) {

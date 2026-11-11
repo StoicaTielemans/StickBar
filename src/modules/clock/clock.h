@@ -10,8 +10,9 @@
 // Recomputes the cached formatted time string from the current wall clock. Call
 // once at startup and then once per second thereafter (driven by main.c's
 // timerfd) -- clock_render() just reads the cached string rather than
-// reformatting it on every frame.
-void clock_tick(void);
+// reformatting it on every frame. Returns true if the shown text changed (once a
+// minute, since seconds aren't shown), so the caller only repaints then.
+bool clock_tick(void);
 
 // Draws the clock's module box right-anchored so its right edge sits at
 // `right_edge_x`, vertically spanning box_top..box_top+box_height. Records the

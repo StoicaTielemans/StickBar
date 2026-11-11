@@ -224,9 +224,16 @@ but a frame only reaches the compositor if it actually differs:
   `pactl` setting a volume to its current value — the last one confirmed: 40
   such calls produced zero extra commits).
 - **Damage is the bounding box of changed pixels**, not the whole surface —
-  a clock tick damages 8x10 px (the seconds digit), a volume change ~32x11.
+  a clock tick damages ~8x10 px (the last minute digit), a volume change ~32x11.
   Confirmed via `WAYLAND_DEBUG=1` (`grep damage_buffer`).
-- **The 1s clock tick is clock-only**: `output_mark_all_clock_dirty()` →
+- **The clock shows no seconds, so it repaints once a minute**: the timer still
+  fires every second (the media and CPU dropdowns ride on it), but
+  `clock_tick()` returns whether the text changed and `main.c` only marks the
+  clock dirty then. Measured with `tests/perf_compare.py` (90s, vs. the
+  seconds build): commits 143 -> 61/min, idle CPU 0.19% -> 0.10%; what's left is
+  mostly the 5s polls on both outputs. `STICKBAR_TEST_CLOCK_SECONDS` brings the
+  seconds back, for the two tests that need a per-second change.
+- **A clock tick is clock-only**: `output_mark_all_clock_dirty()` →
   `render_output_clock_only()` copies `prev` into `next` and repaints only the
   clock's box (clipped, at its last recorded rect from `clock_last_rect()`).
   It falls back to a full `render_output()` if a full redraw is also pending,
@@ -265,9 +272,9 @@ build before and after NVML + the redraw path above, run side by side:
   never appears in `nvidia-smi`'s process list and holds no VRAM.
 - **Almost all of the memory increase is NVML** (see [modules/sysmon.md](modules/sysmon.md));
   the redraw path's `prev`/`next` frames add ~0.6 MB for two outputs.
-- Commits barely drop because the clock really does change every second on
-  both outputs; the win is that each commit damages a few dozen pixels
-  instead of the whole bar.
+- Commits barely dropped here because the clock still showed seconds then (it
+  no longer does, see above); the win was that each commit damages a few dozen
+  pixels instead of the whole bar.
 - **Code cleanup pass** (release build vs. the visualizer commit `cfaf902`, same
   run, `tests/perf_compare.py`): idle CPU 0.14% -> 0.08%, memory and commits
   unchanged. Most of it is the Pango layout cache in `render/module_box.c` (every

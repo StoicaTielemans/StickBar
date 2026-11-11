@@ -385,7 +385,7 @@ int main(void) {
                     // time being shown just changed.
                     arm_clock_timer(timer_fd);
                 }
-                clock_tick();
+                bool clock_changed = clock_tick();
                 // Piggybacks on this already-ticking 1s timer rather than
                 // adding a new poll source -- see media_popup_tick()'s own
                 // doc comment for why MPRIS position needs polling at all.
@@ -394,8 +394,13 @@ int main(void) {
                 // Fills the CPU dropdown's process list ~1s after it opens.
                 cpu_popup_tick();
                 // Only the clock changed -- repaint just its box, not the whole
-                // bar (see bar_surface_mark_clock_dirty()).
-                output_mark_all_clock_dirty(&app);
+                // bar (see bar_surface_mark_clock_dirty()). The timer still fires
+                // every second for the two popups above, but the clock text only
+                // changes once a minute, so the other 59 ticks skip the
+                // copy-redraw-diff entirely instead of diffing to "no change".
+                if (clock_changed) {
+                    output_mark_all_clock_dirty(&app);
+                }
             } else if (fd == sysmon_timer_fd) {
                 timer_fd_drain(sysmon_timer_fd);
                 // All in-process reads (/proc, /sys, NVML) -- no subprocess.

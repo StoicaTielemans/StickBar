@@ -20,11 +20,23 @@ path = "src/main.rs"
 # `cargo build` (debug) is the default dev profile, the equivalent of the C bar's
 # `build/` at -O0, and what tests/ run against. `cargo build --release` is what the
 # user runs day to day.
+
+# Dependencies (rustfft, serde_json, zbus, ...) are optimized even in the debug
+# build, so timing-sensitive tests (the clock's 50 ms window, the visualizer's
+# 15 fps) measure our code, not unoptimized libraries. Our own crate stays at
+# opt-level 0 with overflow checks, like the C bar's build/.
+[profile.dev.package."*"]
+opt-level = 2
+
+# Not used: `target-cpu=native`. Nearly all CPU time goes to Arch's prebuilt
+# cairo/pango, so the gain can't be measured, and the binary would stop being portable.
 [profile.release]
-lto = true          # optimize across crates, not just inside each one
+lto = "fat"         # optimize across all crates, not just inside each one
 codegen-units = 1   # slower build, smaller and faster binary
 strip = true        # drop symbols from the shipped binary
-panic = "abort"     # no unwinding machinery; a panic is a bug either way
+# Abort instead of unwinding: with unwinding, a panicking worker thread (pulse,
+# PipeWire, D-Bus) would die quietly and leave its module frozen. Abort fails loudly.
+panic = "abort"
 
 # ---------------------------------------------------------------------------
 # Lint policy. Rust's safety only holds if nobody takes the escape hatches, so
@@ -42,6 +54,24 @@ warnings = "deny"
 unused_must_use = "deny"
 unused_results = "deny"
 missing_debug_implementations = "warn"
+# Modern-idiom group: e.g. no hidden lifetimes in paths (`Foo<'_>`, not `Foo`).
+rust_2018_idioms = { level = "deny", priority = -1 }
+# Identifiers stay plain ASCII (same spirit as the glyph rule in CLAUDE.md).
+non_ascii_idents = "forbid"
+# No `pub` on items nothing outside their module can reach.
+unreachable_pub = "warn"
+# Dead or misleading code: needless paths, unused/redundant lifetimes, casts to the
+# type a value already has, `let _ = x` that drops something meaningful, `let x = ();`.
+unused_qualifications = "warn"
+unused_lifetimes = "warn"
+redundant_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+let_underscore_drop = "warn"
+unit_bindings = "warn"
+explicit_outlives_requirements = "warn"
+# Performance: one huge enum variant makes every value of that enum that big.
+variant_size_differences = "warn"
 
 [lints.clippy]
 # Groups first at a lower priority, so the individual lints below override them.
@@ -59,19 +89,79 @@ unimplemented = "deny"
 unreachable = "deny"
 indexing_slicing = "deny"   # `v[i]` panics when out of range; use `v.get(i)`
 exit = "deny"               # process::exit skips destructors (sockets, buffers)
+string_slice = "deny"       # `&s[a..b]` panics mid-UTF-8 character (the C glyph-bug class)
+get_unwrap = "deny"
+unwrap_in_result = "deny"
+panic_in_result_fn = "deny"
+unchecked_time_subtraction = "deny"  # `Instant - Instant` panics if the order is wrong
+fallible_impl_from = "deny"          # a `From` that can panic should be `TryFrom`
 
 # Silent-bug shortcuts: these compile and run, but can quietly give wrong results.
 as_conversions = "deny"     # `x as u8` truncates silently; use `u8::try_from(x)`
 mem_forget = "deny"         # leaks the value and skips its cleanup
 let_underscore_must_use = "deny"
 float_cmp = "deny"
+float_cmp_const = "deny"
+lossy_float_literal = "deny"  # a float literal that can't be stored exactly
+unused_result_ok = "deny"     # `result.ok();` throws the error away
+map_err_ignore = "deny"       # `.map_err(|_| ..)` loses the original error
+assertions_on_result_states = "deny"
+let_underscore_untyped = "deny"
+
+# Threads and shared state (the pulse, PipeWire, zbus and NVML threads land later).
+rc_mutex = "warn"             # Rc is single-threaded, so a Mutex inside it is pointless
+mutex_atomic = "warn"         # a Mutex<bool> should be an AtomicBool
+mutex_integer = "warn"
+significant_drop_in_scrutinee = "warn"  # a lock held for a whole `match` by accident
+significant_drop_tightening = "warn"    # a lock held longer than it's used
 
 # Leftover debugging. Diagnostics go to stderr via eprintln!, like the C bar.
 dbg_macro = "deny"
 print_stdout = "deny"
 
-# Escape hatches: any `#[allow(...)]` must carry a `reason = "..."` saying why.
+# Escape hatches: no `#[allow]` at all. A suppression is `#[expect(lint, reason
+# = "...")]`, which itself becomes an error once the lint stops firing, so stale
+# suppressions can't linger.
+allow_attributes = "deny"
 allow_attributes_without_reason = "deny"
 # Write `Rc::clone(&x)` rather than `x.clone()`, so a cheap refcount bump is
 # visibly different from a deep copy.
 clone_on_ref_ptr = "warn"
+
+# Style and readability.
+missing_docs_in_private_items = "warn"  # every item needs a `///` doc comment (the
+                                        # project's "comment heavily" rule, enforced)
+self_named_module_files = "deny"  # each module is a directory with mod.rs,
+                                  # matching "one directory per widget"
+shadow_unrelated = "warn"         # no reusing a name for something unrelated
+wildcard_enum_match_arm = "warn"  # list every variant, so a new one (a new module,
+                                  # a new popup kind) shows every place to update
+non_ascii_literal = "deny"        # no raw glyphs in literals: '\u{f0e7}' consts
+                                  # in src/config/glyphs.rs
+str_to_string = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+if_then_some_else_none = "warn"
+semicolon_outside_block = "warn"
+tests_outside_test_module = "warn"
+use_self = "warn"
+debug_assert_with_mut_call = "warn"
+iter_not_returning_iterator = "warn"
+infallible_try_from = "warn"
+
+# Performance, beyond clippy::perf (already on through `all`).
+redundant_clone = "warn"
+needless_collect = "warn"
+or_fun_call = "warn"            # `.unwrap_or(expensive())` runs it even when unused
+format_push_string = "warn"     # `s += &format!(..)` allocates twice; use write!
+rc_buffer = "warn"              # Rc<String> -> Rc<str>
+large_stack_frames = "warn"
+iter_with_drain = "warn"
+string_lit_as_bytes = "warn"
+trivial_regex = "warn"
+inefficient_to_string = "warn"
+naive_bytecount = "warn"
+
+# Considered and left out: arithmetic_side_effects (mostly noise on pixel math;
+# debug builds already panic on overflow, and the tests run the debug build),
+# the whole nursery/restriction groups (the Clippy book advises against both),
+# and clippy::cargo (it wants publishing metadata for a crate that's never published).

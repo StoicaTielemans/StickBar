@@ -6,3 +6,15 @@ allow-panic-in-tests = true
 allow-indexing-slicing-in-tests = true
 allow-print-in-tests = true
 allow-dbg-in-tests = true
+
+# A binary, not a library: pedantic lints may suggest changing signatures.
+avoid-breaking-exported-api = false
+
+# Calls that compile fine but break how the bar must work. The reason is shown
+# in the build error.
+disallowed-methods = [
+    { path = "std::thread::sleep", reason = "never block the event loop; use a calloop Timer" },
+    { path = "std::process::Command::output", reason = "blocks until the child exits; use spawn() and watch the child" },
+    { path = "std::process::Command::status", reason = "blocks until the child exits; use spawn() and watch the child" },
+    { path = "std::thread::spawn", reason = "use thread::Builder::new().name(..) so the thread shows by name in /proc, and only start it after the SIGUSR1 source exists" },
+]

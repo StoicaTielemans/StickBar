@@ -55,6 +55,8 @@ must pass.
   surface per output with an exclusive zone, double-buffered shm, frame-callback-throttled
   redraw with dirty flags and minimal damage, colours, fonts and glyph consts, and the pango
   text helpers with the layout cache. Exit with status 1 when the compositor goes away.
+  When cairo-rs lands, add `cairo::Context::show_text` and `text_path` (the toy text API)
+  to `clippy.toml`'s `disallowed-methods`. The path only resolves once the crate is a dependency.
   Tests: `test_wayland_disconnect`, `test_stdin_intact`.
 - [ ] **M2: Test-control channel + pointer** (`testing/test_control.c` ~665,
   `wayland/pointer.c`, `render/box_rects.c`). The `STICKBAR_TEST_CONTROL` stdin channel,

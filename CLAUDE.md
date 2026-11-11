@@ -91,18 +91,27 @@ each lint next to it. It makes these build errors:
 - any `unsafe` (`forbid`, so no `#[allow]` can override it);
 - every warning;
 - the crash shortcuts: `unwrap`, `expect`, `panic!`, `todo!`, `unimplemented!`,
-  `unreachable!`, slice indexing `v[i]`, and `process::exit`;
+  `unreachable!`, slice indexing `v[i]`, string slicing `&s[a..b]`, and `process::exit`;
 - the silent-bug shortcuts: `as` casts, `mem::forget`, and ignored `Result`s or
   other `#[must_use]` values;
 - `println!`/`dbg!`: diagnostics go to stderr with `eprintln!`;
-- any `#[allow(...)]` without a `reason = "..."`.
+- any `#[allow(...)]` at all;
+- a missing `///` doc comment on any item (fn, struct, field, enum variant);
+- a module written as `foo.rs` + `foo/`: every module is a directory with `mod.rs`;
+- raw non-ASCII in literals (glyphs are `'\u{...}'` consts);
+- blocking calls on the event loop (`thread::sleep`, `Command::output`/`status`) and
+  unnamed threads (`thread::spawn`). `clippy.toml`'s `disallowed-methods` gives the
+  reason in the error.
 
-`clippy.toml` relaxes only the crash shortcuts, and only inside `#[cfg(test)]`.
+Formatting is `rustfmt.toml`. `clippy.toml` relaxes only the crash shortcuts, and only
+inside `#[cfg(test)]`. A misspelled lint name is an error too, so the config can't
+silently drift.
 
-- **Never weaken a lint, add an `#[allow]`, or edit `Cargo.toml`'s `[lints]` to make
-  code compile. Fix the code instead.** Handle the case with `match`, `?`,
+- **Never weaken a lint, add a suppression, or edit `Cargo.toml`'s `[lints]` /
+  `clippy.toml` to make code compile. Fix the code instead.** Handle the case with `match`, `?`,
   `if let`, `.get()`, `try_from` or a default. If a lint truly can't be satisfied,
-  stop and ask the user.
+  stop and ask the user. If one is agreed, it's `#[expect(lint, reason = "...")]`,
+  which turns into an error itself once it's no longer needed.
 - No `unsafe`, not even for FFI. Use the safe wrapper crates (smithay-client-toolkit,
   cairo-rs/pango, zbus, pipewire, libpulse-binding, nvml-wrapper, rustix). If
   something truly has no safe wrapper, discuss it with the user before doing
@@ -110,6 +119,9 @@ each lint next to it. It makes these build errors:
 - Don't paper over borrow-checker errors with `.clone()` or `Rc<RefCell<…>>` by
   reflex. Restructure ownership first, and if shared mutable state is genuinely
   needed, say why in a comment.
+- Worker threads (pulse, PipeWire, D-Bus) use `thread::Builder::new().name(..)`, start
+  only after the SIGUSR1 signal source exists, and talk to the main loop through a
+  calloop channel.
 - Add a crate only when the module that needs it is being ported, and keep
   `Cargo.lock` committed.
 

@@ -1,5 +1,5 @@
 //! Styling and geometry constants shared across the bar, ported from the C bar's
-//! `config/config.c` (itself ported from the reference Quickshell bar's `config.js`).
+//! `config/` (itself ported from the reference Quickshell bar's `config.js`).
 //!
 //! Only values genuinely shared between modules live here. A widget's own one-off
 //! tuning (e.g. the workspace pill's padding) stays in that widget's own files,
@@ -7,6 +7,9 @@
 
 mod bar;
 mod colors;
+mod fonts;
+pub(crate) mod glyphs;
 
 pub(crate) use bar::BAR;
-pub(crate) use colors::COLORS;
+pub(crate) use colors::{COLORS, Color};
+pub(crate) use fonts::FONT;

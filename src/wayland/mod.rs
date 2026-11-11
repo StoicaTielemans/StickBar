@@ -30,7 +30,7 @@ use smithay_client_toolkit::{
     shm::{Shm, ShmHandler},
 };
 
-use crate::bar::BarSurface;
+use crate::{bar::BarSurface, render::Renderer};
 
 /// All of the bar's state, handed to every Wayland event handler.
 pub(crate) struct App {
@@ -46,6 +46,8 @@ pub(crate) struct App {
     layer_shell: LayerShell,
     /// Every tracked monitor, each with its bar (the C bar's `Output` list).
     outputs: Vec<Output>,
+    /// Drawing state shared by every bar: the text cache and the modules.
+    renderer: Renderer,
     /// How many monitors have been reported so far; the next one's `index`.
     next_output_index: usize,
     /// `STICKBAR_TEST_CONTROL=1`: the tests drive this instance (see `testing/`),
@@ -75,6 +77,7 @@ impl App {
         let shm = Shm::bind(globals, qh).map_err(|_e| missing("wl_shm"))?;
         let layer_shell =
             LayerShell::bind(globals, qh).map_err(|_e| missing("zwlr_layer_shell_v1"))?;
+        let renderer = Renderer::new().map_err(|err| format!("couldn't set up drawing: {err}"))?;
         Ok(Self {
             registry_state: RegistryState::new(globals),
             compositor,
@@ -82,6 +85,7 @@ impl App {
             output_state: OutputState::new(globals, qh),
             layer_shell,
             outputs: Vec::new(),
+            renderer,
             next_output_index: 0,
             test_mode,
             exit: false,
@@ -91,8 +95,23 @@ impl App {
     /// Redraws every bar that's dirty and free to draw. The main loop calls this
     /// after each pass, so everything changed in one pass is drawn once.
     pub(crate) fn flush_dirty(&mut self, qh: &QueueHandle<Self>) {
-        for bar in self.bars_mut() {
-            bar.flush(qh);
+        // Destructured so the bars (in `outputs`) and the shared `renderer`
+        // can be borrowed at the same time: they're separate fields.
+        let Self {
+            outputs, renderer, ..
+        } = self;
+        for bar in outputs.iter_mut().filter_map(|output| output.bar.as_mut()) {
+            bar.flush(qh, renderer);
+        }
+    }
+
+    /// The clock timer fired: re-read the time, and if the shown text changed,
+    /// have every bar repaint just its clock.
+    pub(crate) fn clock_tick(&mut self) {
+        if self.renderer.clock.tick() {
+            for bar in self.bars_mut() {
+                bar.mark_clock_dirty();
+            }
         }
     }
 
@@ -123,11 +142,6 @@ impl App {
             .iter_mut()
             .filter_map(|output| output.bar.as_mut())
     }
-
-    /// The bar whose surface is `surface`, if any.
-    fn bar_for_surface(&mut self, surface: &WlSurface) -> Option<&mut BarSurface> {
-        self.bars_mut().find(|bar| bar.wl_surface() == surface)
-    }
 }
 
 impl CompositorHandler for App {
@@ -139,8 +153,15 @@ impl CompositorHandler for App {
         surface: &WlSurface,
         _time: u32,
     ) {
-        if let Some(bar) = self.bar_for_surface(surface) {
-            bar.frame_done(qh);
+        let Self {
+            outputs, renderer, ..
+        } = self;
+        let bar = outputs
+            .iter_mut()
+            .filter_map(|output| output.bar.as_mut())
+            .find(|bar| bar.wl_surface() == surface);
+        if let Some(bar) = bar {
+            bar.frame_done(qh, renderer);
         }
     }
 

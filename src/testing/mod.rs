@@ -28,7 +28,10 @@ use calloop::{
 };
 use serde_json::{Value, json};
 
-use crate::wayland::{App, Output};
+use crate::{
+    bar::BarSurface,
+    wayland::{App, Output},
+};
 
 /// The environment variable that turns the channel on (exactly `1`, as in C).
 const ENABLE_VAR: &str = "STICKBAR_TEST_CONTROL";
@@ -146,13 +149,23 @@ fn outputs(app: &App) -> Value {
 }
 
 /// `rects <output>`: where each module's box was last drawn on that monitor's
-/// bar. No module is ported yet, so the map is empty, which is also what the C
-/// bar replies for a monitor with nothing drawn on it.
+/// bar, as `{"clock": [x, y, w, h], ...}`. Empty until the bar has drawn.
 fn rects(app: &App, name: &str) -> Value {
-    if find_output(app, name).is_none() {
+    let Some(output) = find_output(app, name) else {
         return error("no such output");
-    }
-    json!({ "ok": true, "rects": {} })
+    };
+    let rects: serde_json::Map<String, Value> = output
+        .bar
+        .iter()
+        .flat_map(BarSurface::boxes)
+        .map(|b| {
+            (
+                b.name.to_owned(),
+                json!([b.rect.x, b.rect.y, b.rect.w, b.rect.h]),
+            )
+        })
+        .collect();
+    json!({ "ok": true, "rects": rects })
 }
 
 /// A monitor by connector name (`DP-2`) or, if `name` starts with a digit, by index.

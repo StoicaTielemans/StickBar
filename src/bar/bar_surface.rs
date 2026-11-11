@@ -11,6 +11,12 @@
 //!      the compositor isn't holding, commit it with damage limited to the
 //!      changed rectangle, and swap `prev`/`next`.
 //!
+//! Step 1 has a shortcut for the clock, which changes far more often than
+//! anything else: when only the clock is dirty, `next` starts as a copy of
+//! `prev` and just the clock's box is repainted on top, so nothing else is laid
+//! out again. If the clock's width changed, everything left of it would move,
+//! so that falls back to a full redraw.
+//!
 //! Redraws are paced by frame callbacks: after a commit, the next one waits for
 //! the compositor's "frame done" so the bar never draws faster than the
 //! monitor shows. A redraw requested meanwhile just sets `dirty`.
@@ -32,11 +38,27 @@ use smithay_client_toolkit::{
 };
 
 use super::damage::{Rect, changed_rect};
-use crate::{config::BAR, render, wayland::App};
+use crate::{
+    config::BAR,
+    render::{ModuleBox, Renderer},
+    wayland::App,
+};
 
 /// The layer-shell namespace. Kept identical to the C bar's, so any Hyprland
 /// `layerrule` written for it keeps matching.
 const NAMESPACE: &str = "custombar";
+
+/// How much of the bar needs redrawing. Ordered, so merging two requests is
+/// `max`: a full redraw covers a clock-only one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Dirty {
+    /// Nothing changed.
+    Clean,
+    /// Only the clock's text changed.
+    Clock,
+    /// Anything else (or the size) changed: redraw everything.
+    Full,
+}
 
 /// Everything that depends on the surface's size, (re)created on each configure
 /// that changes the size. Grouped so "not configured yet" is simply `None`.
@@ -68,8 +90,12 @@ pub(crate) struct BarSurface {
     layer: LayerSurface,
     /// Size-dependent state; `None` until the compositor's first configure.
     frames: Option<Frames>,
-    /// Something shown on this bar may have changed: redraw at the next chance.
-    dirty: bool,
+    /// What may have changed since the last frame: redrawn at the next chance.
+    dirty: Dirty,
+    /// Where each module's box was drawn in the last frame (the C bar's
+    /// per-module box-rect tables, kept per bar here). Read by the tests'
+    /// `rects` command, and from M4 by click hit-testing.
+    boxes: Vec<ModuleBox>,
     /// A frame callback is outstanding, so the next redraw waits for it.
     frame_pending: bool,
 }
@@ -115,14 +141,25 @@ impl BarSurface {
         Self {
             layer,
             frames: None,
-            dirty: false,
+            dirty: Dirty::Clean,
+            boxes: Vec::new(),
             frame_pending: false,
         }
     }
 
-    /// Asks for a redraw at the next opportunity.
-    pub(crate) const fn mark_dirty(&mut self) {
-        self.dirty = true;
+    /// Asks for a full redraw at the next opportunity.
+    pub(crate) fn mark_dirty(&mut self) {
+        self.dirty = self.dirty.max(Dirty::Full);
+    }
+
+    /// Asks for the clock to be redrawn (only) at the next opportunity.
+    pub(crate) fn mark_clock_dirty(&mut self) {
+        self.dirty = self.dirty.max(Dirty::Clock);
+    }
+
+    /// Where each module's box was drawn in the last frame.
+    pub(crate) fn boxes(&self) -> &[ModuleBox] {
+        &self.boxes
     }
 
     /// The bar's `wl_surface`, for matching frame callbacks and pointer events.
@@ -150,49 +187,38 @@ impl BarSurface {
                 }
             }
         }
-        self.dirty = true;
+        self.dirty = Dirty::Full;
     }
 
     /// Redraws now if the bar is dirty, configured, and not waiting on a frame
     /// callback. Called after every pass of the event loop.
-    pub(crate) fn flush(&mut self, qh: &QueueHandle<App>) {
-        if self.dirty && !self.frame_pending && self.frames.is_some() {
-            self.render(qh);
+    pub(crate) fn flush(&mut self, qh: &QueueHandle<App>, renderer: &mut Renderer) {
+        if self.dirty != Dirty::Clean && !self.frame_pending && self.frames.is_some() {
+            self.render(qh, renderer);
         }
     }
 
     /// The compositor showed the last frame: draw again if anything changed meanwhile.
-    pub(crate) fn frame_done(&mut self, qh: &QueueHandle<App>) {
+    pub(crate) fn frame_done(&mut self, qh: &QueueHandle<App>, renderer: &mut Renderer) {
         self.frame_pending = false;
-        self.flush(qh);
+        self.flush(qh, renderer);
     }
 
     /// Steps 1-3 of the pipeline in the module docs.
-    fn render(&mut self, qh: &QueueHandle<App>) {
+    fn render(&mut self, qh: &QueueHandle<App>, renderer: &mut Renderer) {
         let Some(frames) = self.frames.as_mut() else {
             return;
         };
 
-        // 1. Draw into `next`. The cairo context must be gone before the pixels
-        // are read, so it lives only inside this block.
-        {
-            let cr = match cairo::Context::new(&frames.next) {
-                Ok(cr) => cr,
-                Err(err) => {
-                    eprintln!("stickBar: cairo context failed: {err}");
-                    return;
-                }
-            };
-            if let Err(err) = render::render_output(&cr) {
-                eprintln!("stickBar: drawing the bar failed: {err}");
-                return;
-            }
+        // 1. Draw into `next` (all of it, or just the clock).
+        if let Err(err) = frames.draw(renderer, &mut self.boxes, self.dirty) {
+            eprintln!("stickBar: drawing the bar failed: {err}");
+            return;
         }
-        frames.next.flush();
 
         // 2. What changed since the frame on screen?
         let Some(damage) = frames.damage() else {
-            self.dirty = false; // nothing visible changed: no commit at all
+            self.dirty = Dirty::Clean; // nothing visible changed: no commit at all
             return;
         };
 
@@ -239,7 +265,7 @@ impl BarSurface {
         std::mem::swap(&mut frames.prev, &mut frames.next);
         frames.prev_valid = true;
         self.frame_pending = true;
-        self.dirty = false;
+        self.dirty = Dirty::Clean;
     }
 }
 
@@ -280,6 +306,62 @@ impl Frames {
             next,
             prev_valid: false,
         })
+    }
+
+    /// Step 1: draws the bar into `next` and records where the boxes went.
+    /// Every cairo context made here is dropped before returning, which the
+    /// pixel reads after it need (cairo won't share a surface's pixels while a
+    /// context can still draw on it).
+    fn draw(
+        &mut self,
+        renderer: &mut Renderer,
+        boxes: &mut Vec<ModuleBox>,
+        dirty: Dirty,
+    ) -> Result<(), cairo::Error> {
+        let (width, height) = (f64::from(self.width), f64::from(self.height));
+        let old_clock = boxes.iter().find(|b| b.name == "clock").map(|b| b.rect);
+
+        // The clock-only shortcut needs the previous picture and the clock's old box.
+        if dirty == Dirty::Clock
+            && self.prev_valid
+            && let Some(old) = old_clock
+            && self.copy_prev_into_next()
+        {
+            let cr = cairo::Context::new(&self.next)?;
+            if renderer.render_clock_only(&cr, old)?.is_some() {
+                drop(cr);
+                self.next.flush();
+                return Ok(()); // same box, so `boxes` is still right
+            }
+            // The clock's width changed: fall through to a full redraw, which
+            // paints over everything anyway.
+        }
+
+        let cr = cairo::Context::new(&self.next)?;
+        *boxes = renderer.render_output(&cr, width, height)?;
+        drop(cr);
+        self.next.flush();
+        Ok(())
+    }
+
+    /// Copies the frame on screen into `next`, as the starting point for a
+    /// clock-only redraw. Returns false if the pixels couldn't be copied.
+    fn copy_prev_into_next(&mut self) -> bool {
+        // `data()` hands out the pixels for writing (and tells cairo they
+        // changed when it's dropped); `with_data()` reads the other frame's.
+        let Ok(mut next) = self.next.data() else {
+            return false;
+        };
+        let mut copied = false;
+        let read = self.prev.with_data(|prev| {
+            // Same size by construction; checked because copy_from_slice
+            // would panic on a mismatch.
+            if next.len() == prev.len() {
+                next.copy_from_slice(prev);
+                copied = true;
+            }
+        });
+        read.is_ok() && copied
     }
 
     /// The changed rectangle between `prev` and `next`, or `None` if nothing

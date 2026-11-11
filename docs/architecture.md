@@ -20,14 +20,26 @@ src/
 │                           STICKBAR_TEST_OUTPUT filter
 ├── bar/
 │   ├── bar_surface.rs      BarSurface: the layer surface, two shm buffers, the
-│   │                       prev/next cairo frames, dirty + frame-callback pacing,
-│   │                       draw -> diff -> commit only the changed rectangle
+│   │                       prev/next cairo frames, Dirty (clean/clock/full) +
+│   │                       frame-callback pacing, draw -> diff -> commit only the
+│   │                       changed rectangle, and the boxes of the last frame
 │   └── damage.rs           changed_rect(): the frame diff, with unit tests
-├── render/mod.rs           render_output(): the bar background (modules from M3)
+├── modules/
+│   └── clock/
+│       ├── mod.rs          Clock: cached text, tick(), its box
+│       └── timer.rs        wall-clock-aligned timerfd (rustix), ECANCELED re-arm
+├── render/
+│   ├── mod.rs              Renderer (shared by every bar: text cache + modules),
+│   │                       render_output(), render_clock_only(), BoxRect/ModuleBox
+│   ├── text.rs             TextCache: pango context, font descriptions, LRU of 64
+│   │                       shaped layouts; all text goes through here
+│   └── module_box.rs       draw_rect() and label(): the bordered module box
 ├── testing/mod.rs          the test-control channel on stdin (STICKBAR_TEST_CONTROL=1)
 └── config/
     ├── colors.rs           Color + the Catppuccin Mocha palette
-    └── bar.rs              BAR geometry (height so far)
+    ├── bar.rs              BAR geometry
+    ├── fonts.rs            FONT: family and sizes
+    └── glyphs.rs           Nerd Font icons as '\u{...}' char consts
 ```
 
 How an event becomes pixels: SCTK reads the Wayland socket and calls a handler

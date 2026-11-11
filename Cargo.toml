@@ -21,6 +21,15 @@ cairo-rs = "0.22"
 # The event loop every input joins (the C bar's epoll loop). Same version SCTK uses;
 # `signals` adds the signalfd-based SIGINT/SIGTERM/SIGUSR1 source.
 calloop = { version = "0.14", features = ["signals"] }
+# Local time for the clock's text ("clock" = read the system clock + time zone).
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# Safe bindings to pango + pangocairo: every piece of text is shaped by pango (the
+# toy cairo text API can't do Nerd Font icons or kanji; see clippy.toml).
+pango = "0.22"
+pangocairo = "0.22"
+# Safe wrappers over Linux syscalls cairo/calloop don't cover. "time" = timerfd,
+# for the clock's wall-clock-aligned tick (calloop's Timer is monotonic-only).
+rustix = { version = "1", features = ["time"] }
 # JSON for the test-control channel's replies (and Hyprland IPC from M5).
 serde_json = "1"
 # Wayland toolkit: compositor, shm pools, outputs, layer-shell. API changes between

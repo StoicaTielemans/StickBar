@@ -71,12 +71,15 @@ must pass.
   box drawn. The pointer (`wl_seat`), click routing and `click`/`menu-*`/`catcher-click` go
   to M4, where the clock's right-click opening the calendar is the first thing that reacts
   to a click.
-- [ ] **M3: Clock** (`modules/clock/clock.c`, plus `render/module_box.c` and `config/glyphs.c`
-  from M1, the first text drawn). Fonts, `BAR` spacing/border/padding, the pango text
-  helpers with the layout cache, box-rect recording (`render/box_rects.c`, so `rects` reports
-  the clock), and the box, repainting only on the minute,
-  `STICKBAR_TEST_CLOCK_SECONDS`. Tests: `test_clock_alignment`, `test_redraw` (clock
-  part).
+- [x] **M3: Clock** (`modules/clock/clock.c`, the text and box parts of `render/module_box.c`,
+  `config/glyphs.c`, the clock bits of `render/render.c`, `bar/bar_surface.c` and `main.c`).
+  The clock box, a wall-clock-aligned `timerfd` (rustix) with `ECANCELED` re-arm, the clock-only
+  redraw shortcut, the pango layout cache, glyph consts verified with fontTools, box rects per
+  bar (so `rects` reports the clock), and `STICKBAR_TEST_CLOCK_SECONDS`. Tests:
+  `test_clock_alignment`, `test_redraw` (both parts: no pulse events reach the bar yet, so the
+  no-op check passes trivially until M9). The clock box is **pixel-identical** to the C bar's
+  (grim of both, byte-equal PNGs). *Deferred:* `BAR.item_spacing` (no gap with a single box)
+  and the other font sizes arrive with their first users.
 - [ ] **M4: Pointer, popup infrastructure + year calendar** (`wayland/pointer.c`,
   `bar/popup_surface.c`, `bar/popup_host.c`, `render/popup_chrome.c`, `render/popup_style.h`,
   `modules/clock/clock_calendar_popup.c`). The `wl_seat` pointer, with button/motion/scroll
@@ -144,3 +147,8 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
 - 2026-11-11 · M2 · Test-control channel. `test_control_channel` passes against the Rust
   and C bars and fails with either bug put back (no input region; EOF not removed, which used
   200 ticks/2 s); M1 tests still pass. Idle cost unchanged from M1.
+- 2026-11-11 · M3 · Clock. All 5 ported tests pass; clock box pixel-identical to C. One
+  80 px commit per monitor per minute. `perf_compare --against main` (C runs every module):
+  CPU 0.02 % vs 0.08 %, private 4.5 MB vs 8.7 MB, RSS 21.4 MB vs 35.1 MB. Threads 2 (pango's
+  fontconfig thread, which inherits the blocked SIGUSR1: checked in `/proc/*/task/*/status`).
+  Release binary 787 KB.

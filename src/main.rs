@@ -11,6 +11,7 @@
 
 mod bar;
 mod config;
+mod modules;
 mod render;
 mod testing;
 mod wayland;
@@ -116,6 +117,12 @@ fn main() -> ExitCode {
         });
     if let Err(err) = signal_source {
         eprintln!("stickBar: couldn't watch for signals: {}", err.error);
+        return ExitCode::FAILURE;
+    }
+
+    // The clock's tick, at the start of every wall-clock second.
+    if let Err(err) = modules::clock::timer::start(&event_loop.handle()) {
+        eprintln!("stickBar: {err}");
         return ExitCode::FAILURE;
     }
 

@@ -11,6 +11,7 @@
 
 mod bar;
 mod config;
+mod hyprland;
 mod modules;
 mod render;
 mod testing;
@@ -126,6 +127,21 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // Hyprland: the workspaces as they are now, then live updates from its
+    // event socket. Without the socket the bar still runs; the pills just
+    // stop following changes.
+    app.refresh_workspaces();
+    if let Err(err) = hyprland::events::start(&event_loop.handle()) {
+        eprintln!(
+            "stickBar: {err}\nstickBar: workspace live-updates disabled (couldn't connect to \
+             Hyprland's event socket) -- the bar still renders, but workspace pills won't \
+             update until it's restarted"
+        );
+    }
+    // Hyprland's event socket may drop (e.g. a compositor reload): it gets
+    // exactly one reconnect per run, then live updates stay off.
+    let mut hyprland_reconnected = false;
+
     // The test-control channel on stdin, only with STICKBAR_TEST_CONTROL=1.
     testing::start(&event_loop.handle());
 
@@ -141,6 +157,19 @@ fn main() -> ExitCode {
         }
         if app.exit {
             return ExitCode::SUCCESS;
+        }
+        if std::mem::take(&mut app.hyprland_events_lost) {
+            let reconnected =
+                !hyprland_reconnected && hyprland::events::start(&event_loop.handle()).is_ok();
+            hyprland_reconnected = true;
+            if reconnected {
+                app.refresh_workspaces(); // catch up on whatever happened meanwhile
+            } else {
+                eprintln!(
+                    "stickBar: Hyprland event socket reconnect failed -- workspace \
+                     live-updates are now disabled for this run"
+                );
+            }
         }
         app.flush_dirty(&qh);
     }

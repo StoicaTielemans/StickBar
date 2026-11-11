@@ -2,14 +2,17 @@
 //!
 //! The bar has three regions, as in the C bar: left-region modules laid out
 //! left to right from x = 0, right-region ones right to left from the right
-//! edge, and the media box centered between. So far only the clock exists, at
-//! the right edge.
+//! edge, and the media box centered between. So far: the workspace pills on
+//! the left, the clock on the right.
 
 pub(crate) mod module_box;
 pub(crate) mod popup_chrome;
 pub(crate) mod text;
 
-use crate::{config::COLORS, modules::clock::Clock};
+use crate::{
+    config::{BAR, COLORS},
+    modules::{clock::Clock, workspaces::Workspaces},
+};
 use text::TextCache;
 
 /// A rectangle in bar-surface pixels (cairo works in `f64`).
@@ -58,6 +61,34 @@ pub(crate) struct ModuleBox {
     pub(crate) clickable: bool,
 }
 
+/// Something a click can do, found by hit-testing a [`ClickTarget`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Action {
+    /// Focus Hyprland workspace `id` (a workspace pill, left button).
+    FocusWorkspace(i32),
+}
+
+/// A clickable spot inside a module's box. A box like `workspaces` holds
+/// several (one per pill), each doing something different; the gaps between
+/// them do nothing. Tray icons will work the same way.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ClickTarget {
+    /// Where it is, in bar-surface px.
+    pub(crate) rect: BoxRect,
+    /// What a click there does.
+    pub(crate) action: Action,
+}
+
+/// Where everything on one bar was drawn: the module boxes and the click
+/// targets inside them.
+#[derive(Debug, Default)]
+pub(crate) struct BarLayout {
+    /// One per module shown.
+    pub(crate) boxes: Vec<ModuleBox>,
+    /// Clickable spots within boxes.
+    pub(crate) targets: Vec<ClickTarget>,
+}
+
 /// The drawing state every bar shares: the text cache and each module's data.
 /// One instance, owned by `App`, used by every monitor's bar.
 #[derive(Debug)]
@@ -66,6 +97,8 @@ pub(crate) struct Renderer {
     pub(crate) text: TextCache,
     /// The clock module.
     pub(crate) clock: Clock,
+    /// The workspace pills' data (from Hyprland).
+    pub(crate) workspaces: Workspaces,
 }
 
 impl Renderer {
@@ -74,30 +107,58 @@ impl Renderer {
         Ok(Self {
             text: TextCache::new()?,
             clock: Clock::new(),
+            workspaces: Workspaces::default(),
         })
     }
 
-    /// Draws a whole bar `width` x `height` into `cr` and returns where each
-    /// module's box landed.
+    /// Draws the whole bar of the monitor at `output_index` (`width` x
+    /// `height`) into `cr` and returns where everything landed.
     pub(crate) fn render_output(
         &mut self,
         cr: &cairo::Context,
         width: f64,
         height: f64,
-    ) -> Result<Vec<ModuleBox>, cairo::Error> {
+        output_index: usize,
+    ) -> Result<BarLayout, cairo::Error> {
         COLORS.mantle.set_source(cr);
         cr.paint()?;
+        let mut layout = BarLayout::default();
+
+        // Left region, laid out from x = 0 rightwards. Each module returns
+        // where the next one starts (its right edge + item_spacing), so its
+        // own box is everything up to there minus that gap (C's record_left).
+        let left = 0.0;
+        let (next, pills) =
+            self.workspaces
+                .render(cr, &mut self.text, left, output_index, (0.0, height))?;
+        let pills_w = next - BAR.item_spacing - left;
+        if pills_w > 0.0 {
+            layout.boxes.push(ModuleBox {
+                name: "workspaces",
+                rect: BoxRect {
+                    x: left,
+                    y: 0.0,
+                    w: pills_w,
+                    h: height,
+                },
+                // Only the pills themselves are clickable (as targets), not
+                // the gaps between them.
+                clickable: false,
+            });
+        }
+        layout.targets.extend(pills);
 
         // Right region, laid out from the right edge leftwards.
         let clock = self
             .clock
             .render(cr, &mut self.text, width, (0.0, height))?;
-        Ok(vec![ModuleBox {
+        layout.boxes.push(ModuleBox {
             name: "clock",
             rect: clock,
             // Right-click opens the year calendar.
             clickable: true,
-        }])
+        });
+        Ok(layout)
     }
 
     /// Repaints only the clock, over its previous box `old`, on a frame that

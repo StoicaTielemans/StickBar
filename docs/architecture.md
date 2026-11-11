@@ -32,14 +32,20 @@ src/
 │   │                       (1x1 + viewporter), first-paint-after-configure
 │   ├── popup_host.rs       PopupHost: a menu under its box + a catcher per monitor
 │   └── popups.rs           Popups: every dropdown kind; configure/menu routing
+├── hyprland/
+│   ├── mod.rs              socket_path(), request()/request_json(): the request socket
+│   ├── events.rs           the event socket as a calloop source; line framing, filter
+│   └── dispatch.rs         Dispatcher: Lua form first, classic fallback, cached
 ├── modules/
+│   ├── workspaces/mod.rs   Workspaces: occupied/focused from Hyprland, kanji pills
 │   └── clock/
 │       ├── mod.rs          Clock: cached text, tick(), its box
 │       ├── calendar.rs     CalendarPopup: the year calendar (chrono date maths)
 │       └── timer.rs        wall-clock-aligned timerfd (rustix), ECANCELED re-arm
 ├── render/
 │   ├── mod.rs              Renderer (shared by every bar: text cache + modules),
-│   │                       render_output(), render_clock_only(), BoxRect/ModuleBox
+│   │                       render_output(), render_clock_only(), BoxRect/ModuleBox,
+│   │                       ClickTarget/Action (clickable spots inside a box)
 │   ├── text.rs             TextCache: pango context, font descriptions, LRU of 64
 │   │                       shaped layouts; all text goes through here
 │   ├── module_box.rs       draw_rect() and label(): the bordered module box

@@ -68,6 +68,7 @@ impl OutputHandler for App {
             &self.compositor,
             &self.layer_shell,
             &output,
+            index,
             self.test_mode,
         );
         self.outputs.push(Output {

@@ -23,3 +23,37 @@ pub(crate) const ICON_CLOCK: char = '\u{f0954}';
 pub(crate) const ICON_CHEVRON_LEFT: char = '\u{f053}';
 /// `fa-chevron_right`, the calendar's next-year button.
 pub(crate) const ICON_CHEVRON_RIGHT: char = '\u{f054}';
+
+/// Workspace numerals 1-10 as kanji (一 二 三 四 五 六 七 八 九 十), matching the
+/// reference bar. These are CJK characters, not Nerd Font icons, so pango
+/// draws them from a CJK fallback font (Noto Sans CJK here). Each was read out
+/// of the reference Quickshell config's `kanjiMap` with Python's `ord()`
+/// rather than retyped (the CLAUDE.md rule for kanji).
+const KANJI: [char; 10] = [
+    '\u{4e00}', '\u{4e8c}', '\u{4e09}', '\u{56db}', '\u{4e94}', '\u{516d}', '\u{4e03}', '\u{516b}',
+    '\u{4e5d}', '\u{5341}',
+];
+
+/// The kanji numeral for workspace `id`, or `None` outside 1-10 (the caller
+/// then shows the plain number).
+pub(crate) fn kanji(id: i32) -> Option<char> {
+    usize::try_from(id)
+        .ok()
+        .and_then(|id| id.checked_sub(1))
+        .and_then(|i| KANJI.get(i))
+        .copied()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::kanji;
+
+    #[test]
+    fn kanji_numerals() {
+        assert_eq!(kanji(1), Some('\u{4e00}'));
+        assert_eq!(kanji(10), Some('\u{5341}'));
+        assert_eq!(kanji(0), None);
+        assert_eq!(kanji(11), None);
+        assert_eq!(kanji(-3), None);
+    }
+}

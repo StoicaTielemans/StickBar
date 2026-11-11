@@ -94,12 +94,17 @@ must pass.
   covers the clock's part plus navigation and hover. It passes against both bars, and fails
   with the first-paint fix removed. *Moved on:* left-anchored opening → M7 (the first left-region
   dropdown); host resize, button release and scroll → M9 (sliders, the mixer).
-- [ ] **M5: Hyprland + workspaces** (`hyprland/*`, `modules/workspaces/` ~560). Check that
-  the same monitor gets the same `index` (ported in M2), and so the same workspace range, as
-  in the C bar. The request
-  socket, event socket line framing, click-to-focus with the classic→Lua fallback, and kanji pills
-  per 5-wide output range. Cross-check against `hyprctl -j workspaces`. Read BUG.md
-  "Hyprland IPC".
+- [x] **M5: Hyprland + workspaces** (`hyprland/*`, `modules/workspaces/`, the kanji in
+  `config/glyphs.c`, the left region of `render/render.c`, the reconnect policy in `main.c`).
+  The request socket (blocking, 1 s timeout, `shutdown(Write)` before reading), the event socket
+  (calloop source, line framing, the 12-event filter, a re-query only on a relevant read), the
+  dispatcher (unquoted Lua form first, classic fallback, cached, nothing cached without a reply),
+  one reconnect then give up, and kanji pills per 5-wide range. Also a generic **`ClickTarget`**:
+  clickable spots inside a box (the pills now, tray icons in M11), which also get the hand
+  cursor. New guard test **`test_workspaces`** runs the bar against a fake Hyprland
+  (`tests/lib/fake_hyprland.py`), so a click never switches the real workspace. It passes against
+  both bars. Both bars give DP-2 index 0, and the pills are pixel-identical to C's on the real
+  desktop.
 - [ ] **M6: Arch logo + power menu + SIGUSR1** (`modules/powermenu/*` ~450). This milestone is
   placed **before** any milestone that starts a thread, so the signal-first ordering is
   proven while the bar has a single thread. Keep the test guard (record-only actions). Tests:
@@ -185,3 +190,8 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
 - 2026-11-11 · Rust-only · Hand cursor over clickable boxes and dropdown targets
   (`wp_cursor_shape_v1`). `test_cursor_shape` passes (skips on the C bar) and fails with the
   clock's `clickable` turned off. No new wakeups, so idle cost is unchanged.
+- 2026-11-11 · M5 · Hyprland + workspaces. All 8 tests pass (17 unit tests);
+  `test_workspaces` fails with the event filter broken. Pills pixel-identical to C.
+  `perf_compare --against main` (C runs every module): CPU 0.03 % vs 0.05 %, private 5.7 MB
+  vs 8.6 MB, RSS 25.5 MB vs 35.0 MB. Release binary 984 KB. A real workspace switch by
+  clicking was not tested (the tests use the fake); it's left for the user to try.

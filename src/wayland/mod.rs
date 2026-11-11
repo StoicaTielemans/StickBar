@@ -38,6 +38,7 @@ use smithay_client_toolkit::{
 
 use crate::{
     bar::{BarSurface, popups::Popups},
+    hyprland::dispatch::Dispatcher,
     render::Renderer,
 };
 
@@ -75,6 +76,11 @@ pub(crate) struct App {
     /// `STICKBAR_TEST_CONTROL=1`: the tests drive this instance (see `testing/`),
     /// so its surfaces take no pointer input and the user's real clicks pass through.
     test_mode: bool,
+    /// Sends Hyprland dispatchers (workspace clicks), remembering the syntax.
+    dispatcher: Dispatcher,
+    /// Set when Hyprland's event socket hangs up; `main.rs` decides whether
+    /// to reconnect (once) and clears it.
+    pub(crate) hyprland_events_lost: bool,
     /// Set by SIGINT/SIGTERM: the main loop stops after the current pass.
     pub(crate) exit: bool,
 }
@@ -116,6 +122,8 @@ impl App {
             renderer,
             next_output_index: 0,
             test_mode,
+            dispatcher: Dispatcher::new(),
+            hyprland_events_lost: false,
             exit: false,
         })
     }
@@ -140,6 +148,14 @@ impl App {
             for bar in self.bars_mut() {
                 bar.mark_clock_dirty();
             }
+        }
+    }
+
+    /// Re-reads the workspaces from Hyprland; every bar redraws only if what
+    /// the pills show changed.
+    pub(crate) fn refresh_workspaces(&mut self) {
+        if self.renderer.workspaces.refresh() {
+            self.mark_all_dirty();
         }
     }
 

@@ -37,7 +37,7 @@ use smithay_client_toolkit::{
 use super::damage::{Rect, changed_rect};
 use crate::{
     config::BAR,
-    render::{ModuleBox, Renderer},
+    render::{BarLayout, ClickTarget, ModuleBox, Renderer},
     wayland::{
         App,
         shm_buffers::{ShmBuffers, copy_pixels},
@@ -87,10 +87,12 @@ pub(crate) struct BarSurface {
     frames: Option<Frames>,
     /// What may have changed since the last frame: redrawn at the next chance.
     dirty: Dirty,
-    /// Where each module's box was drawn in the last frame (the C bar's
-    /// per-module box-rect tables, kept per bar here). Read by the tests'
-    /// `rects` command, and from M4 by click hit-testing.
-    boxes: Vec<ModuleBox>,
+    /// Where each module's box and click target was drawn in the last frame
+    /// (the C bar's per-module box-rect tables, kept per bar here). Read by
+    /// the tests' `rects` command and by click hit-testing.
+    layout: BarLayout,
+    /// The monitor's output index, which picks its workspace range.
+    output_index: usize,
     /// A frame callback is outstanding, so the next redraw waits for it.
     frame_pending: bool,
 }
@@ -109,6 +111,7 @@ impl BarSurface {
         compositor: &CompositorState,
         layer_shell: &LayerShell,
         output: &WlOutput,
+        output_index: usize,
         test_mode: bool,
     ) -> Self {
         let surface = compositor.create_surface(qh);
@@ -137,7 +140,8 @@ impl BarSurface {
             layer,
             frames: None,
             dirty: Dirty::Clean,
-            boxes: Vec::new(),
+            layout: BarLayout::default(),
+            output_index,
             frame_pending: false,
         }
     }
@@ -154,7 +158,12 @@ impl BarSurface {
 
     /// Where each module's box was drawn in the last frame.
     pub(crate) fn boxes(&self) -> &[ModuleBox] {
-        &self.boxes
+        &self.layout.boxes
+    }
+
+    /// Where each click target was drawn in the last frame.
+    pub(crate) fn targets(&self) -> &[ClickTarget] {
+        &self.layout.targets
     }
 
     /// The bar's `wl_surface`, for matching frame callbacks and pointer events.
@@ -206,7 +215,7 @@ impl BarSurface {
         };
 
         // 1. Draw into `next` (all of it, or just the clock).
-        if let Err(err) = frames.draw(renderer, &mut self.boxes, self.dirty) {
+        if let Err(err) = frames.draw(renderer, &mut self.layout, self.dirty, self.output_index) {
             eprintln!("stickBar: drawing the bar failed: {err}");
             return;
         }
@@ -286,11 +295,16 @@ impl Frames {
     fn draw(
         &mut self,
         renderer: &mut Renderer,
-        boxes: &mut Vec<ModuleBox>,
+        layout: &mut BarLayout,
         dirty: Dirty,
+        output_index: usize,
     ) -> Result<(), cairo::Error> {
         let (width, height) = (f64::from(self.width), f64::from(self.height));
-        let old_clock = boxes.iter().find(|b| b.name == "clock").map(|b| b.rect);
+        let old_clock = layout
+            .boxes
+            .iter()
+            .find(|b| b.name == "clock")
+            .map(|b| b.rect);
 
         // The clock-only shortcut needs the previous picture and the clock's old box.
         if dirty == Dirty::Clock
@@ -302,14 +316,14 @@ impl Frames {
             if renderer.render_clock_only(&cr, old)?.is_some() {
                 drop(cr);
                 self.next.flush();
-                return Ok(()); // same box, so `boxes` is still right
+                return Ok(()); // same box, so `layout` is still right
             }
             // The clock's width changed: fall through to a full redraw, which
             // paints over everything anyway.
         }
 
         let cr = cairo::Context::new(&self.next)?;
-        *boxes = renderer.render_output(&cr, width, height)?;
+        *layout = renderer.render_output(&cr, width, height, output_index)?;
         drop(cr);
         self.next.flush();
         Ok(())

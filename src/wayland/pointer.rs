@@ -37,7 +37,10 @@ use smithay_client_toolkit::{
 };
 
 use super::{App, Output};
-use crate::{bar::popup_surface::PopupEnv, render::BoxRect};
+use crate::{
+    bar::popup_surface::PopupEnv,
+    render::{Action, BoxRect},
+};
 
 /// Linux input event codes for the mouse buttons (`linux/input-event-codes.h`).
 pub(crate) const BTN_LEFT: u32 = 0x110;
@@ -88,7 +91,8 @@ impl App {
             }
         }
 
-        // 2. A bar: the module whose box is under the pointer.
+        // 2. A bar: first the click targets inside boxes (workspace pills,
+        // left button), then the module whose box is under the pointer.
         let Some(position) = self.outputs.iter().position(|o| {
             o.bar
                 .as_ref()
@@ -96,10 +100,17 @@ impl App {
         }) else {
             return;
         };
-        let clock = self
-            .outputs
-            .get(position)
-            .and_then(|o| o.bar.as_ref())
+        let bar = self.outputs.get(position).and_then(|o| o.bar.as_ref());
+        let target = bar
+            .and_then(|bar| bar.targets().iter().find(|t| t.rect.contains(x, y)))
+            .map(|t| t.action);
+        if let Some(action) = target {
+            if button == BTN_LEFT {
+                self.run(action);
+            }
+            return;
+        }
+        let clock = bar
             .and_then(|bar| {
                 bar.boxes()
                     .iter()
@@ -112,6 +123,13 @@ impl App {
             && let Some(rect) = clock
         {
             self.toggle_calendar(position, rect);
+        }
+    }
+
+    /// Does what a click target does.
+    fn run(&mut self, action: Action) {
+        match action {
+            Action::FocusWorkspace(id) => self.dispatcher.focus_workspace(id),
         }
     }
 
@@ -152,6 +170,7 @@ impl App {
                 bar.boxes()
                     .iter()
                     .any(|b| b.clickable && b.rect.contains(x, y))
+                    || bar.targets().iter().any(|t| t.rect.contains(x, y))
             });
         if over_clickable {
             Shape::Pointer

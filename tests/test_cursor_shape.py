@@ -9,8 +9,10 @@ instead this asks it, with the `cursor` / `menu-cursor` commands, which shape
 it would show at a point -- the exact decision the real pointer path uses.
 
 Checks:
-  - the clock box (right-click opens the calendar) gives a hand, an empty
-    stretch of the bar the arrow;
+  - the clock box (right-click opens the calendar) and a workspace pill give
+    a hand; the gap just after the last pill (empty bar) the arrow. The pills
+    come from the real Hyprland (read only), so the pill check is skipped if
+    the test monitor happens to show none;
   - with the calendar open, its chevrons and its year text give a hand, the
     middle of a month card the arrow.
 
@@ -37,6 +39,8 @@ def main():
 
     with common.ControlledBar(binary) as bar:
         rects = bar.wait_ready(("clock",))
+        time.sleep(0.5)  # the pills are drawn in the same frame, but be generous
+        rects = bar.must(f"rects {bar.output}")["rects"]
         if not bar.cmd(f"cursor {bar.output} 0 0").get("ok"):
             common.skip("this bar has no `cursor` command (the C bar: no hand cursor)")
         time.sleep(0.3)
@@ -45,10 +49,16 @@ def main():
             return bar.must(command)["shape"]
 
         x, y, w, h = rects["clock"]
-        expect = [
-            (f"cursor {bar.output} {x + w / 2:.1f} {y + h / 2:.1f}", "pointer", "the clock box"),
-            (f"cursor {bar.output} 5 {h / 2:.1f}", "default", "an empty stretch of the bar"),
-        ]
+        expect = [(f"cursor {bar.output} {x + w / 2:.1f} {y + h / 2:.1f}", "pointer", "the clock box")]
+        if "workspaces" in rects:
+            wx, _, ww, _ = rects["workspaces"]
+            expect += [
+                (f"cursor {bar.output} {wx + 5:.1f} {h / 2:.1f}", "pointer", "the first workspace pill"),
+                # 3px into the 6px gap after the last pill: no box there.
+                (f"cursor {bar.output} {wx + ww + 3:.1f} {h / 2:.1f}", "default", "the gap after the pills"),
+            ]
+        else:
+            expect.append((f"cursor {bar.output} 3 {h / 2:.1f}", "default", "the empty left end of the bar"))
         for command, wanted, what in expect:
             got = shape(command)
             if got != wanted:
@@ -72,7 +82,8 @@ def main():
 
     if failures:
         common.fail("; ".join(failures))
-    common.ok("hand over the clock and the calendar's targets, arrow over the empty bar and the cards")
+    common.ok("hand over the clock, the workspace pills and the calendar's targets; "
+              "arrow over the empty bar and the cards")
 
 
 if __name__ == "__main__":

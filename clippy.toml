@@ -1,0 +1,8 @@
+# Inside #[cfg(test)] code a panic is the right way to fail a test, so the
+# crash-shortcut lints from Cargo.toml are relaxed there, and only there.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-print-in-tests = true
+allow-dbg-in-tests = true

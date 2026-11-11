@@ -2,8 +2,9 @@
 """Measures the bar's CPU, memory and compositor load -- optionally side by side
 with another build -- and prints a table. Not pass/fail: a measuring tool.
 
-    python3 tests/perf_compare.py                     # build/stickBar alone, 60s
+    python3 tests/perf_compare.py                     # target/debug/stickBar alone, 60s
     python3 tests/perf_compare.py --against HEAD~1    # vs. a git ref, built in a temp worktree
+    python3 tests/perf_compare.py --against main      # Rust port vs. the C bar
     python3 tests/perf_compare.py --against /path/to/other/stickBar --seconds 90
 
 Both instances start fresh at the same time (RSS of a long-running bar drifts
@@ -39,6 +40,12 @@ def build_ref(ref, workdir):
     tree = Path(workdir) / "tree"
     subprocess.run(["git", "-C", str(common.REPO), "worktree", "add", "--detach", str(tree), ref],
                    check=True, capture_output=True)
+    # The ref may be from either side of the Rust port: a Cargo.toml means the
+    # Rust bar, otherwise it's the C bar (meson). Both get their debug build,
+    # matching the debug binary common.DEFAULT_BIN points at.
+    if (tree / "Cargo.toml").is_file():
+        subprocess.run(["cargo", "build"], cwd=tree, check=True, capture_output=True)
+        return tree, tree / "target" / "debug" / "stickBar"
     subprocess.run(["meson", "setup", "build"], cwd=tree, check=True, capture_output=True)
     subprocess.run(["meson", "compile", "-C", "build"], cwd=tree, check=True, capture_output=True)
     return tree, tree / "build" / "stickBar"
@@ -93,7 +100,7 @@ def measure_compositor(binaries, seconds):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--bin", default=str(common.DEFAULT_BIN), help="binary under test (default build/stickBar)")
+    ap.add_argument("--bin", default=str(common.DEFAULT_BIN), help="binary under test (default target/debug/stickBar)")
     ap.add_argument("--against", help="git ref (built in a temp worktree) or path to another stickBar binary")
     ap.add_argument("--seconds", type=int, default=60, help="measurement window per pass (default 60)")
     ap.add_argument("--no-compositor", action="store_true", help="skip the WAYLAND_DEBUG pass")

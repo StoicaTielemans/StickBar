@@ -1,0 +1,77 @@
+[package]
+name = "stickbar"
+version = "0.1.0"
+edition = "2024"
+# The Arch-packaged toolchain this was set up with; bump deliberately, not by accident.
+rust-version = "1.99"
+description = "A Wayland status bar for Hyprland, drawn with cairo/pango"
+publish = false
+
+# Keep the binary name the C bar had, so the Python tests, Hyprland exec lines and
+# `pkill stickBar` habits all keep working unchanged.
+[[bin]]
+name = "stickBar"
+path = "src/main.rs"
+
+# No dependencies yet: each crate (smithay-client-toolkit, cairo-rs, pango, zbus, ...)
+# is added when the module that needs it is ported, so nothing unused gets compiled in.
+[dependencies]
+
+# `cargo build` (debug) is the default dev profile, the equivalent of the C bar's
+# `build/` at -O0, and what tests/ run against. `cargo build --release` is what the
+# user runs day to day.
+[profile.release]
+lto = true          # optimize across crates, not just inside each one
+codegen-units = 1   # slower build, smaller and faster binary
+strip = true        # drop symbols from the shipped binary
+panic = "abort"     # no unwinding machinery; a panic is a bug either way
+
+# ---------------------------------------------------------------------------
+# Lint policy. Rust's safety only holds if nobody takes the escape hatches, so
+# the shortcuts that compile but bring back C-style failure modes are build
+# errors here. Never weaken a lint to make code compile: fix the code.
+# ---------------------------------------------------------------------------
+[lints.rust]
+# No `unsafe` blocks in this crate, and `forbid` (unlike `deny`) means no
+# `#[allow]` can switch it back on. Dependencies still use unsafe internally
+# behind safe APIs (that's how cairo-rs, pipewire-rs etc. wrap the C libraries).
+unsafe_code = "forbid"
+# Every warning fails the build, so warnings can't pile up unnoticed.
+warnings = "deny"
+# A Result or other #[must_use] value that's dropped is a silently ignored error.
+unused_must_use = "deny"
+unused_results = "deny"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+# Groups first at a lower priority, so the individual lints below override them.
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+# Crash shortcuts: each of these turns "I didn't handle this case" into a
+# runtime panic, which takes the whole bar down. Handle the case instead
+# (match, `?`, `if let`, `.get()`, a default value).
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"   # `v[i]` panics when out of range; use `v.get(i)`
+exit = "deny"               # process::exit skips destructors (sockets, buffers)
+
+# Silent-bug shortcuts: these compile and run, but can quietly give wrong results.
+as_conversions = "deny"     # `x as u8` truncates silently; use `u8::try_from(x)`
+mem_forget = "deny"         # leaks the value and skips its cleanup
+let_underscore_must_use = "deny"
+float_cmp = "deny"
+
+# Leftover debugging. Diagnostics go to stderr via eprintln!, like the C bar.
+dbg_macro = "deny"
+print_stdout = "deny"
+
+# Escape hatches: any `#[allow(...)]` must carry a `reason = "..."` saying why.
+allow_attributes_without_reason = "deny"
+# Write `Rc::clone(&x)` rather than `x.clone()`, so a cheap refcount bump is
+# visibly different from a deep copy.
+clone_on_ref_ptr = "warn"

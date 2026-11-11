@@ -27,7 +27,7 @@ desktop:
   under test).
 
 ```sh
-meson compile -C build
+./build.sh
 python3 tests/run_all.py                 # all tests, ~2 min
 python3 tests/test_redraw.py             # a single test
 python3 tests/run_all.py --bin PATH      # test a different binary
@@ -91,7 +91,7 @@ and mute to the values they already have.
 `perf_compare.py` measures performance and prints a table; it doesn't pass or fail.
 
 ```sh
-python3 tests/perf_compare.py                         # build/stickBar alone, 60s
+python3 tests/perf_compare.py                         # target/debug/stickBar alone, 60s
 python3 tests/perf_compare.py --against HEAD~1        # compare with a git ref (built in a temp worktree)
 python3 tests/perf_compare.py --against ../other/stickBar --seconds 90
 ```

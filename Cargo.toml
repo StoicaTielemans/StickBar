@@ -24,6 +24,10 @@ cairo-rs = { version = "0.22", features = ["png"] }
 calloop = { version = "0.14", features = ["signals"] }
 # Local time for the clock's text ("clock" = read the system clock + time zone).
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# libpulse, safely wrapped, for volume/mic (the same library the C bar links;
+# pipewire-pulse serves its protocol). pa_v15 unlocks the API up to libpulse 15
+# (this system has 17).
+libpulse-binding = { version = "2.30", features = ["pa_v15"] }
 # getifaddrs() for the network dropdown's IPv4 address (no `ip` subprocess).
 # The same nix calloop already pulls in; "net" turns on its ifaddrs module.
 nix = { version = "0.31", features = ["net"] }

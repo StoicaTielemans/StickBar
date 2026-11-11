@@ -9,6 +9,7 @@
 // and it still holds if the file is ever built outside this Cargo.toml.
 #![forbid(unsafe_code)]
 
+mod audio;
 mod bar;
 mod config;
 mod hyprland;
@@ -179,6 +180,9 @@ fn start_sources(handle: &calloop::LoopHandle<'static, App>, app: &mut App) -> R
              update until it's restarted"
         );
     }
+
+    // Volume and mic: the pulse thread, which pushes snapshots into the loop.
+    app.audio = audio::start(handle);
 
     // CPU/GPU/memory figures, polled every 5 s (the first poll already ran).
     sysmon::timer::start(handle)?;

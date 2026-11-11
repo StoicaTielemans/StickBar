@@ -14,8 +14,12 @@ pub(crate) mod stat_card;
 pub(crate) mod text;
 
 use crate::{
+    audio::AudioState,
     config::{BAR, COLORS},
-    modules::{clock::Clock, cpu, gpu, mem, network, powermenu::arch_logo, workspaces::Workspaces},
+    modules::{
+        clock::Clock, cpu, gpu, mem, mic, network, powermenu::arch_logo, volume,
+        workspaces::Workspaces,
+    },
     network::Network,
     sysmon::Sysmon,
 };
@@ -109,6 +113,8 @@ pub(crate) struct Renderer {
     pub(crate) sysmon: Sysmon,
     /// Network status and rates.
     pub(crate) network: Network,
+    /// The latest audio snapshot from the pulse thread (empty until the first).
+    pub(crate) audio: AudioState,
 }
 
 impl Renderer {
@@ -129,6 +135,7 @@ impl Renderer {
                 network.poll();
                 network
             },
+            audio: AudioState::default(),
         })
     }
 
@@ -205,7 +212,7 @@ impl Renderer {
         });
 
         // Right region, laid out from the right edge leftwards: the clock,
-        // then the network box left of it.
+        // network, (EQ from M10,) volume and mic, as in the C bar.
         let clock = self
             .clock
             .render(cr, &mut self.text, width, (0.0, height))?;
@@ -215,12 +222,43 @@ impl Renderer {
             // Right-click opens the year calendar.
             clickable: true,
         });
-        let right = clock.x - BAR.item_spacing;
-        let network_box = network::render(cr, &mut self.text, &self.network, right, (0.0, height))?;
+        let network_box = network::render(
+            cr,
+            &mut self.text,
+            &self.network,
+            clock.x - BAR.item_spacing,
+            (0.0, height),
+        )?;
         layout.boxes.push(ModuleBox {
             name: "network",
             rect: network_box,
             // Right click opens its dropdown.
+            clickable: true,
+        });
+        let volume_box = volume::render(
+            cr,
+            &mut self.text,
+            &self.audio,
+            network_box.x - BAR.item_spacing,
+            (0.0, height),
+        )?;
+        layout.boxes.push(ModuleBox {
+            name: "volume",
+            rect: volume_box,
+            // Left mutes, scrolling steps.
+            clickable: true,
+        });
+        let mic_box = mic::render(
+            cr,
+            &mut self.text,
+            &self.audio,
+            volume_box.x - BAR.item_spacing,
+            (0.0, height),
+        )?;
+        layout.boxes.push(ModuleBox {
+            name: "mic",
+            rect: mic_box,
+            // Left mutes, scrolling steps.
             clickable: true,
         });
         Ok(layout)

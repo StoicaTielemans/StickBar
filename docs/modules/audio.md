@@ -160,3 +160,28 @@ PulseAudio (on PipeWire 1.6.8)`) — via **libpulse**, not raw `libpipewire`.
   ±1 regardless of the reported value) — one call is meant to represent
   exactly one physical wheel notch, matching the "steps of 5%" behavior that
   was asked for.
+
+## In the Rust port
+
+- **Files:** `src/audio/mod.rs` (`AudioState` snapshot, `Command`, the `Audio` handle, percent
+  maths), `src/audio/pulse.rs` (the pulse thread), `src/audio/volume_style.rs`,
+  `src/modules/{volume,mic}/mod.rs`.
+- **libpulse through `libpulse-binding`** (safe wrapper, same calls as C). The binding's
+  types aren't `Send`, which is what pushed the design below.
+- **One thread that owns everything, channels instead of a lock.** The `pulse` thread creates a
+  *standard* mainloop and the context and never shares them; its cache is an `Rc<RefCell<..>>`
+  only its own callbacks touch. It loops `iterate(true)` → run queued commands → if anything
+  changed, send one full `AudioState` to the main thread on a calloop channel (one per iteration,
+  so a list of N sinks is one update, not N). Commands go the other way on an `mpsc` channel plus
+  one byte on a socket pair, whose read end is a libpulse IO event so the blocked `iterate`
+  wakes. Volume steps are computed on the pulse thread from its cache, like C.
+- **Redraw rule kept:** `App::audio_update` redraws the bars only when the default sink's or
+  source's (volume, mute) changed (`AudioState::shown`); `test_redraw`'s no-op check covers it.
+- **Startup** waits at most 2 s for the connection (C waits unbounded), then reports failure
+  once and the boxes show `0%`.
+- **No fixed caps:** devices and streams are `Vec`s (C's 32-slot arrays).
+- **Scrolling** reads `value120` (SCTK binds `wl_seat` up to v10; C binds v7 and gets
+  `discrete`). Partial high-resolution movement is added up and one ±5 % step is taken per full
+  120; `discrete` is the fallback for old seats. Direction as in C (up = louder).
+- **Middle button** only reaches the volume box (the mixer); other buttons than left/right/middle
+  are ignored, as in C.

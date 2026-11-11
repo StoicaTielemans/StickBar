@@ -27,6 +27,18 @@ pub(crate) const ICON_CHEVRON_RIGHT: char = '\u{f054}';
 pub(crate) const ICON_CPU: char = '\u{f0ee0}';
 /// `md-expansion_card`, the GPU box and its dropdown's header.
 pub(crate) const ICON_GPU: char = '\u{f08ae}';
+/// `md-volume_off`: the volume box when muted or at 0 %.
+pub(crate) const ICON_VOLUME_MUTED: char = '\u{f0581}';
+/// `md-volume_low`: under 34 %.
+pub(crate) const ICON_VOLUME_LOW: char = '\u{f057f}';
+/// `md-volume_medium`: under 67 %.
+pub(crate) const ICON_VOLUME_MEDIUM: char = '\u{f0580}';
+/// `md-volume_high`: 67 % and up.
+pub(crate) const ICON_VOLUME_HIGH: char = '\u{f057e}';
+/// `md-microphone`: the mic box.
+pub(crate) const ICON_MIC: char = '\u{f036c}';
+/// `md-microphone_off`: the mic box when muted or at 0 %.
+pub(crate) const ICON_MIC_MUTED: char = '\u{f036d}';
 /// The network box's "no default route" icon. The C bar calls it
 /// `md-help_network`, but the installed font names this code point
 /// `md-update`; kept as is for parity with the C bar (see

@@ -37,6 +37,7 @@ use smithay_client_toolkit::{
 };
 
 use crate::{
+    audio::{Audio, AudioState},
     bar::{BarSurface, popups::Popups},
     hyprland::dispatch::Dispatcher,
     render::Renderer,
@@ -78,6 +79,8 @@ pub(crate) struct App {
     test_mode: bool,
     /// Sends Hyprland dispatchers (workspace clicks), remembering the syntax.
     dispatcher: Dispatcher,
+    /// Sends volume/mute commands to the pulse thread (set in `start_sources`).
+    pub(crate) audio: Audio,
     /// Set when Hyprland's event socket hangs up; `main.rs` decides whether
     /// to reconnect (once) and clears it.
     pub(crate) hyprland_events_lost: bool,
@@ -123,6 +126,7 @@ impl App {
             next_output_index: 0,
             test_mode,
             dispatcher: Dispatcher::new(),
+            audio: Audio::default(),
             hyprland_events_lost: false,
             exit: false,
         })
@@ -193,6 +197,16 @@ impl App {
     /// Saves the open dropdown's picture as a PNG (the tests' `snapshot`).
     pub(crate) fn snapshot(&mut self, path: &str) -> Result<(), String> {
         self.popups.snapshot(path, &mut self.renderer)
+    }
+
+    /// A new audio snapshot from the pulse thread. The bars are redrawn only
+    /// if what they show changed (the C bar's `pulse_client_pump` rule).
+    pub(crate) fn audio_update(&mut self, state: AudioState) {
+        let changed = state.shown() != self.renderer.audio.shown();
+        self.renderer.audio = state;
+        if changed {
+            self.mark_all_dirty();
+        }
     }
 
     /// The 5 s poll (the C bar's 5 s branch, in its order): sysmon figures and

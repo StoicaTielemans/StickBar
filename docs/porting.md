@@ -253,3 +253,8 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   (280x366). Release vs release: CPU 0.03 % vs 0.02 % (noise at this level), private 7.4 MB
   vs 8.3 MB, PSS 12.7 MB vs 15.6 MB, RSS 29.8 MB vs 35.2 MB, 3 threads vs 5 (C still runs
   every module). GPU readings still unverified (needs the reboot).
+- 2026-11-11 · M9a · Pulse thread + volume/mic boxes. `dump audio` matches `pactl` for every
+  sink/source (volume, mute, state, rate, bus, default, monitor); box widths equal C's; all 13
+  tests pass, `test_redraw`'s PulseAudio no-op check now live (40 no-op events -> clock-only
+  commits), SIGUSR1 blocked in all 4 threads. Release vs release: CPU 0.05 % vs 0.05 %,
+  private 7.8 vs 8.3 MB, RSS 32.3 vs 35.0 MB, 4 threads vs 5.

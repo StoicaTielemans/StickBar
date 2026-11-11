@@ -42,6 +42,10 @@ src/
 │   ├── gpu.rs              NVML (nvml-wrapper): usage/temp per poll, details on open
 │   ├── memory.rs           /proc/meminfo, PSI, zram, top apps by private memory
 │   └── timer.rs            the 5 s poll (calloop Timer), shared with the network
+├── audio/
+│   ├── mod.rs              AudioState snapshot, Command, Audio (main-side handle)
+│   ├── pulse.rs            the pulse thread: libpulse mainloop + cache, channels
+│   └── volume_style.rs     level icon (and, from M9b, meter/slider helpers)
 ├── network/mod.rs          Network: default route, rates, history; details via
 │                           /sys, resolv.conf and getifaddrs (nix)
 ├── util/history.rs         History2: the 120-sample ring behind every graph
@@ -50,6 +54,8 @@ src/
 │   ├── gpu/                mod.rs (box), popup.rs (the GPU dropdown)
 │   ├── mem/                mod.rs (box), popup.rs (the memory dropdown)
 │   ├── network/            mod.rs (box), popup.rs (the network dropdown)
+│   ├── volume/mod.rs       the volume box
+│   ├── mic/mod.rs          the mic box
 │   ├── workspaces/mod.rs   Workspaces: occupied/focused from Hyprland, kanji pills
 │   ├── powermenu/
 │   │   ├── mod.rs          PowerMenu: full-screen overlay per monitor, cards, the

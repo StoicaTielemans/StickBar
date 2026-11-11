@@ -32,12 +32,13 @@ use smithay_client_toolkit::{
     },
     seat::{
         Capability, SeatHandler, SeatState,
-        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+        pointer::{AxisScroll, PointerEvent, PointerEventKind, PointerHandler},
     },
 };
 
 use super::{App, Output};
 use crate::{
+    audio::{Command, Kind, VOLUME_STEP},
     bar::popup_surface::PopupEnv,
     modules::powermenu::{PowerAction, PowerClick},
     render::{Action, BoxRect},
@@ -63,6 +64,9 @@ pub(crate) struct Mouse {
     /// The shape last set since that enter; `None` right after an enter, when
     /// the cursor is undefined until the bar sets one.
     shape: Option<Shape>,
+    /// Wheel movement not yet adding up to a whole notch, in 120ths
+    /// (`App::scroll_steps`).
+    scroll_120: i32,
 }
 
 impl Mouse {
@@ -78,6 +82,13 @@ impl Mouse {
 impl App {
     /// A button was pressed with the pointer at (x, y) on `surface`.
     pub(crate) fn pointer_button(&mut self, surface: &WlSurface, x: f64, y: f64, button: u32) {
+        // Only the three main buttons do anything (side buttons are ignored, as
+        // in C). Middle is bound only on the volume box (the mixer, M9c): the
+        // power menu and the calendar treat any button as a click, so it's
+        // kept away from them.
+        if !matches!(button, BTN_LEFT | BTN_RIGHT | BTN_MIDDLE) {
+            return;
+        }
         // 0. The power menu covers whole monitors, so it goes first. Any button.
         match self.popups.power.click(surface, x, y) {
             PowerClick::NotOurs => {}
@@ -146,58 +157,52 @@ impl App {
             }
             return;
         }
-        // A left click on the Arch logo toggles the power menu.
-        let on_arch = bar.is_some_and(|bar| {
+        // The module whose box was clicked, if any.
+        let Some((name, rect)) = bar.and_then(|bar| {
             bar.boxes()
                 .iter()
-                .any(|b| b.name == "arch" && b.rect.contains(x, y))
-        });
-        if on_arch {
-            if button == BTN_LEFT {
-                self.toggle_power_menu();
-            }
+                .find(|b| b.rect.contains(x, y))
+                .map(|b| (b.name, b.rect))
+        }) else {
             return;
+        };
+        match (name, button) {
+            // A left click on the Arch logo toggles the power menu.
+            ("arch", BTN_LEFT) => self.toggle_power_menu(),
+            // A right click on the CPU, GPU or memory box opens its dropdown
+            // (reopens it if open, as in C). They open at the same spot, so
+            // each replaces the others.
+            ("cpu" | "gpu" | "mem", BTN_RIGHT) => self.open_sysmon_popup(name, position, rect),
+            // A right click on the network box opens its dropdown (reopens it
+            // if open). It's independent of the sysmon three.
+            ("network", BTN_RIGHT) => self.open_network_popup(position, rect),
+            // Right-click on the clock toggles the year calendar. Left does
+            // nothing: the clock has no obvious primary action (docs/popups.md).
+            ("clock", BTN_RIGHT) => self.toggle_calendar(position, rect),
+            // A left click on volume or mic flips the default device's mute.
+            ("volume", BTN_LEFT) => self.audio.send(Command::ToggleDefaultMute(Kind::Sink)),
+            ("mic", BTN_LEFT) => self.audio.send(Command::ToggleDefaultMute(Kind::Source)),
+            _ => {}
         }
-        // A right click on the CPU, GPU or memory box opens its dropdown
-        // (reopens it if open, as in C). They open at the same spot, so each
-        // replaces the others.
-        let sysmon_box = bar.and_then(|bar| {
-            bar.boxes()
-                .iter()
-                .find(|b| matches!(b.name, "cpu" | "gpu" | "mem") && b.rect.contains(x, y))
-        });
-        if let Some(found) = sysmon_box.map(|b| (b.name, b.rect)) {
-            if button == BTN_RIGHT {
-                self.open_sysmon_popup(found.0, position, found.1);
-            }
-            return;
-        }
-        // A right click on the network box opens its dropdown (reopens it if
-        // open, as in C). It's independent of the sysmon three.
-        let net = bar.and_then(|bar| {
-            bar.boxes()
-                .iter()
-                .find(|b| b.name == "network" && b.rect.contains(x, y))
-        });
-        if let Some(rect) = net.map(|b| b.rect) {
-            if button == BTN_RIGHT {
-                self.open_network_popup(position, rect);
-            }
-            return;
-        }
-        let clock = bar
-            .and_then(|bar| {
-                bar.boxes()
-                    .iter()
-                    .find(|b| b.name == "clock" && b.rect.contains(x, y))
-            })
-            .map(|b| b.rect);
-        // Right-click on the clock toggles the year calendar. Left does nothing:
-        // the clock has no obvious primary action (docs/popups.md).
-        if button == BTN_RIGHT
-            && let Some(rect) = clock
-        {
-            self.toggle_calendar(position, rect);
+    }
+
+    /// One scroll step at (x, y) on `surface`: `up` is away from the user
+    /// (raises a volume). Only the volume and mic boxes use it, ±5 % each.
+    pub(crate) fn pointer_scroll(&mut self, surface: &WlSurface, x: f64, y: f64, up: bool) {
+        let bar = self
+            .outputs
+            .iter()
+            .find_map(|o| o.bar.as_ref().filter(|bar| bar.wl_surface() == surface));
+        let kind = bar
+            .and_then(|bar| bar.boxes().iter().find(|b| b.rect.contains(x, y)))
+            .and_then(|b| match b.name {
+                "volume" => Some(Kind::Sink),
+                "mic" => Some(Kind::Source),
+                _ => None,
+            });
+        if let Some(kind) = kind {
+            let delta = if up { VOLUME_STEP } else { -VOLUME_STEP };
+            self.audio.send(Command::AdjustDefault { kind, delta });
         }
     }
 
@@ -502,6 +507,7 @@ impl SeatHandler for App {
                         shape_device,
                         enter_serial: 0,
                         shape: None,
+                        scroll_120: 0,
                     });
                 }
                 Err(err) => eprintln!("stickBar: couldn't get the pointer: {err}"),
@@ -525,6 +531,34 @@ impl SeatHandler for App {
     }
 
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: WlSeat) {}
+}
+
+impl App {
+    /// Turns one vertical scroll event into whole wheel steps (`true` = up).
+    ///
+    /// A seat at version 8+ (SCTK binds up to 10) reports wheels in 120ths of
+    /// a notch (`value120`): one notch is 120, a high-resolution wheel sends
+    /// smaller parts. Those are added up and one step is taken per full 120,
+    /// so a notch is one ±5 % step either way. Older seats send `discrete`
+    /// notches instead (the C bar's case; it binds version 7). Touchpad-only
+    /// scrolling has neither and is ignored, as in C. Rust-only difference:
+    /// C counts each event as one step whatever its size.
+    fn scroll_steps(&mut self, vertical: AxisScroll) -> Vec<bool> {
+        let Some(mouse) = self.pointer.as_mut() else {
+            return Vec::new();
+        };
+        let notches = if vertical.value120 != 0 {
+            mouse.scroll_120 += vertical.value120;
+            let whole = mouse.scroll_120 / 120;
+            mouse.scroll_120 %= 120;
+            whole
+        } else {
+            vertical.discrete
+        };
+        // Positive is towards the user (like scrolling a page down): volume down.
+        let up = notches < 0;
+        (0..notches.unsigned_abs()).map(|_| up).collect()
+    }
 }
 
 impl PointerHandler for App {
@@ -564,8 +598,13 @@ impl PointerHandler for App {
                     // A click can open or close a dropdown under the pointer.
                     self.update_cursor(&event.surface, x, y);
                 }
-                // Releases and scrolling arrive with their first users (M9).
-                PointerEventKind::Release { .. } | PointerEventKind::Axis { .. } => {}
+                PointerEventKind::Axis { vertical, .. } => {
+                    for up in self.scroll_steps(vertical) {
+                        self.pointer_scroll(&event.surface, x, y, up);
+                    }
+                }
+                // Releases arrive with their first users (the dropdown drags, M9b).
+                PointerEventKind::Release { .. } => {}
             }
         }
     }

@@ -26,8 +26,9 @@
 //! refresh <mem|cpu|cpu-reset|gpu|poll>
 //!                        -> run a dropdown's details refresh (cpu-reset: start
 //!                           a fresh process window first), or a full 5 s poll
-//! dump <mem|cpu|gpu|net> -> every figure the bar holds (test_sysmon_data,
-//!                           test_network_data)
+//! dump <mem|cpu|gpu|net|audio>
+//!                        -> every figure the bar holds (test_sysmon_data,
+//!                           test_network_data, test_audio)
 //! cursor <output> <x> <y> / menu-cursor <x> <y>
 //!                        -> {"ok":true,"shape":"pointer"|"default"}: the cursor
 //!                           the bar would show there (Rust only)
@@ -53,6 +54,7 @@ use serde_json::{Value, json};
 use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
 
 use crate::{
+    audio::{AudioState, Kind, Node},
     bar::{BarSurface, popup_surface::PopupSurface},
     network::Network,
     sysmon::Sysmon,
@@ -238,6 +240,7 @@ fn dump(app: &mut App, section: &str) -> Value {
         "cpu" => dump_cpu(&renderer.sysmon),
         "gpu" => dump_gpu(&renderer.sysmon),
         "net" => dump_net(&renderer.network),
+        "audio" => dump_audio(&renderer.audio),
         _ => error("unknown dump section"),
     }
 }
@@ -328,6 +331,40 @@ fn dump_gpu(sysmon: &Sysmon) -> Value {
         "pstate": g.pstate.map(|p| format!("P{p}")).unwrap_or_default(),
         "history_len": sysmon.gpu_history.len(),
         "procs": procs,
+    })
+}
+
+/// `dump audio` (read by `test_audio`): every sink, source and app stream.
+fn dump_audio(audio: &AudioState) -> Value {
+    let nodes = |kind: Kind, nodes: &[Node]| -> Vec<Value> {
+        let default = audio.default_node(kind).map(|n| n.index);
+        nodes
+            .iter()
+            .map(|n| {
+                json!({
+                    "description": n.description,
+                    "volume": n.volume,
+                    "muted": n.muted,
+                    "default": default == Some(n.index),
+                    "state": n.state,
+                    "bus": n.bus,
+                    "rate": n.rate,
+                    "channels": n.channels,
+                    "monitor": n.monitor,
+                })
+            })
+            .collect()
+    };
+    let streams: Vec<Value> = audio
+        .streams
+        .iter()
+        .map(|s| json!({ "name": s.name, "volume": s.volume, "muted": s.muted }))
+        .collect();
+    json!({
+        "ok": true,
+        "sinks": nodes(Kind::Sink, &audio.sinks),
+        "sources": nodes(Kind::Source, &audio.sources),
+        "streams": streams,
     })
 }
 

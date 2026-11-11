@@ -47,6 +47,7 @@ src/
 │   ├── mod.rs              AudioState snapshot, Command, Audio (main-side handle)
 │   ├── pulse.rs            the pulse thread: libpulse mainloop + cache, channels
 │   ├── device_popup.rs     DevicePopup: sinks/sources, meter drag, mute, set default
+│   ├── mixer_popup.rs      MixerPopup: per-app streams, slider drag, mute
 │   └── volume_style.rs     level icon, meter gradient, slider percent
 ├── network/mod.rs          Network: default route, rates, history; details via
 │                           /sys, resolv.conf and getifaddrs (nix)

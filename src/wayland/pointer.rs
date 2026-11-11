@@ -84,10 +84,39 @@ impl App {
     /// A button was pressed with the pointer at (x, y) on `surface`.
     pub(crate) fn pointer_button(&mut self, surface: &WlSurface, x: f64, y: f64, button: u32) {
         // Only the three main buttons do anything (side buttons are ignored, as
-        // in C). Middle is bound only on the volume box (the mixer, M9c): the
-        // power menu and the calendar treat any button as a click, so it's
-        // kept away from them.
+        // in C).
         if !matches!(button, BTN_LEFT | BTN_RIGHT | BTN_MIDDLE) {
+            return;
+        }
+
+        // The mixer's surfaces first, as in C: it's the one popup opened by
+        // the middle button. Its menu takes left presses; its catcher
+        // closes it (any button).
+        if let Some(host) = self.popups.mixer.host() {
+            if host.is_menu(surface) {
+                if button == BTN_LEFT {
+                    let command = self.popups.mixer.press(
+                        (x, y),
+                        &self.renderer.audio,
+                        &mut self.renderer.text,
+                    );
+                    self.send_audio(command);
+                }
+                return;
+            }
+            if host.is_catcher(surface) {
+                self.popups.mixer.close();
+                return;
+            }
+        }
+        // The middle button is bound only on the volume box (the mixer, which
+        // replaces the device dropdown). Kept away from everything below:
+        // the power menu and the calendar treat any button as a click.
+        if button == BTN_MIDDLE {
+            if let Some((position, rect)) = self.bar_box(surface, x, y, "volume") {
+                self.popups.device.close();
+                self.open_mixer_popup(position, rect);
+            }
             return;
         }
         // 0. The power menu covers whole monitors, so it goes first. Any button.
@@ -105,58 +134,9 @@ impl App {
             }
         }
 
-        // 1. The calendar's own menu absorbs the click; its catcher closes it.
-        if let Some(host) = self.popups.calendar.host() {
-            if host.is_menu(surface) {
-                self.popups
-                    .calendar
-                    .click(x, y, button, &mut self.renderer.text);
-                return;
-            }
-            if host.is_catcher(surface) {
-                self.popups.calendar.close();
-                return;
-            }
-        }
-
-        // The CPU, GPU and memory dropdowns have nothing clickable inside: a
-        // click on one is absorbed; its catcher closes it.
-        if let Some(is_menu) = self.popups.sysmon_surface(surface) {
-            if !is_menu {
-                self.popups.close_sysmon();
-            }
+        // 1. The other dropdowns.
+        if self.dropdown_button(surface, x, y, button) {
             return;
-        }
-
-        // The device dropdown: its cards take left presses (meter, mute,
-        // set default); its catcher closes it.
-        if let Some(host) = self.popups.device.host() {
-            if host.is_menu(surface) {
-                if button == BTN_LEFT {
-                    let command = self.popups.device.press(
-                        (x, y),
-                        &self.renderer.audio,
-                        &mut self.renderer.text,
-                    );
-                    self.send_audio(command);
-                }
-                return;
-            }
-            if host.is_catcher(surface) {
-                self.popups.device.close();
-                return;
-            }
-        }
-
-        // The network dropdown, likewise: nothing clickable inside.
-        if let Some(host) = self.popups.network.host() {
-            if host.is_menu(surface) {
-                return;
-            }
-            if host.is_catcher(surface) {
-                self.popups.network.close();
-                return;
-            }
         }
 
         // 2. A bar: first the click targets inside boxes (workspace pills,
@@ -205,6 +185,7 @@ impl App {
             ("mic", BTN_LEFT) => self.audio.send(Command::ToggleDefaultMute(Kind::Source)),
             // A right click opens the device dropdown for that side.
             ("volume", BTN_RIGHT) => {
+                self.popups.mixer.close();
                 self.open_device_popup(position, rect, (Kind::Sink, COLORS.sky));
             }
             ("mic", BTN_RIGHT) => {
@@ -212,6 +193,66 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// A press on one of the dropdowns below the power menu: the calendar,
+    /// the sysmon three, the device dropdown or the network one. Returns
+    /// whether `surface` belonged to one (the press is then used up).
+    fn dropdown_button(&mut self, surface: &WlSurface, x: f64, y: f64, button: u32) -> bool {
+        // The calendar's own menu absorbs the click; its catcher closes it.
+        if let Some(host) = self.popups.calendar.host() {
+            if host.is_menu(surface) {
+                self.popups
+                    .calendar
+                    .click(x, y, button, &mut self.renderer.text);
+                return true;
+            }
+            if host.is_catcher(surface) {
+                self.popups.calendar.close();
+                return true;
+            }
+        }
+
+        // The CPU, GPU and memory dropdowns have nothing clickable inside: a
+        // click on one is absorbed; its catcher closes it.
+        if let Some(is_menu) = self.popups.sysmon_surface(surface) {
+            if !is_menu {
+                self.popups.close_sysmon();
+            }
+            return true;
+        }
+
+        // The device dropdown: its cards take left presses (meter, mute,
+        // set default); its catcher closes it.
+        if let Some(host) = self.popups.device.host() {
+            if host.is_menu(surface) {
+                if button == BTN_LEFT {
+                    let command = self.popups.device.press(
+                        (x, y),
+                        &self.renderer.audio,
+                        &mut self.renderer.text,
+                    );
+                    self.send_audio(command);
+                }
+                return true;
+            }
+            if host.is_catcher(surface) {
+                self.popups.device.close();
+                return true;
+            }
+        }
+
+        // The network dropdown, likewise: nothing clickable inside.
+        if let Some(host) = self.popups.network.host() {
+            if host.is_menu(surface) {
+                return true;
+            }
+            if host.is_catcher(surface) {
+                self.popups.network.close();
+                return true;
+            }
+        }
+        false
     }
 
     /// Sends an audio command, if there is one.
@@ -225,14 +266,35 @@ impl App {
     /// sending a dragging pointer's events to the surface it pressed on, but
     /// the release is handled unconditionally anyway, so a drag always ends.
     pub(crate) fn pointer_release(&mut self) {
-        self.popups
-            .device
-            .release(&self.renderer.audio, &mut self.renderer.text);
+        let (audio, text) = (&self.renderer.audio, &mut self.renderer.text);
+        self.popups.mixer.release(audio, text);
+        self.popups.device.release(audio, text);
+    }
+
+    /// The bar box called `name` under (x, y), if `surface` is a bar and the
+    /// point is on it: its monitor's position in `outputs`, and the box.
+    fn bar_box(&self, surface: &WlSurface, x: f64, y: f64, name: &str) -> Option<(usize, BoxRect)> {
+        let position = self.outputs.iter().position(|o| {
+            o.bar
+                .as_ref()
+                .is_some_and(|bar| bar.wl_surface() == surface)
+        })?;
+        let bar = self.outputs.get(position)?.bar.as_ref()?;
+        let found = bar
+            .boxes()
+            .iter()
+            .find(|b| b.name == name && b.rect.contains(x, y))?;
+        Some((position, found.rect))
     }
 
     /// One scroll step at (x, y) on `surface`: `up` is away from the user
     /// (raises a volume). ±5 % on a device card, or on the volume or mic box.
     pub(crate) fn pointer_scroll(&mut self, surface: &WlSurface, x: f64, y: f64, up: bool) {
+        if self.popups.mixer.host().is_some_and(|h| h.is_menu(surface)) {
+            let command = self.popups.mixer.scroll((x, y), up);
+            self.send_audio(command);
+            return;
+        }
         if self
             .popups
             .device
@@ -272,9 +334,17 @@ impl App {
 
     /// The pointer moved to (x, y) on `surface`: hover highlights.
     pub(crate) fn pointer_motion(&mut self, surface: &WlSurface, x: f64, y: f64) {
-        // The device dropdown: a meter drag follows the pointer (which keeps
-        // reporting to the menu surface while the button is held), otherwise
-        // hover highlights.
+        // The mixer and the device dropdown: a drag follows the pointer (which
+        // keeps reporting to the menu surface while the button is held),
+        // otherwise hover highlights.
+        if self.popups.mixer.host().is_some_and(|h| h.is_menu(surface)) {
+            let command =
+                self.popups
+                    .mixer
+                    .motion((x, y), &self.renderer.audio, &mut self.renderer.text);
+            self.send_audio(command);
+            return;
+        }
         if self
             .popups
             .device
@@ -329,6 +399,14 @@ impl App {
             .is_some_and(|h| h.is_menu(surface))
         {
             return if self.popups.calendar.is_target(x, y) {
+                Shape::Pointer
+            } else {
+                Shape::Default
+            };
+        }
+        // The mixer's chips and sliders react to a click.
+        if self.popups.mixer.host().is_some_and(|h| h.is_menu(surface)) {
+            return if self.popups.mixer.over_control(x, y) {
                 Shape::Pointer
             } else {
                 Shape::Default
@@ -454,6 +532,42 @@ impl App {
                 .mem
                 .open(&env, output.wl_output(), trigger, all, sysmon, text),
         }
+    }
+
+    /// Opens the mixer under the volume box `trigger` on the monitor at
+    /// `position` in `outputs`.
+    fn open_mixer_popup(&mut self, position: usize, trigger: BoxRect) {
+        let Some(output_width) = self.outputs.get(position).map(|o| self.output_size(o).0) else {
+            return;
+        };
+        let Self {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter,
+            test_mode,
+            outputs,
+            popups,
+            renderer,
+            ..
+        } = self;
+        let Some(output) = outputs.get(position) else {
+            return;
+        };
+        let env = PopupEnv {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter: viewporter.as_ref(),
+            test_mode: *test_mode,
+        };
+        popups.mixer.open(
+            &env,
+            (output.wl_output(), output_width),
+            (trigger, COLORS.sky),
+            outputs.iter().map(Output::wl_output),
+            (&renderer.audio, &mut renderer.text),
+        );
     }
 
     /// Opens the device dropdown for `kind` under the box `trigger` on the

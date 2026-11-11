@@ -147,7 +147,7 @@ must pass.
 - [x] **M8: Network** (`network/`, `modules/network/` ~760). Default route, rates, and the
   info dropdown with graph. Tests: `test_network_data`, `test_popups` (network). IPv4 via
   `nix`'s `getifaddrs`; one shared 5 s timer (`App::poll_5s`).
-- [ ] **M9: Volume + mic** (`audio/*`, `modules/{volume,mic}/` ~1.8k). The pulse thread,
+- [x] **M9: Volume + mic** (`audio/*`, `modules/{volume,mic}/` ~1.8k). The pulse thread,
   sink/source cache, scroll steps, device dropdown, mixer, and `target device|mixer`. No
   commits for no-op events. Tests: `test_audio`, `test_redraw` (pulse part), `test_popups`
   (volume/mixer/mic).
@@ -262,3 +262,8 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   press/drag/scroll/mute on a null sink, mic list without monitors, card count); both
   dropdowns match C (364x312 and 364x224 here, same picture); a sink added or removed while
   open resizes it live (312 -> 400 -> 312 px). 43 unit tests.
+- 2026-11-11 · M9c · Mixer. C's `test_audio` passes unchanged in full (devices and mixer:
+  grows/shrinks with a `paplay` stream, slider and mute chip), and `test_popups` now runs every
+  ported dropdown (10). The mixer matches C's (364x116 with one app). All 15 tests pass.
+  Release vs release: CPU 0.05 % vs 0.07 %, private 7.9 vs 8.3 MB, PSS 14.1 vs 16.0 MB, RSS
+  32.3 vs 35.2 MB, 4 threads vs 5.

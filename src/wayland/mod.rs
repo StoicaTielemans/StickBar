@@ -206,6 +206,11 @@ impl App {
             .target(what, &self.renderer.audio, &mut self.renderer.text)
     }
 
+    /// Where a mixer card's control is (the tests' `target mixer`).
+    pub(crate) fn mixer_target(&self, what: (&str, &str, f64)) -> Option<(f64, f64)> {
+        self.popups.mixer.target(what, &self.renderer.audio)
+    }
+
     /// A new audio snapshot from the pulse thread. The bars are redrawn only
     /// if what they show changed (the C bar's `pulse_client_pump` rule).
     pub(crate) fn audio_update(&mut self, state: AudioState) {
@@ -214,7 +219,7 @@ impl App {
         if changed {
             self.mark_all_dirty();
         }
-        // An open device dropdown follows every change, shown on the bar or not.
+        // The open dropdowns follow every change, shown on the bar or not.
         let Self {
             qh,
             compositor,
@@ -234,6 +239,9 @@ impl App {
         };
         popups
             .device
+            .refresh(&env, &renderer.audio, &mut renderer.text);
+        popups
+            .mixer
             .refresh(&env, &renderer.audio, &mut renderer.text);
     }
 

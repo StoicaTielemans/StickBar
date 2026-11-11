@@ -16,7 +16,7 @@
 //! click <output> <x> <y> <left|right|middle>
 //!                        -> a click on that monitor's bar, bar-local px
 //! menu                   -> {"ok":true,"open":bool,"width","height","catchers",
-//!                            "power_last_action","device_cards"}
+//!                            "power_last_action","device_cards","mixer_rows"}
 //! menu-click <x> <y> [button] / menu-motion <x> <y>
 //!                        -> a click / move on the open menu, menu-local px
 //! menu-press <x> <y> [button] / menu-release / menu-scroll <x> <y> <+1|-1>
@@ -26,6 +26,7 @@
 //! snapshot <png>         -> the open menu's picture, drawn again into a PNG
 //! target power <logout|restart|shutdown|corner|header>
 //! target device <meter|mute|body> <fraction> <description...>
+//! target mixer <slider|mute> <fraction> <stream name...>
 //!                        -> {"ok":true,"x","y"}: a point on the power menu or
 //!                           a device card
 //! refresh <mem|cpu|cpu-reset|gpu|poll>
@@ -215,14 +216,20 @@ fn menu(app: &App) -> Value {
         .device
         .card_count()
         .map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX));
+    let mixer_rows = app
+        .popups()
+        .mixer
+        .row_count()
+        .map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX));
     match app.popups().latest_menu().and_then(PopupSurface::menu_size) {
         Some((width, height)) => json!({
             "ok": true, "open": true, "width": width, "height": height,
             "catchers": catchers, "power_last_action": last, "device_cards": device_cards,
+            "mixer_rows": mixer_rows,
         }),
         None => json!({
             "ok": true, "open": false, "catchers": catchers, "power_last_action": last,
-            "device_cards": device_cards,
+            "device_cards": device_cards, "mixer_rows": mixer_rows,
         }),
     }
 }
@@ -421,6 +428,19 @@ fn target(app: &mut App, args: &str) -> Value {
             ) {
                 (Some(part), Some(fraction), Some(description)) => {
                     app.device_target((description, part, fraction))
+                }
+                _ => None,
+            }
+        }
+        Some(("mixer", rest)) => {
+            let mut parts = rest.splitn(3, ' ');
+            match (
+                parts.next(),
+                parts.next().and_then(|f| f.parse::<f64>().ok()),
+                parts.next(),
+            ) {
+                (Some(part), Some(fraction), Some(name)) => {
+                    app.mixer_target((name, part, fraction))
                 }
                 _ => None,
             }

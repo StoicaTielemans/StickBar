@@ -301,6 +301,7 @@ fn on_stream(cache: &Shared) -> impl FnMut(ListResult<&SinkInputInfo<'_>>) + 'st
                 volume: raw_to_percent(info.volume.avg().0),
                 muted: info.mute,
                 channels: info.volume.len(),
+                has_volume: info.has_volume,
             };
             cache.borrow_mut().upsert_stream(stream);
         }
@@ -326,9 +327,25 @@ fn run_command(
     state: &AudioState,
     command: &Command,
 ) {
-    // Every command but `SetDefault` acts on one device: resolve it, and
-    // what to do with it, first.
+    // Every command but `SetDefault` and the stream ones acts on one device:
+    // resolve it, and what to do with it, first.
     let (kind, index, action) = match *command {
+        Command::SetStreamVolume { index, percent } => {
+            stream_volume(introspector, state, index, percent.min(MAX_VOLUME));
+            return;
+        }
+        Command::AdjustStreamVolume { index, delta } => {
+            if let Some(stream) = state.stream(index) {
+                stream_volume(introspector, state, index, stepped(stream.volume, delta));
+            }
+            return;
+        }
+        Command::ToggleStreamMute { index } => {
+            if let Some(stream) = state.stream(index) {
+                started(introspector.set_sink_input_mute(index, !stream.muted, None));
+            }
+            return;
+        }
         Command::SetDefault { kind, ref name } => {
             started(match kind {
                 Kind::Sink => context.set_default_sink(name, |_success| {}),
@@ -378,6 +395,17 @@ fn run_command(
             introspector.set_source_mute_by_index(index, mute, None)
         }
     });
+}
+
+/// Sets app stream `index` to `percent`, unless it's gone or takes no volume.
+fn stream_volume(introspector: &mut Introspector, state: &AudioState, index: u32, percent: u32) {
+    if let Some(stream) = state.stream(index).filter(|s| s.has_volume) {
+        started(introspector.set_sink_input_volume(
+            index,
+            &volumes(stream.channels, percent),
+            None,
+        ));
+    }
 }
 
 /// What to set on a device.

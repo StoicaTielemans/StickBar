@@ -18,6 +18,7 @@
 //! it; [`Audio`] is its handle for sending commands.
 
 pub(crate) mod device_popup;
+pub(crate) mod mixer_popup;
 mod pulse;
 pub(crate) mod volume_style;
 
@@ -82,6 +83,9 @@ pub(crate) struct Stream {
     pub(crate) muted: bool,
     /// Channel count.
     pub(crate) channels: u8,
+    /// Whether it takes a volume at all (passthrough streams don't; their
+    /// volume requests are skipped, as in C).
+    pub(crate) has_volume: bool,
 }
 
 /// Everything known about the audio server: a snapshot from the pulse thread.
@@ -106,6 +110,11 @@ impl AudioState {
             Kind::Sink => &self.sinks,
             Kind::Source => &self.sources,
         }
+    }
+
+    /// The app stream with server index `index`.
+    pub(crate) fn stream(&self, index: u32) -> Option<&Stream> {
+        self.streams.iter().find(|s| s.index == index)
     }
 
     /// The sink or source with server index `index`.
@@ -179,6 +188,25 @@ pub(crate) enum Command {
         /// Sink or source.
         kind: Kind,
         /// The device's server index.
+        index: u32,
+    },
+    /// Set an app stream's volume (the mixer's slider), clamped 0..=200.
+    SetStreamVolume {
+        /// The stream's server index.
+        index: u32,
+        /// The new volume.
+        percent: u32,
+    },
+    /// Step an app stream's volume by `delta` % (scrolling on its card).
+    AdjustStreamVolume {
+        /// The stream's server index.
+        index: u32,
+        /// The step.
+        delta: i32,
+    },
+    /// Flip an app stream's mute (its mute chip).
+    ToggleStreamMute {
+        /// The stream's server index.
         index: u32,
     },
     /// Make a device the default: a click on its card.

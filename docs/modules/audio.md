@@ -190,5 +190,9 @@ PulseAudio (on PipeWire 1.6.8)`) — via **libpulse**, not raw `libpipewire`.
   sent, drawn instead of the server's figure until the release. Count changes resize through
   `PopupHost::resize`, which recreates the menu surface (C's rule) and keeps the catchers.
   The hand cursor shows over the cards (Rust-only, like the rest of the cursor shapes).
+- **Mixer** (`src/audio/mixer_popup.rs`): the same shape as the device dropdown (rows by stream
+  index, drag shows the last percent sent, `PopupHost::resize` on a row-count change, an
+  empty-state card so it always opens). Volume requests skip streams without `has_volume`
+  (passthrough), as in C. Its surfaces are routed before everything else, as C's are.
 - **Middle button** only reaches the volume box (the mixer); other buttons than left/right/middle
   are ignored, as in C.

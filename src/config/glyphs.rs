@@ -23,6 +23,8 @@ pub(crate) const ICON_CLOCK: char = '\u{f0954}';
 pub(crate) const ICON_CHEVRON_LEFT: char = '\u{f053}';
 /// `fa-chevron_right`, the calendar's next-year button.
 pub(crate) const ICON_CHEVRON_RIGHT: char = '\u{f054}';
+/// `md-memory`, the memory box and its dropdown's header.
+pub(crate) const ICON_MEM: char = '\u{f035b}';
 /// `linux-archlinux`, the bar's leftmost item (opens the power menu). In the
 /// font's ordinary (BMP) Private Use Area, unlike the 5-digit `md-` icons.
 pub(crate) const ICON_ARCH: char = '\u{f303}';

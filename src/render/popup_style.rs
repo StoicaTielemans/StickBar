@@ -19,3 +19,5 @@ pub(crate) const HEADER_ICON_GAP: f64 = 8.0;
 pub(crate) const PILL_H: f64 = 16.0;
 /// A status pill's horizontal padding, each side.
 pub(crate) const PILL_PAD_X: f64 = 7.0;
+/// Header text to its pill, when sizing a popup to its header.
+pub(crate) const PILL_GAP: f64 = 16.0;

@@ -36,7 +36,13 @@ src/
 │   ├── mod.rs              socket_path(), request()/request_json(): the request socket
 │   ├── events.rs           the event socket as a calloop source; line framing, filter
 │   └── dispatch.rs         Dispatcher: Lua form first, classic fallback, cached
+├── sysmon/
+│   ├── mod.rs              Sysmon: CPU/GPU/memory figures + histories, poll()
+│   ├── memory.rs           /proc/meminfo, PSI, zram, top apps by private memory
+│   └── timer.rs            the 5 s poll (calloop Timer)
+├── util/history.rs         History2: the 120-sample ring behind every graph
 ├── modules/
+│   ├── mem/                mod.rs (box), popup.rs (the memory dropdown)
 │   ├── workspaces/mod.rs   Workspaces: occupied/focused from Hyprland, kanji pills
 │   ├── powermenu/
 │   │   ├── mod.rs          PowerMenu: full-screen overlay per monitor, cards, the
@@ -53,6 +59,9 @@ src/
 │   ├── text.rs             TextCache: pango context, font descriptions, LRU of 64
 │   │                       shaped layouts; all text goes through here
 │   ├── module_box.rs       draw_rect() and label(): the bordered module box
+│   ├── braille_graph.rs    btop-style dot graphs (pure cairo)
+│   ├── meter_bar.rs        segmented meters
+│   ├── stat_card.rs        graph card sizing, axis, label/value and top-apps rows
 │   ├── popup_chrome.rs     draw_frame(), draw_card(), draw_header(), draw_pill()
 │   └── popup_style.rs      shared dropdown layout tokens (margins, header, pill)
 ├── testing/mod.rs          the test-control channel on stdin (STICKBAR_TEST_CONTROL=1)

@@ -107,6 +107,18 @@ impl App {
             }
         }
 
+        // The memory dropdown has nothing clickable inside: a click on it is
+        // absorbed; its catcher closes it.
+        if let Some(host) = self.popups.mem.host() {
+            if host.is_menu(surface) {
+                return;
+            }
+            if host.is_catcher(surface) {
+                self.popups.mem.close();
+                return;
+            }
+        }
+
         // 2. A bar: first the click targets inside boxes (workspace pills,
         // left button), then the module whose box is under the pointer.
         let Some(position) = self.outputs.iter().position(|o| {
@@ -135,6 +147,19 @@ impl App {
         if on_arch {
             if button == BTN_LEFT {
                 self.toggle_power_menu();
+            }
+            return;
+        }
+        // A right click on the memory box opens its dropdown (reopens it if
+        // it's open, as in C).
+        let mem = bar.and_then(|bar| {
+            bar.boxes()
+                .iter()
+                .find(|b| b.name == "mem" && b.rect.contains(x, y))
+        });
+        if let Some(rect) = mem.map(|b| b.rect) {
+            if button == BTN_RIGHT {
+                self.open_mem_popup(position, rect);
             }
             return;
         }
@@ -273,6 +298,40 @@ impl App {
         popups.power.toggle(
             &env,
             outputs.iter().map(Output::wl_output),
+            &mut renderer.text,
+        );
+    }
+
+    /// Opens the memory dropdown under the box `trigger` on the monitor at
+    /// `position` in `outputs`.
+    fn open_mem_popup(&mut self, position: usize, trigger: BoxRect) {
+        let Self {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter,
+            test_mode,
+            outputs,
+            popups,
+            renderer,
+            ..
+        } = self;
+        let Some(output) = outputs.get(position) else {
+            return;
+        };
+        let env = PopupEnv {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter: viewporter.as_ref(),
+            test_mode: *test_mode,
+        };
+        popups.mem.open(
+            &env,
+            output.wl_output(),
+            trigger,
+            outputs.iter().map(Output::wl_output),
+            &mut renderer.sysmon,
             &mut renderer.text,
         );
     }

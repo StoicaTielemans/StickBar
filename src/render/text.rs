@@ -134,6 +134,28 @@ impl TextCache {
         shortened(low)
     }
 
+    /// Draws `text` ending at `right_x`, vertically centered in the row `y..y + h`.
+    pub(crate) fn draw_right(
+        &mut self,
+        cr: &cairo::Context,
+        (right_x, y, h): (f64, f64, f64),
+        text: &str,
+        size: i32,
+        bold: bool,
+        color: Color,
+    ) -> Result<(), cairo::Error> {
+        let Some(cached) = self.layout(text, size, bold) else {
+            return Ok(());
+        };
+        show(
+            cr,
+            cached,
+            right_x - cached.width,
+            y + (h - cached.height) / 2.0,
+            color,
+        )
+    }
+
     /// Draws `text` starting at `x`, vertically centered in the row `y..y + h`.
     pub(crate) fn draw_left(
         &mut self,

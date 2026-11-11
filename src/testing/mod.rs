@@ -23,6 +23,8 @@
 //! snapshot <png>         -> the open menu's picture, drawn again into a PNG
 //! target power <logout|restart|shutdown|corner|header>
 //!                        -> {"ok":true,"x","y"}: a point on the power menu
+//! refresh <mem|poll>      -> run a dropdown's details refresh, or a full 5 s poll
+//! dump mem               -> every memory figure the bar holds (test_sysmon_data)
 //! cursor <output> <x> <y> / menu-cursor <x> <y>
 //!                        -> {"ok":true,"shape":"pointer"|"default"}: the cursor
 //!                           the bar would show there (Rust only)
@@ -150,6 +152,8 @@ fn dispatch(app: &mut App, line: &str) -> Value {
         "catcher-click" => catcher_click(app),
         "cursor" if !rest.is_empty() => cursor(app, rest),
         "target" if !rest.is_empty() => target(app, rest),
+        "refresh" if !rest.is_empty() => refresh(app, rest),
+        "dump" if !rest.is_empty() => dump(app, rest),
         "menu-cursor" if !rest.is_empty() => menu_cursor(app, rest),
         "snapshot" if !rest.is_empty() => match app.snapshot(rest) {
             Ok(()) => json!({ "ok": true }),
@@ -195,6 +199,57 @@ fn menu(app: &App) -> Value {
         None => {
             json!({ "ok": true, "open": false, "catchers": catchers, "power_last_action": last })
         }
+    }
+}
+
+/// `refresh <what>`: what an open dropdown or the 5 s timer would do, now.
+fn refresh(app: &mut App, what: &str) -> Value {
+    let sysmon = &mut app.renderer_mut().sysmon;
+    match what {
+        "mem" => sysmon.mem.refresh_details(),
+        "poll" => sysmon.poll(),
+        _ => return error("unknown refresh target"),
+    }
+    json!({ "ok": true })
+}
+
+/// `dump <section>`: what a data source holds, with the C bar's field names.
+fn dump(app: &mut App, section: &str) -> Value {
+    let sysmon = &app.renderer_mut().sysmon;
+    match section {
+        "mem" => {
+            let m = &sysmon.mem;
+            let zram = m.zram.clone().unwrap_or_default();
+            let procs: Vec<Value> = m
+                .procs
+                .iter()
+                .map(|(name, gb)| json!({ "name": name, "gb": gb }))
+                .collect();
+            json!({
+                "ok": true,
+                "percent": m.percent,
+                "total_gb": m.total_gb,
+                "apps_gb": m.used_gb,
+                "avail_gb": m.avail_gb,
+                "free_gb": m.free_gb,
+                "cache_gb": m.cache_gb(),
+                "shared_gb": m.shared_gb,
+                "dirty_mb": m.dirty_mb,
+                "swap_used_gb": m.swap_used_gb,
+                "swap_total_gb": m.swap_total_gb,
+                "swap_percent": m.swap_percent,
+                "history_len": sysmon.mem_history.len(),
+                "psi": m.psi.is_some(),
+                "psi_some": m.psi.unwrap_or_default(),
+                "zram": m.zram.is_some(),
+                "zram_algorithm": zram.algorithm,
+                "zram_orig_mb": zram.orig_mb,
+                "zram_compr_mb": zram.compr_mb,
+                "zram_used_mb": zram.used_mb,
+                "procs": procs,
+            })
+        }
+        _ => error("unknown dump section"),
     }
 }
 

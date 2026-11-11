@@ -2,17 +2,21 @@
 //!
 //! The bar has three regions, as in the C bar: left-region modules laid out
 //! left to right from x = 0, right-region ones right to left from the right
-//! edge, and the media box centered between. So far: the Arch logo and the
-//! workspace pills on the left, the clock on the right.
+//! edge, and the media box centered between. So far: the Arch logo, the
+//! workspace pills and memory on the left, the clock on the right.
 
+pub(crate) mod braille_graph;
+pub(crate) mod meter_bar;
 pub(crate) mod module_box;
 pub(crate) mod popup_chrome;
 pub(crate) mod popup_style;
+pub(crate) mod stat_card;
 pub(crate) mod text;
 
 use crate::{
     config::{BAR, COLORS},
-    modules::{clock::Clock, powermenu::arch_logo, workspaces::Workspaces},
+    modules::{clock::Clock, mem, powermenu::arch_logo, workspaces::Workspaces},
+    sysmon::Sysmon,
 };
 use text::TextCache;
 
@@ -100,6 +104,8 @@ pub(crate) struct Renderer {
     pub(crate) clock: Clock,
     /// The workspace pills' data (from Hyprland).
     pub(crate) workspaces: Workspaces,
+    /// CPU/GPU/memory figures (memory so far).
+    pub(crate) sysmon: Sysmon,
 }
 
 impl Renderer {
@@ -109,6 +115,12 @@ impl Renderer {
             text: TextCache::new()?,
             clock: Clock::new(),
             workspaces: Workspaces::default(),
+            sysmon: {
+                // The first poll before anything is drawn, as the C bar does.
+                let mut sysmon = Sysmon::default();
+                sysmon.poll();
+                sysmon
+            },
         })
     }
 
@@ -135,7 +147,7 @@ impl Renderer {
             // Left click opens the power menu.
             clickable: true,
         });
-        let left = arch.x + arch.w + BAR.item_spacing;
+        let mut left = arch.x + arch.w + BAR.item_spacing;
         let (next, pills) =
             self.workspaces
                 .render(cr, &mut self.text, left, output_index, (0.0, height))?;
@@ -155,6 +167,16 @@ impl Renderer {
             });
         }
         layout.targets.extend(pills);
+        // With no pills, `next` is still `left` (no gap is added).
+        left = next;
+
+        let mem = mem::render(cr, &mut self.text, &self.sysmon.mem, left, (0.0, height))?;
+        layout.boxes.push(ModuleBox {
+            name: "mem",
+            rect: mem,
+            // Right click opens its dropdown.
+            clickable: true,
+        });
 
         // Right region, laid out from the right edge leftwards.
         let clock = self

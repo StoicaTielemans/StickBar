@@ -4,10 +4,11 @@
 //! closes it. A dropdown holds an `Option<PopupHost>`: `Some` while open,
 //! and dropping it closes everything.
 //!
-//! Only right-anchored opening exists so far (the clock is in the bar's right
-//! region). Left-anchored opening arrives with the first left-region dropdown
-//! (CPU, M7), and resizing while open with the first dropdown whose height
-//! changes (the mixer, M9).
+//! Right-region boxes open leftwards from their right edge (`open_right`),
+//! left-region ones rightwards from their left edge (`open_left`); the wrong
+//! one pushes the dropdown off-screen (BUG.md, "CPU/GPU/memory dropdowns
+//! off-screen"). Resizing while open arrives with the first dropdown whose
+//! height changes (the mixer, M9).
 
 use smithay_client_toolkit::{
     reexports::client::protocol::{wl_output::WlOutput, wl_surface::WlSurface},
@@ -53,6 +54,30 @@ impl PopupHost {
             size,
             (top, right, 0, 0),
             Anchor::TOP | Anchor::RIGHT,
+        );
+        let catchers = all_outputs.map(|o| PopupSurface::catcher(env, o)).collect();
+        Self { menu, catchers }
+    }
+
+    /// Opens a `width` x `height` dropdown on `output` under the box
+    /// `trigger`, growing rightwards from the box's left edge (left-region
+    /// boxes), with a catcher on each of `all_outputs`.
+    pub(crate) fn open_left<'o>(
+        env: &PopupEnv<'_>,
+        output: &WlOutput,
+        trigger: BoxRect,
+        size: (i32, i32),
+        all_outputs: impl Iterator<Item = &'o WlOutput>,
+    ) -> Self {
+        // The same bar-height correction as `open_right`.
+        let top = whole_px(trigger.y + trigger.h) - i32::from(BAR.height);
+        let left = whole_px(trigger.x);
+        let menu = PopupSurface::menu(
+            env,
+            output,
+            size,
+            (top, 0, 0, left),
+            Anchor::TOP | Anchor::LEFT,
         );
         let catchers = all_outputs.map(|o| PopupSurface::catcher(env, o)).collect();
         Self { menu, catchers }

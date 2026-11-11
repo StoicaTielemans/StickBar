@@ -187,7 +187,24 @@ impl App {
 
     /// Saves the open dropdown's picture as a PNG (the tests' `snapshot`).
     pub(crate) fn snapshot(&mut self, path: &str) -> Result<(), String> {
-        self.popups.snapshot(path, &mut self.renderer.text)
+        self.popups.snapshot(path, &mut self.renderer)
+    }
+
+    /// The 5 s sysmon poll: fresh figures and one history sample, the open
+    /// sysmon dropdown refreshed, and every bar redrawn (bars whose pixels
+    /// didn't change skip the commit anyway).
+    pub(crate) fn sysmon_poll(&mut self) {
+        self.renderer.sysmon.poll();
+        let renderer = &mut self.renderer;
+        self.popups
+            .mem
+            .refresh_if_open(&mut renderer.sysmon, &mut renderer.text);
+        self.mark_all_dirty();
+    }
+
+    /// The renderer, for the tests' `dump`/`refresh` commands.
+    pub(crate) const fn renderer_mut(&mut self) -> &mut Renderer {
+        &mut self.renderer
     }
 
     /// Every existing bar.
@@ -303,7 +320,7 @@ impl LayerShellHandler for App {
             layer.wl_surface(),
             &self.shm,
             (width, height),
-            &mut self.renderer.text,
+            &mut self.renderer,
         );
     }
 }

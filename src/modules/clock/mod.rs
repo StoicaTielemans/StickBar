@@ -62,7 +62,14 @@ impl Clock {
         right_x: f64,
         (top, height): (f64, f64),
     ) -> Result<BoxRect, cairo::Error> {
-        module_box::label(cr, text, right_x, (top, height), &self.text, COLORS.mauve)
+        module_box::label(
+            cr,
+            text,
+            (module_box::Anchor::FromRight, right_x),
+            (top, height),
+            &self.text,
+            COLORS.mauve,
+        )
     }
 }
 

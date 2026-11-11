@@ -37,22 +37,34 @@ pub(crate) fn draw_rect(
     cr.restore()
 }
 
-/// The standard bar box: `label` in bold at the bar's label size, centered in a
-/// box `module_padding` wider than it, with a mantle fill and an `accent`
-/// border, right-aligned so the box's right edge is at `right_x` (the C bar's
-/// `module_box_label` with `MODULE_BOX_FROM_RIGHT`; left-anchored boxes arrive
-/// with the first left-region module). Returns where the box was drawn.
+/// Which edge a bar box is laid out from (the C bar's `ModuleBoxAnchor`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Anchor {
+    /// Left-region boxes: the box starts at the given x and grows rightwards.
+    FromLeft,
+    /// Right-region boxes: the box ends at the given x and grows leftwards.
+    FromRight,
+}
+
+/// The standard bar box (the C bar's `module_box_label`): `label` in bold at
+/// the bar's label size, centered in a box `module_padding` wider than it, with
+/// a mantle fill and an `accent` border, placed from `edge_x` as `anchor` says.
+/// Returns where the box was drawn.
 pub(crate) fn label(
     cr: &cairo::Context,
     text: &mut TextCache,
-    right_x: f64,
+    (anchor, edge_x): (Anchor, f64),
     (top, height): (f64, f64),
     label: &str,
     accent: Color,
 ) -> Result<BoxRect, cairo::Error> {
     let w = text.width(label, FONT.label, true) + BAR.module_padding;
+    let x = match anchor {
+        Anchor::FromLeft => edge_x,
+        Anchor::FromRight => edge_x - w,
+    };
     let rect = BoxRect {
-        x: right_x - w,
+        x,
         y: top,
         w,
         h: height,

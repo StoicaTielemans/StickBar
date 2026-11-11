@@ -11,5 +11,5 @@ mod fonts;
 pub(crate) mod glyphs;
 
 pub(crate) use bar::BAR;
-pub(crate) use colors::{COLORS, Color};
+pub(crate) use colors::{COLORS, Color, gradient3};
 pub(crate) use fonts::FONT;

@@ -115,11 +115,22 @@ must pass.
   `test_power_menu` passes unchanged** (SIGUSR1 blocked in every thread, keybind open/close,
   centering, hover colours, the record-only guard). The Arch logo and the overlay (plain and
   hovered) are pixel-identical to C.
-- [ ] **M7: CPU / memory / GPU** (`sysmon/sysmon_client.c` ~1.1k, `modules/{cpu,mem,gpu}/`,
-  `render/{braille_graph,meter_bar,stat_card}.c`; ~2.4k). The shared 5 s poll, /proc parsing,
-  NVML, the three dropdowns, graphs and meters, and `refresh`/`dump` commands. Tests:
-  `test_sysmon_data`, `test_popup_graphs`, `test_nvml_vs_smi`, `test_no_subprocess`,
-  `test_popups` (cpu/mem/gpu).
+- **M7: CPU / memory / GPU**, split into three steps (about 3,200 C lines in total):
+  - [x] **M7a: Memory + the shared stat machinery** (`modules/mem/*`, the memory half of
+    `sysmon/sysmon_client.c`, `util/history.h`, `render/{braille_graph,meter_bar,stat_card}.c`,
+    `render/color.h`). The 5 s poll (calloop `Timer`), the 120-sample history ring, braille
+    graphs, segmented meters, stat-card rows, left-anchored dropdowns (`PopupHost::open_left`),
+    the memory box and its dropdown (PSI pill, used/swap graphs, apps/cache/free bar, RAM/SWAP
+    meters, ZRAM/AVAIL/PRESS rows, top apps by private memory), and `dump mem` / `refresh mem|poll`.
+    The memory half of C's `test_sysmon_data` (`check_memory`, `check_memory_apps`) passes
+    against it, as do `test_popups`' `check_popup` for `mem` and `test_popup_graphs`'
+    `graph_gap`. The dropdown is the same size and layout as C's (411×458 here).
+  - [ ] **M7b: CPU** (`modules/cpu/*`, the CPU half of `sysmon_client.c`): `/proc/stat` deltas,
+    temperature, per-thread grid with the P/E split, process sampling and the 1 s "first figures"
+    tick. The three sysmon dropdowns replace each other. Tests: the rest of `test_sysmon_data`.
+  - [ ] **M7c: GPU** (`modules/gpu/*`, NVML via `nvml-wrapper`): the first worker threads (NVML's
+    own), so SIGUSR1-in-every-thread gets re-checked. Tests: `test_nvml_vs_smi`,
+    `test_popup_graphs`, `test_no_subprocess`, and `test_popups` minus volume (M9).
 - [ ] **M8: Network** (`network/`, `modules/network/` ~760). Default route, rates, and the
   info dropdown with graph. Tests: `test_network_data`, `test_popups` (network).
 - [ ] **M9: Volume + mic** (`audio/*`, `modules/{volume,mic}/` ~1.8k). The pulse thread,
@@ -206,3 +217,8 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   --against main` (C runs every module): CPU 0.02 % vs 0.07 %, private 5.5 MB vs 8.6 MB,
   RSS 25.3 MB vs 35.2 MB. Release binary 1.1 MB. The real Logout/Restart/Shutdown calls are
   untested, as in C (the guard).
+- 2026-11-11 · M7a · Memory + shared stat machinery. C's memory checks pass (400 MB child →
+  404 MB); dropdown matches C's size and layout; all 9 tests pass (29 unit tests). Opening the
+  dropdown adds 3.4 MB RSS (C: 2.3): each paint draws into a temporary image and copies it, and
+  the allocator may keep that freed block. `perf_compare --against main` (C runs every module):
+  CPU 0.05 % vs 0.05 % (both poll every 5 s now), private 5.6 MB vs 8.6 MB, RSS 25.6 MB vs 35.0 MB.

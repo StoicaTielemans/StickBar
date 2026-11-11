@@ -14,7 +14,9 @@ mod config;
 mod hyprland;
 mod modules;
 mod render;
+mod sysmon;
 mod testing;
+mod util;
 mod wayland;
 
 use std::process::ExitCode;
@@ -120,29 +122,14 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    // The clock's tick, at the start of every wall-clock second.
-    if let Err(err) = modules::clock::timer::start(&event_loop.handle()) {
+    // The module event sources: timers, Hyprland, the test channel.
+    if let Err(err) = start_sources(&event_loop.handle(), &mut app) {
         eprintln!("stickBar: {err}");
         return ExitCode::FAILURE;
-    }
-
-    // Hyprland: the workspaces as they are now, then live updates from its
-    // event socket. Without the socket the bar still runs; the pills just
-    // stop following changes.
-    app.refresh_workspaces();
-    if let Err(err) = hyprland::events::start(&event_loop.handle()) {
-        eprintln!(
-            "stickBar: {err}\nstickBar: workspace live-updates disabled (couldn't connect to \
-             Hyprland's event socket) -- the bar still renders, but workspace pills won't \
-             update until it's restarted"
-        );
     }
     // Hyprland's event socket may drop (e.g. a compositor reload): it gets
     // exactly one reconnect per run, then live updates stay off.
     let mut hyprland_reconnected = false;
-
-    // The test-control channel on stdin, only with STICKBAR_TEST_CONTROL=1.
-    testing::start(&event_loop.handle());
 
     // 5. Run. Each pass: wait for and handle whatever arrived, then draw every
     // bar it made dirty. A dispatch error means the Wayland connection is gone
@@ -172,4 +159,30 @@ fn main() -> ExitCode {
         }
         app.flush_dirty(&qh);
     }
+}
+
+/// Adds every module's event source to the loop. An error is fatal (the C
+/// bar exited too); a missing Hyprland only disables live workspace updates.
+fn start_sources(handle: &calloop::LoopHandle<'static, App>, app: &mut App) -> Result<(), String> {
+    // The clock's tick, at the start of every wall-clock second.
+    modules::clock::timer::start(handle)?;
+
+    // Hyprland: the workspaces as they are now, then live updates from its
+    // event socket. Without the socket the bar still runs; the pills just
+    // stop following changes.
+    app.refresh_workspaces();
+    if let Err(err) = hyprland::events::start(handle) {
+        eprintln!(
+            "stickBar: {err}\nstickBar: workspace live-updates disabled (couldn't connect to \
+             Hyprland's event socket) -- the bar still renders, but workspace pills won't \
+             update until it's restarted"
+        );
+    }
+
+    // CPU/GPU/memory figures, polled every 5 s (the first poll already ran).
+    sysmon::timer::start(handle)?;
+
+    // The test-control channel on stdin, only with STICKBAR_TEST_CONTROL=1.
+    testing::start(handle);
+    Ok(())
 }

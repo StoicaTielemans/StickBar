@@ -49,9 +49,31 @@ impl Color {
         }
     }
 
+    /// The colour `t` of the way from `self` to `other` (0.0 = self, 1.0 = other),
+    /// every channel including alpha.
+    pub(crate) fn mix(self, other: Self, t: f64) -> Self {
+        Self {
+            r: self.r + (other.r - self.r) * t,
+            g: self.g + (other.g - self.g) * t,
+            b: self.b + (other.b - self.b) * t,
+            a: self.a + (other.a - self.a) * t,
+        }
+    }
+
     /// Makes this colour cairo's current source, for the next `fill`/`stroke`/`paint`.
     pub(crate) fn set_source(self, cr: &cairo::Context) {
         cr.set_source_rgba(self.r, self.g, self.b, self.a);
+    }
+}
+
+/// A three-stop gradient (`stops[0]` at t = 0, `stops[1]` at 0.5, `stops[2]`
+/// at 1): the graphs' and meters' low → mid → high colouring.
+pub(crate) fn gradient3(stops: &[Color; 3], t: f64) -> Color {
+    let [low, mid, high] = *stops;
+    if t < 0.5 {
+        low.mix(mid, t * 2.0)
+    } else {
+        mid.mix(high, (t - 0.5) * 2.0)
     }
 }
 

@@ -177,3 +177,17 @@ dropdown, rather than one shared tooltip for all three.
   reports 0% (no prior sample yet to diff against), self-correcting on the
   next poll 5 seconds later. Not a bug; matches the reference's own `prev ?
   percent : 0` behavior.
+
+## In the Rust port
+
+- **Files:** `src/sysmon/mod.rs` (`Sysmon`: figures + histories, `poll()`),
+  `src/sysmon/memory.rs`, `src/sysmon/timer.rs` (the 5 s calloop `Timer`),
+  `src/util/history.rs` (`History2`), `src/render/{braille_graph,meter_bar,stat_card}.rs`,
+  `src/modules/mem/{mod,popup}.rs`. CPU (M7b) and GPU (M7c) join `Sysmon` the same way.
+- `Sysmon` lives in the `Renderer`, next to the other module data, so bar boxes and dropdowns
+  read it directly. `App::sysmon_poll()` polls, refreshes an open sysmon dropdown and marks the
+  bars dirty.
+- Dropdown sections take `Option<&cairo::Context>`: `None` only measures. That's how the height
+  is fixed before the popup opens (C's `paint(NULL)` pass).
+- Numbers from `/proc` are parsed straight to `f64` (exact below 2^53), which avoids lossy
+  integer-to-float casts.

@@ -125,3 +125,22 @@ pub(crate) fn draw_header(
     }
     Ok(())
 }
+
+/// The width a header needs to show everything unshortened, for sizing a
+/// dropdown to its header.
+pub(crate) fn header_width(text: &mut TextCache, header: &Header<'_>) -> f64 {
+    let mut w = 0.0;
+    if let Some(icon) = header.icon {
+        w += text.width(&icon.to_string(), FONT.heading, false) + popup_style::HEADER_ICON_GAP;
+    }
+    if !header.title.is_empty() {
+        w += text.width(header.title, FONT.md, true);
+    }
+    if !header.summary.is_empty() {
+        w += text.width(header.summary, FONT.sm, false);
+    }
+    if let Some(pill) = header.pill {
+        w += popup_style::PILL_GAP + pill_width(text, pill);
+    }
+    w
+}

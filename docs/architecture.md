@@ -38,10 +38,12 @@ src/
 │   └── dispatch.rs         Dispatcher: Lua form first, classic fallback, cached
 ├── sysmon/
 │   ├── mod.rs              Sysmon: CPU/GPU/memory figures + histories, poll()
+│   ├── cpu.rs              /proc/stat deltas, temperature, P/E split, process sample
 │   ├── memory.rs           /proc/meminfo, PSI, zram, top apps by private memory
 │   └── timer.rs            the 5 s poll (calloop Timer)
 ├── util/history.rs         History2: the 120-sample ring behind every graph
 ├── modules/
+│   ├── cpu/                mod.rs (box), popup.rs (the CPU dropdown)
 │   ├── mem/                mod.rs (box), popup.rs (the memory dropdown)
 │   ├── workspaces/mod.rs   Workspaces: occupied/focused from Hyprland, kanji pills
 │   ├── powermenu/

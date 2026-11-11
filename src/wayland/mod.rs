@@ -149,6 +149,11 @@ impl App {
                 bar.mark_clock_dirty();
             }
         }
+        // The CPU dropdown's first process figures ride on this 1 s tick.
+        let renderer = &mut self.renderer;
+        self.popups
+            .cpu
+            .tick(&mut renderer.sysmon, &mut renderer.text);
     }
 
     /// Re-reads the workspaces from Hyprland; every bar redraws only if what
@@ -198,6 +203,9 @@ impl App {
         let renderer = &mut self.renderer;
         self.popups
             .mem
+            .refresh_if_open(&mut renderer.sysmon, &mut renderer.text);
+        self.popups
+            .cpu
             .refresh_if_open(&mut renderer.sysmon, &mut renderer.text);
         self.mark_all_dirty();
     }

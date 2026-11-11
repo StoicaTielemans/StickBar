@@ -3,7 +3,7 @@
 //! The bar has three regions, as in the C bar: left-region modules laid out
 //! left to right from x = 0, right-region ones right to left from the right
 //! edge, and the media box centered between. So far: the Arch logo, the
-//! workspace pills and memory on the left, the clock on the right.
+//! workspace pills, CPU and memory on the left, the clock on the right.
 
 pub(crate) mod braille_graph;
 pub(crate) mod meter_bar;
@@ -15,7 +15,7 @@ pub(crate) mod text;
 
 use crate::{
     config::{BAR, COLORS},
-    modules::{clock::Clock, mem, powermenu::arch_logo, workspaces::Workspaces},
+    modules::{clock::Clock, cpu, mem, powermenu::arch_logo, workspaces::Workspaces},
     sysmon::Sysmon,
 };
 use text::TextCache;
@@ -117,7 +117,7 @@ impl Renderer {
             workspaces: Workspaces::default(),
             sysmon: {
                 // The first poll before anything is drawn, as the C bar does.
-                let mut sysmon = Sysmon::default();
+                let mut sysmon = Sysmon::new();
                 sysmon.poll();
                 sysmon
             },
@@ -169,6 +169,15 @@ impl Renderer {
         layout.targets.extend(pills);
         // With no pills, `next` is still `left` (no gap is added).
         left = next;
+
+        let cpu = cpu::render(cr, &mut self.text, &self.sysmon.cpu, left, (0.0, height))?;
+        layout.boxes.push(ModuleBox {
+            name: "cpu",
+            rect: cpu,
+            // Right click opens its dropdown.
+            clickable: true,
+        });
+        left = cpu.x + cpu.w + BAR.item_spacing;
 
         let mem = mem::render(cr, &mut self.text, &self.sysmon.mem, left, (0.0, height))?;
         layout.boxes.push(ModuleBox {

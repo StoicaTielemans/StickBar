@@ -183,7 +183,12 @@ dropdown, rather than one shared tooltip for all three.
 - **Files:** `src/sysmon/mod.rs` (`Sysmon`: figures + histories, `poll()`),
   `src/sysmon/memory.rs`, `src/sysmon/timer.rs` (the 5 s calloop `Timer`),
   `src/util/history.rs` (`History2`), `src/render/{braille_graph,meter_bar,stat_card}.rs`,
-  `src/modules/mem/{mod,popup}.rs`. CPU (M7b) and GPU (M7c) join `Sysmon` the same way.
+  `src/modules/mem/{mod,popup}.rs`, `src/sysmon/cpu.rs`, `src/modules/cpu/{mod,popup}.rs`. GPU
+  (M7c) joins `Sysmon` the same way.
+- **CPU process sample:** the per-PID tick table is a `HashMap<pid, ticks>` replaced on every scan,
+  so exited PIDs drop out (C used two swapped open-addressing tables). Ticks per second come
+  from `rustix::param::clock_ticks_per_second`. The first-figures tick hangs off the clock's
+  1 s timer (`App::clock_tick` → `CpuPopup::tick`).
 - `Sysmon` lives in the `Renderer`, next to the other module data, so bar boxes and dropdowns
   read it directly. `App::sysmon_poll()` polls, refreshes an open sysmon dropdown and marks the
   bars dirty.

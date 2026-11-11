@@ -125,9 +125,14 @@ must pass.
     The memory half of C's `test_sysmon_data` (`check_memory`, `check_memory_apps`) passes
     against it, as do `test_popups`' `check_popup` for `mem` and `test_popup_graphs`'
     `graph_gap`. The dropdown is the same size and layout as C's (411×458 here).
-  - [ ] **M7b: CPU** (`modules/cpu/*`, the CPU half of `sysmon_client.c`): `/proc/stat` deltas,
-    temperature, per-thread grid with the P/E split, process sampling and the 1 s "first figures"
-    tick. The three sysmon dropdowns replace each other. Tests: the rest of `test_sysmon_data`.
+  - [x] **M7b: CPU** (`modules/cpu/*`, the CPU half of `sysmon_client.c`). `/proc/stat` jiffies
+    deltas (overall and per thread), package temperature, static facts (model, cores, max clock,
+    P/E cpulists), the dropdown (load pill, usage/temp graphs, P-CORES/E-CORES grid, LOAD/CLOCK/
+    UPTIME, top processes summed by name from a per-PID tick table), the 1 s "first figures"
+    tick, and `dump cpu` / `refresh cpu|cpu-reset`. The CPU and memory dropdowns replace each
+    other. **C's `test_sysmon_data` passes unchanged** (2 busy loops → `sh` 12.4 % of an expected
+    12.5 %). The dropdown matches C's size and layout (416×553 here), and also passes
+    `check_popup` and `graph_gap`.
   - [ ] **M7c: GPU** (`modules/gpu/*`, NVML via `nvml-wrapper`): the first worker threads (NVML's
     own), so SIGUSR1-in-every-thread gets re-checked. Tests: `test_nvml_vs_smi`,
     `test_popup_graphs`, `test_no_subprocess`, and `test_popups` minus volume (M9).
@@ -224,3 +229,6 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   said 3.4 MB, but that was an artifact: an earlier open/snapshot in the same run was still
   counted. `perf_compare --against main` (C runs every module):
   CPU 0.05 % vs 0.05 % (both poll every 5 s now), private 5.6 MB vs 8.6 MB, RSS 25.6 MB vs 35.0 MB.
+- 2026-11-11 · M7b · CPU. C's `test_sysmon_data` passes unchanged; all 10 tests and 33 unit
+  tests pass; the dropdown matches C's. `perf_compare --against main` (C runs every module):
+  CPU 0.08 % vs 0.10 %, private 5.6 MB vs 8.7 MB, RSS 25.9 MB vs 35.2 MB. Release binary 1.2 MB.

@@ -23,6 +23,8 @@ pub(crate) const ICON_CLOCK: char = '\u{f0954}';
 pub(crate) const ICON_CHEVRON_LEFT: char = '\u{f053}';
 /// `fa-chevron_right`, the calendar's next-year button.
 pub(crate) const ICON_CHEVRON_RIGHT: char = '\u{f054}';
+/// `md-cpu_64_bit`, the CPU box and its dropdown's header.
+pub(crate) const ICON_CPU: char = '\u{f0ee0}';
 /// `md-memory`, the memory box and its dropdown's header.
 pub(crate) const ICON_MEM: char = '\u{f035b}';
 /// `linux-archlinux`, the bar's leftmost item (opens the power menu). In the

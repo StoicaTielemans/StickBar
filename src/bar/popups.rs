@@ -9,7 +9,10 @@ use smithay_client_toolkit::{reexports::client::protocol::wl_surface::WlSurface,
 
 use super::{popup_host::PopupHost, popup_surface::PopupSurface};
 use crate::{
-    modules::{clock::calendar::CalendarPopup, mem::popup::MemPopup, powermenu::PowerMenu},
+    modules::{
+        clock::calendar::CalendarPopup, cpu::popup::CpuPopup, mem::popup::MemPopup,
+        powermenu::PowerMenu,
+    },
     render::Renderer,
 };
 
@@ -22,6 +25,8 @@ pub(crate) struct Popups {
     pub(crate) power: PowerMenu,
     /// The memory dropdown.
     pub(crate) mem: MemPopup,
+    /// The CPU dropdown.
+    pub(crate) cpu: CpuPopup,
 }
 
 impl Popups {
@@ -39,6 +44,12 @@ impl Popups {
         if let Some(overlay) = self.power.surface_mut(surface) {
             if overlay.configure(shm, width, height) {
                 self.power.paint_all(text);
+            }
+            return true;
+        }
+        if let Some(popup) = self.cpu.host_mut().and_then(|h| h.surface_mut(surface)) {
+            if popup.configure(shm, width, height) {
+                self.cpu.paint(&renderer.sysmon, text);
             }
             return true;
         }
@@ -63,7 +74,11 @@ impl Popups {
 
     /// The compositor closed popup surface `surface`.
     pub(crate) fn closed(&mut self, surface: &WlSurface) {
-        let hosts = [self.calendar.host_mut(), self.mem.host_mut()];
+        let hosts = [
+            self.calendar.host_mut(),
+            self.mem.host_mut(),
+            self.cpu.host_mut(),
+        ];
         let popup = self.power.surface_mut(surface).or_else(|| {
             hosts
                 .into_iter()
@@ -82,13 +97,14 @@ impl Popups {
         self.power
             .surfaces()
             .first()
+            .or_else(|| self.cpu.menu())
             .or_else(|| self.mem.menu())
             .or_else(|| self.calendar.menu())
     }
 
     /// Every open catcher, across all dropdowns.
     pub(crate) fn catchers(&self) -> impl Iterator<Item = &PopupSurface> {
-        [self.calendar.host(), self.mem.host()]
+        [self.calendar.host(), self.mem.host(), self.cpu.host()]
             .into_iter()
             .flatten()
             .flat_map(PopupHost::catchers)
@@ -98,6 +114,11 @@ impl Popups {
     pub(crate) fn snapshot(&mut self, path: &str, renderer: &mut Renderer) -> Result<(), String> {
         if self.power.is_open() {
             return self.power.snapshot(path, &mut renderer.text);
+        }
+        if self.cpu.host().is_some() {
+            return self
+                .cpu
+                .snapshot(path, &renderer.sysmon, &mut renderer.text);
         }
         if self.mem.host().is_some() {
             return self

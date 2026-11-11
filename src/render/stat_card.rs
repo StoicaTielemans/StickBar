@@ -109,6 +109,25 @@ pub(crate) fn label_col_w(text: &mut TextCache, labels: &[&str]) -> f64 {
         .fold(0.0, f64::max)
 }
 
+/// A label/value row: the label small, bold and dim; the value at `value_x`.
+pub(crate) fn draw_kv_row(
+    cr: &cairo::Context,
+    text: &mut TextCache,
+    (x, value_x, y): (f64, f64, f64),
+    label: &str,
+    value: &str,
+) -> Result<(), cairo::Error> {
+    text.draw_left(cr, (x, y, ROW_H), label, FONT.xs, true, COLORS.overlay0)?;
+    text.draw_left(
+        cr,
+        (value_x, y, ROW_H),
+        value,
+        FONT.label,
+        false,
+        COLORS.text,
+    )
+}
+
 /// A "top apps" row's name column: room for a 15-character process name.
 pub(crate) fn app_name_col_w(text: &mut TextCache) -> f64 {
     text.width("000000000000000", FONT.label, false) + COL_GAP

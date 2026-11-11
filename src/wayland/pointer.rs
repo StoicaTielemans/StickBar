@@ -107,14 +107,23 @@ impl App {
             }
         }
 
-        // The memory dropdown has nothing clickable inside: a click on it is
-        // absorbed; its catcher closes it.
+        // The memory and CPU dropdowns have nothing clickable inside: a click
+        // on one is absorbed; its catcher closes it.
         if let Some(host) = self.popups.mem.host() {
             if host.is_menu(surface) {
                 return;
             }
             if host.is_catcher(surface) {
                 self.popups.mem.close();
+                return;
+            }
+        }
+        if let Some(host) = self.popups.cpu.host() {
+            if host.is_menu(surface) {
+                return;
+            }
+            if host.is_catcher(surface) {
+                self.popups.cpu.close();
                 return;
             }
         }
@@ -150,16 +159,17 @@ impl App {
             }
             return;
         }
-        // A right click on the memory box opens its dropdown (reopens it if
-        // it's open, as in C).
-        let mem = bar.and_then(|bar| {
+        // A right click on the CPU or memory box opens its dropdown (reopens
+        // it if open, as in C). They open at the same spot, so each replaces
+        // the other.
+        let sysmon_box = bar.and_then(|bar| {
             bar.boxes()
                 .iter()
-                .find(|b| b.name == "mem" && b.rect.contains(x, y))
+                .find(|b| (b.name == "cpu" || b.name == "mem") && b.rect.contains(x, y))
         });
-        if let Some(rect) = mem.map(|b| b.rect) {
+        if let Some(found) = sysmon_box.map(|b| (b.name, b.rect)) {
             if button == BTN_RIGHT {
-                self.open_mem_popup(position, rect);
+                self.open_sysmon_popup(found.0, position, found.1);
             }
             return;
         }
@@ -302,9 +312,9 @@ impl App {
         );
     }
 
-    /// Opens the memory dropdown under the box `trigger` on the monitor at
-    /// `position` in `outputs`.
-    fn open_mem_popup(&mut self, position: usize, trigger: BoxRect) {
+    /// Opens the `name` ("cpu" or "mem") dropdown under the box `trigger` on
+    /// the monitor at `position` in `outputs`, closing the other one first.
+    fn open_sysmon_popup(&mut self, name: &str, position: usize, trigger: BoxRect) {
         let Self {
             qh,
             compositor,
@@ -326,14 +336,28 @@ impl App {
             viewporter: viewporter.as_ref(),
             test_mode: *test_mode,
         };
-        popups.mem.open(
-            &env,
-            output.wl_output(),
-            trigger,
-            outputs.iter().map(Output::wl_output),
-            &mut renderer.sysmon,
-            &mut renderer.text,
-        );
+        let all = outputs.iter().map(Output::wl_output);
+        if name == "cpu" {
+            popups.mem.close();
+            popups.cpu.open(
+                &env,
+                output.wl_output(),
+                trigger,
+                all,
+                &mut renderer.sysmon,
+                &mut renderer.text,
+            );
+        } else {
+            popups.cpu.close();
+            popups.mem.open(
+                &env,
+                output.wl_output(),
+                trigger,
+                all,
+                &mut renderer.sysmon,
+                &mut renderer.text,
+            );
+        }
     }
 
     /// Runs a power menu card's action.

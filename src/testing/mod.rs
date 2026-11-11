@@ -23,8 +23,10 @@
 //! snapshot <png>         -> the open menu's picture, drawn again into a PNG
 //! target power <logout|restart|shutdown|corner|header>
 //!                        -> {"ok":true,"x","y"}: a point on the power menu
-//! refresh <mem|poll>      -> run a dropdown's details refresh, or a full 5 s poll
-//! dump mem               -> every memory figure the bar holds (test_sysmon_data)
+//! refresh <mem|cpu|cpu-reset|poll>
+//!                        -> run a dropdown's details refresh (cpu-reset: start
+//!                           a fresh process window first), or a full 5 s poll
+//! dump <mem|cpu>         -> every figure the bar holds (test_sysmon_data)
 //! cursor <output> <x> <y> / menu-cursor <x> <y>
 //!                        -> {"ok":true,"shape":"pointer"|"default"}: the cursor
 //!                           the bar would show there (Rust only)
@@ -207,6 +209,11 @@ fn refresh(app: &mut App, what: &str) -> Value {
     let sysmon = &mut app.renderer_mut().sysmon;
     match what {
         "mem" => sysmon.mem.refresh_details(),
+        "cpu" => sysmon.cpu.refresh_details(),
+        "cpu-reset" => {
+            sysmon.cpu.reset_process_sample();
+            sysmon.cpu.refresh_details();
+        }
         "poll" => sysmon.poll(),
         _ => return error("unknown refresh target"),
     }
@@ -246,6 +253,34 @@ fn dump(app: &mut App, section: &str) -> Value {
                 "zram_orig_mb": zram.orig_mb,
                 "zram_compr_mb": zram.compr_mb,
                 "zram_used_mb": zram.used_mb,
+                "procs": procs,
+            })
+        }
+        "cpu" => {
+            let c = &sysmon.cpu;
+            let procs: Vec<Value> = c
+                .procs
+                .iter()
+                .map(|(name, percent)| json!({ "name": name, "percent": percent }))
+                .collect();
+            let efficient: Vec<bool> = (0..c.cores.len()).map(|i| c.is_efficient(i)).collect();
+            json!({
+                "ok": true,
+                "model": c.model,
+                "physical_cores": c.physical_cores,
+                "threads": c.cores.len(),
+                "hybrid": c.hybrid,
+                "max_ghz": c.max_ghz,
+                "percent": c.percent,
+                "temp_c": c.temp_c,
+                "load": c.load,
+                "tasks_running": c.tasks_running,
+                "tasks_total": c.tasks_total,
+                "uptime_s": c.uptime_s,
+                "history_len": sysmon.cpu_history.len(),
+                "efficient": efficient,
+                "core_ghz": c.core_ghz,
+                "procs_ready": c.procs_ready,
                 "procs": procs,
             })
         }

@@ -115,7 +115,7 @@ must pass.
   `test_power_menu` passes unchanged** (SIGUSR1 blocked in every thread, keybind open/close,
   centering, hover colours, the record-only guard). The Arch logo and the overlay (plain and
   hovered) are pixel-identical to C.
-- **M7: CPU / memory / GPU**, split into three steps (about 3,200 C lines in total):
+- [x] **M7: CPU / memory / GPU**, split into three steps (about 3,200 C lines in total):
   - [x] **M7a: Memory + the shared stat machinery** (`modules/mem/*`, the memory half of
     `sysmon/sysmon_client.c`, `util/history.h`, `render/{braille_graph,meter_bar,stat_card}.c`,
     `render/color.h`). The 5 s poll (calloop `Timer`), the 120-sample history ring, braille
@@ -133,9 +133,17 @@ must pass.
     other. **C's `test_sysmon_data` passes unchanged** (2 busy loops → `sh` 12.4 % of an expected
     12.5 %). The dropdown matches C's size and layout (416×553 here), and also passes
     `check_popup` and `graph_gap`.
-  - [ ] **M7c: GPU** (`modules/gpu/*`, NVML via `nvml-wrapper`): the first worker threads (NVML's
-    own), so SIGUSR1-in-every-thread gets re-checked. Tests: `test_nvml_vs_smi`,
-    `test_popup_graphs`, `test_no_subprocess`, and `test_popups` minus volume (M9).
+  - [x] **M7c: GPU** (`modules/gpu/*`, NVML via `nvml-wrapper` 0.13, checked in its source to use
+    the `_v2` memory call and the `_v3` process queries, loaded at runtime). The box (`--` without
+    a driver), the dropdown (P-state pill, usage/temp graphs, VRAM/POWER/FAN meters, CLOCK/VIDEO,
+    top VRAM apps), the unavailable state, and `dump gpu` / `refresh gpu`. The three sysmon dropdowns
+    replace each other. C's `test_power_menu` (SIGUSR1 blocked in all 3 threads),
+    `test_popup_graphs` and `test_no_subprocess` pass unchanged.
+    **Verified only without a working driver:** during this step the NVIDIA kernel module (615.78)
+    and userspace library (620.70) didn't match, which needs a reboot, so `nvidia-smi` itself
+    failed. The unavailable state is identical to C's (same dropdown, 280×63). **Still to verify
+    after a reboot:** `test_nvml_vs_smi`, the bar's `dump gpu` against `nvidia-smi`, and the
+    GPU graph in `test_popup_graphs`.
 - [ ] **M8: Network** (`network/`, `modules/network/` ~760). Default route, rates, and the
   info dropdown with graph. Tests: `test_network_data`, `test_popups` (network).
 - [ ] **M9: Volume + mic** (`audio/*`, `modules/{volume,mic}/` ~1.8k). The pulse thread,
@@ -232,3 +240,10 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
 - 2026-11-11 · M7b · CPU. C's `test_sysmon_data` passes unchanged; all 10 tests and 33 unit
   tests pass; the dropdown matches C's. `perf_compare --against main` (C runs every module):
   CPU 0.08 % vs 0.10 %, private 5.6 MB vs 8.7 MB, RSS 25.9 MB vs 35.2 MB. Release binary 1.2 MB.
+- 2026-11-11 · M7c · GPU via NVML. All tests pass (35 unit tests); GPU readings unverified
+  until the driver mismatch is fixed by a reboot. Also fixed a race in `test_workspaces` (an event
+  pushed before the bar had connected went nowhere). **Measure the release builds:**
+  `perf_compare` defaults to the debug builds, and unoptimized Rust is much slower than
+  unoptimized C (debug: Rust 0.13 % vs C 0.07 % CPU). Release vs release (`--bin
+  target/release/stickBar --against ../StickBar/build-release/stickBar`): CPU 0.02 % vs 0.08 %,
+  private 7.4 MB vs 8.7 MB, RSS 29.5 MB vs 35.8 MB, 3 threads vs 5. Release binary 1.4 MB.

@@ -35,7 +35,8 @@ then the release build.
 
 ```sh
 ./build.sh && python3 tests/run_all.py                # ~2 min, extra bars flash briefly
-python3 tests/perf_compare.py --against main           # Rust port vs. the C bar
+python3 tests/perf_compare.py --bin target/release/stickBar \
+    --against ../StickBar/build-release/stickBar       # Rust port vs. the C bar (release builds)
 python3 tests/perf_compare.py --against HEAD~1         # vs. any earlier ref (C or Rust)
 ```
 

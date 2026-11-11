@@ -3,7 +3,7 @@
 //! The bar has three regions, as in the C bar: left-region modules laid out
 //! left to right from x = 0, right-region ones right to left from the right
 //! edge, and the media box centered between. So far: the Arch logo, the
-//! workspace pills, CPU and memory on the left, the clock on the right.
+//! workspace pills, CPU, GPU and memory on the left, the clock on the right.
 
 pub(crate) mod braille_graph;
 pub(crate) mod meter_bar;
@@ -15,7 +15,7 @@ pub(crate) mod text;
 
 use crate::{
     config::{BAR, COLORS},
-    modules::{clock::Clock, cpu, mem, powermenu::arch_logo, workspaces::Workspaces},
+    modules::{clock::Clock, cpu, gpu, mem, powermenu::arch_logo, workspaces::Workspaces},
     sysmon::Sysmon,
 };
 use text::TextCache;
@@ -178,6 +178,15 @@ impl Renderer {
             clickable: true,
         });
         left = cpu.x + cpu.w + BAR.item_spacing;
+
+        let gpu = gpu::render(cr, &mut self.text, &self.sysmon.gpu, left, (0.0, height))?;
+        layout.boxes.push(ModuleBox {
+            name: "gpu",
+            rect: gpu,
+            // Right click opens its dropdown.
+            clickable: true,
+        });
+        left = gpu.x + gpu.w + BAR.item_spacing;
 
         let mem = mem::render(cr, &mut self.text, &self.sysmon.mem, left, (0.0, height))?;
         layout.boxes.push(ModuleBox {

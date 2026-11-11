@@ -23,10 +23,10 @@
 //! snapshot <png>         -> the open menu's picture, drawn again into a PNG
 //! target power <logout|restart|shutdown|corner|header>
 //!                        -> {"ok":true,"x","y"}: a point on the power menu
-//! refresh <mem|cpu|cpu-reset|poll>
+//! refresh <mem|cpu|cpu-reset|gpu|poll>
 //!                        -> run a dropdown's details refresh (cpu-reset: start
 //!                           a fresh process window first), or a full 5 s poll
-//! dump <mem|cpu>         -> every figure the bar holds (test_sysmon_data)
+//! dump <mem|cpu|gpu>     -> every figure the bar holds (test_sysmon_data)
 //! cursor <output> <x> <y> / menu-cursor <x> <y>
 //!                        -> {"ok":true,"shape":"pointer"|"default"}: the cursor
 //!                           the bar would show there (Rust only)
@@ -210,6 +210,7 @@ fn refresh(app: &mut App, what: &str) -> Value {
     match what {
         "mem" => sysmon.mem.refresh_details(),
         "cpu" => sysmon.cpu.refresh_details(),
+        "gpu" => sysmon.gpu.refresh_details(),
         "cpu-reset" => {
             sysmon.cpu.reset_process_sample();
             sysmon.cpu.refresh_details();
@@ -281,6 +282,29 @@ fn dump(app: &mut App, section: &str) -> Value {
                 "efficient": efficient,
                 "core_ghz": c.core_ghz,
                 "procs_ready": c.procs_ready,
+                "procs": procs,
+            })
+        }
+        "gpu" => {
+            let g = &sysmon.gpu;
+            let procs: Vec<Value> = g
+                .procs
+                .iter()
+                .map(|(name, mib)| json!({ "name": name, "mib": mib }))
+                .collect();
+            json!({
+                "ok": true,
+                "available": g.available,
+                "name": g.name,
+                "driver": g.driver,
+                "percent": g.percent,
+                "temp_c": g.temp_c,
+                "mem_used_mb": g.mem_used_mb,
+                "mem_total_mb": g.mem_total_mb,
+                "power_w": g.power_w,
+                "power_limit_w": g.power_limit_w,
+                "pstate": g.pstate.map(|p| format!("P{p}")).unwrap_or_default(),
+                "history_len": sysmon.gpu_history.len(),
                 "procs": procs,
             })
         }

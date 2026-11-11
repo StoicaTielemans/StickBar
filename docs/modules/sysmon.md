@@ -183,8 +183,15 @@ dropdown, rather than one shared tooltip for all three.
 - **Files:** `src/sysmon/mod.rs` (`Sysmon`: figures + histories, `poll()`),
   `src/sysmon/memory.rs`, `src/sysmon/timer.rs` (the 5 s calloop `Timer`),
   `src/util/history.rs` (`History2`), `src/render/{braille_graph,meter_bar,stat_card}.rs`,
-  `src/modules/mem/{mod,popup}.rs`, `src/sysmon/cpu.rs`, `src/modules/cpu/{mod,popup}.rs`. GPU
-  (M7c) joins `Sysmon` the same way.
+  `src/modules/mem/{mod,popup}.rs`, `src/sysmon/cpu.rs`, `src/modules/cpu/{mod,popup}.rs`,
+  `src/sysmon/gpu.rs`, `src/modules/gpu/{mod,popup}.rs`.
+- **NVML through `nvml-wrapper`:** it loads `libnvidia-ml.so.1` at runtime (no driver = `--`, the
+  bar still starts). `memory_info()` is the `_v2` call and the process lists are `_v3`, as the
+  C bar settled on (checked in the crate's source). The fan comes from `nvmlDeviceGetFanSpeed_v2`
+  (fan 0), not C's `nvmlDeviceGetFanSpeed`; it should be the same reading, but confirm against
+  `nvidia-smi` once the driver works. A `Device` borrows the `Nvml`, so it's looked up per call
+  (`device_by_index(0)`, cheap) instead of being stored. NVML's threads start after the SIGUSR1
+  signal source, so they inherit the block (`test_power_menu` checks every thread).
 - **CPU process sample:** the per-PID tick table is a `HashMap<pid, ticks>` replaced on every scan,
   so exited PIDs drop out (C used two swapped open-addressing tables). Ticks per second come
   from `rustix::param::clock_ticks_per_second`. The first-figures tick hangs off the clock's

@@ -25,6 +25,8 @@ pub(crate) const ICON_CHEVRON_LEFT: char = '\u{f053}';
 pub(crate) const ICON_CHEVRON_RIGHT: char = '\u{f054}';
 /// `md-cpu_64_bit`, the CPU box and its dropdown's header.
 pub(crate) const ICON_CPU: char = '\u{f0ee0}';
+/// `md-expansion_card`, the GPU box and its dropdown's header.
+pub(crate) const ICON_GPU: char = '\u{f08ae}';
 /// `md-memory`, the memory box and its dropdown's header.
 pub(crate) const ICON_MEM: char = '\u{f035b}';
 /// `linux-archlinux`, the bar's leftmost item (opens the power menu). In the

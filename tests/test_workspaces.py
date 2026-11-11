@@ -48,7 +48,11 @@ def main():
             base = index * 5 + 1
             fake.workspaces = {base: 2, base + 2: 0}
             fake.active = base + 2
-            # The bar asked before the fake had state: make it ask again.
+            # The bar asked before the fake had state: make it ask again. Only
+            # once it has connected to the event socket -- an event pushed
+            # before that goes nowhere (this raced and failed once).
+            if not fake.wait_for(lambda: fake.event_connections >= 1):
+                common.fail("the bar never connected to the event socket")
             fake.send_event(f"workspace>>{base + 2}")
             rects = bar.wait_ready(("clock", "workspaces"))
             two = rects["workspaces"]

@@ -24,6 +24,10 @@ cairo-rs = { version = "0.22", features = ["png"] }
 calloop = { version = "0.14", features = ["signals"] }
 # Local time for the clock's text ("clock" = read the system clock + time zone).
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# NVIDIA's NVML (the library nvidia-smi wraps), loaded at runtime like the C
+# bar's dlopen: no driver = the GPU box shows "--", the bar still starts. Uses the
+# _v2 memory call (v1 counts reserved memory) and the _v3 process queries.
+nvml-wrapper = "0.13"
 # Safe bindings to pango + pangocairo: every piece of text is shaped by pango (the
 # toy cairo text API can't do Nerd Font icons or kanji; see clippy.toml).
 pango = "0.22"

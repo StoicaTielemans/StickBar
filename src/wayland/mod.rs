@@ -200,13 +200,10 @@ impl App {
     /// didn't change skip the commit anyway).
     pub(crate) fn sysmon_poll(&mut self) {
         self.renderer.sysmon.poll();
-        let renderer = &mut self.renderer;
-        self.popups
-            .mem
-            .refresh_if_open(&mut renderer.sysmon, &mut renderer.text);
-        self.popups
-            .cpu
-            .refresh_if_open(&mut renderer.sysmon, &mut renderer.text);
+        let Renderer { sysmon, text, .. } = &mut self.renderer;
+        self.popups.mem.refresh_if_open(sysmon, text);
+        self.popups.cpu.refresh_if_open(sysmon, text);
+        self.popups.gpu.refresh_if_open(sysmon, text);
         self.mark_all_dirty();
     }
 

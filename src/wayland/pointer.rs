@@ -107,25 +107,13 @@ impl App {
             }
         }
 
-        // The memory and CPU dropdowns have nothing clickable inside: a click
-        // on one is absorbed; its catcher closes it.
-        if let Some(host) = self.popups.mem.host() {
-            if host.is_menu(surface) {
-                return;
+        // The CPU, GPU and memory dropdowns have nothing clickable inside: a
+        // click on one is absorbed; its catcher closes it.
+        if let Some(is_menu) = self.popups.sysmon_surface(surface) {
+            if !is_menu {
+                self.popups.close_sysmon();
             }
-            if host.is_catcher(surface) {
-                self.popups.mem.close();
-                return;
-            }
-        }
-        if let Some(host) = self.popups.cpu.host() {
-            if host.is_menu(surface) {
-                return;
-            }
-            if host.is_catcher(surface) {
-                self.popups.cpu.close();
-                return;
-            }
+            return;
         }
 
         // 2. A bar: first the click targets inside boxes (workspace pills,
@@ -159,13 +147,13 @@ impl App {
             }
             return;
         }
-        // A right click on the CPU or memory box opens its dropdown (reopens
-        // it if open, as in C). They open at the same spot, so each replaces
-        // the other.
+        // A right click on the CPU, GPU or memory box opens its dropdown
+        // (reopens it if open, as in C). They open at the same spot, so each
+        // replaces the others.
         let sysmon_box = bar.and_then(|bar| {
             bar.boxes()
                 .iter()
-                .find(|b| (b.name == "cpu" || b.name == "mem") && b.rect.contains(x, y))
+                .find(|b| matches!(b.name, "cpu" | "gpu" | "mem") && b.rect.contains(x, y))
         });
         if let Some(found) = sysmon_box.map(|b| (b.name, b.rect)) {
             if button == BTN_RIGHT {
@@ -312,8 +300,9 @@ impl App {
         );
     }
 
-    /// Opens the `name` ("cpu" or "mem") dropdown under the box `trigger` on
-    /// the monitor at `position` in `outputs`, closing the other one first.
+    /// Opens the `name` ("cpu", "gpu" or "mem") dropdown under the box
+    /// `trigger` on the monitor at `position` in `outputs`, closing the other
+    /// two first.
     fn open_sysmon_popup(&mut self, name: &str, position: usize, trigger: BoxRect) {
         let Self {
             qh,
@@ -337,26 +326,18 @@ impl App {
             test_mode: *test_mode,
         };
         let all = outputs.iter().map(Output::wl_output);
-        if name == "cpu" {
-            popups.mem.close();
-            popups.cpu.open(
-                &env,
-                output.wl_output(),
-                trigger,
-                all,
-                &mut renderer.sysmon,
-                &mut renderer.text,
-            );
-        } else {
-            popups.cpu.close();
-            popups.mem.open(
-                &env,
-                output.wl_output(),
-                trigger,
-                all,
-                &mut renderer.sysmon,
-                &mut renderer.text,
-            );
+        let (sysmon, text) = (&mut renderer.sysmon, &mut renderer.text);
+        popups.close_sysmon();
+        match name {
+            "cpu" => popups
+                .cpu
+                .open(&env, output.wl_output(), trigger, all, sysmon, text),
+            "gpu" => popups
+                .gpu
+                .open(&env, output.wl_output(), trigger, all, sysmon, text),
+            _ => popups
+                .mem
+                .open(&env, output.wl_output(), trigger, all, sysmon, text),
         }
     }
 

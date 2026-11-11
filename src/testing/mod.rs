@@ -26,7 +26,8 @@
 //! refresh <mem|cpu|cpu-reset|gpu|poll>
 //!                        -> run a dropdown's details refresh (cpu-reset: start
 //!                           a fresh process window first), or a full 5 s poll
-//! dump <mem|cpu|gpu>     -> every figure the bar holds (test_sysmon_data)
+//! dump <mem|cpu|gpu|net> -> every figure the bar holds (test_sysmon_data,
+//!                           test_network_data)
 //! cursor <output> <x> <y> / menu-cursor <x> <y>
 //!                        -> {"ok":true,"shape":"pointer"|"default"}: the cursor
 //!                           the bar would show there (Rust only)
@@ -53,6 +54,8 @@ use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::
 
 use crate::{
     bar::{BarSurface, popup_surface::PopupSurface},
+    network::Network,
+    sysmon::Sysmon,
     wayland::{App, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Output},
 };
 
@@ -215,7 +218,13 @@ fn refresh(app: &mut App, what: &str) -> Value {
             sysmon.cpu.reset_process_sample();
             sysmon.cpu.refresh_details();
         }
-        "poll" => sysmon.poll(),
+        "poll" => {
+            // A full 5 s poll, plus the network details an open dropdown would read.
+            sysmon.poll();
+            let network = &mut app.renderer_mut().network;
+            network.poll();
+            network.refresh_details();
+        }
         _ => return error("unknown refresh target"),
     }
     json!({ "ok": true })
@@ -223,93 +232,124 @@ fn refresh(app: &mut App, what: &str) -> Value {
 
 /// `dump <section>`: what a data source holds, with the C bar's field names.
 fn dump(app: &mut App, section: &str) -> Value {
-    let sysmon = &app.renderer_mut().sysmon;
+    let renderer = app.renderer_mut();
     match section {
-        "mem" => {
-            let m = &sysmon.mem;
-            let zram = m.zram.clone().unwrap_or_default();
-            let procs: Vec<Value> = m
-                .procs
-                .iter()
-                .map(|(name, gb)| json!({ "name": name, "gb": gb }))
-                .collect();
-            json!({
-                "ok": true,
-                "percent": m.percent,
-                "total_gb": m.total_gb,
-                "apps_gb": m.used_gb,
-                "avail_gb": m.avail_gb,
-                "free_gb": m.free_gb,
-                "cache_gb": m.cache_gb(),
-                "shared_gb": m.shared_gb,
-                "dirty_mb": m.dirty_mb,
-                "swap_used_gb": m.swap_used_gb,
-                "swap_total_gb": m.swap_total_gb,
-                "swap_percent": m.swap_percent,
-                "history_len": sysmon.mem_history.len(),
-                "psi": m.psi.is_some(),
-                "psi_some": m.psi.unwrap_or_default(),
-                "zram": m.zram.is_some(),
-                "zram_algorithm": zram.algorithm,
-                "zram_orig_mb": zram.orig_mb,
-                "zram_compr_mb": zram.compr_mb,
-                "zram_used_mb": zram.used_mb,
-                "procs": procs,
-            })
-        }
-        "cpu" => {
-            let c = &sysmon.cpu;
-            let procs: Vec<Value> = c
-                .procs
-                .iter()
-                .map(|(name, percent)| json!({ "name": name, "percent": percent }))
-                .collect();
-            let efficient: Vec<bool> = (0..c.cores.len()).map(|i| c.is_efficient(i)).collect();
-            json!({
-                "ok": true,
-                "model": c.model,
-                "physical_cores": c.physical_cores,
-                "threads": c.cores.len(),
-                "hybrid": c.hybrid,
-                "max_ghz": c.max_ghz,
-                "percent": c.percent,
-                "temp_c": c.temp_c,
-                "load": c.load,
-                "tasks_running": c.tasks_running,
-                "tasks_total": c.tasks_total,
-                "uptime_s": c.uptime_s,
-                "history_len": sysmon.cpu_history.len(),
-                "efficient": efficient,
-                "core_ghz": c.core_ghz,
-                "procs_ready": c.procs_ready,
-                "procs": procs,
-            })
-        }
-        "gpu" => {
-            let g = &sysmon.gpu;
-            let procs: Vec<Value> = g
-                .procs
-                .iter()
-                .map(|(name, mib)| json!({ "name": name, "mib": mib }))
-                .collect();
-            json!({
-                "ok": true,
-                "available": g.available,
-                "name": g.name,
-                "driver": g.driver,
-                "percent": g.percent,
-                "temp_c": g.temp_c,
-                "mem_used_mb": g.mem_used_mb,
-                "mem_total_mb": g.mem_total_mb,
-                "power_w": g.power_w,
-                "power_limit_w": g.power_limit_w,
-                "pstate": g.pstate.map(|p| format!("P{p}")).unwrap_or_default(),
-                "history_len": sysmon.gpu_history.len(),
-                "procs": procs,
-            })
-        }
+        "mem" => dump_mem(&renderer.sysmon),
+        "cpu" => dump_cpu(&renderer.sysmon),
+        "gpu" => dump_gpu(&renderer.sysmon),
+        "net" => dump_net(&renderer.network),
         _ => error("unknown dump section"),
     }
+}
+
+/// `dump mem` (read by `test_sysmon_data`).
+fn dump_mem(sysmon: &Sysmon) -> Value {
+    let m = &sysmon.mem;
+    let zram = m.zram.clone().unwrap_or_default();
+    let procs: Vec<Value> = m
+        .procs
+        .iter()
+        .map(|(name, gb)| json!({ "name": name, "gb": gb }))
+        .collect();
+    json!({
+        "ok": true,
+        "percent": m.percent,
+        "total_gb": m.total_gb,
+        "apps_gb": m.used_gb,
+        "avail_gb": m.avail_gb,
+        "free_gb": m.free_gb,
+        "cache_gb": m.cache_gb(),
+        "shared_gb": m.shared_gb,
+        "dirty_mb": m.dirty_mb,
+        "swap_used_gb": m.swap_used_gb,
+        "swap_total_gb": m.swap_total_gb,
+        "swap_percent": m.swap_percent,
+        "history_len": sysmon.mem_history.len(),
+        "psi": m.psi.is_some(),
+        "psi_some": m.psi.unwrap_or_default(),
+        "zram": m.zram.is_some(),
+        "zram_algorithm": zram.algorithm,
+        "zram_orig_mb": zram.orig_mb,
+        "zram_compr_mb": zram.compr_mb,
+        "zram_used_mb": zram.used_mb,
+        "procs": procs,
+    })
+}
+
+/// `dump cpu` (read by `test_sysmon_data`).
+fn dump_cpu(sysmon: &Sysmon) -> Value {
+    let c = &sysmon.cpu;
+    let procs: Vec<Value> = c
+        .procs
+        .iter()
+        .map(|(name, percent)| json!({ "name": name, "percent": percent }))
+        .collect();
+    let efficient: Vec<bool> = (0..c.cores.len()).map(|i| c.is_efficient(i)).collect();
+    json!({
+        "ok": true,
+        "model": c.model,
+        "physical_cores": c.physical_cores,
+        "threads": c.cores.len(),
+        "hybrid": c.hybrid,
+        "max_ghz": c.max_ghz,
+        "percent": c.percent,
+        "temp_c": c.temp_c,
+        "load": c.load,
+        "tasks_running": c.tasks_running,
+        "tasks_total": c.tasks_total,
+        "uptime_s": c.uptime_s,
+        "history_len": sysmon.cpu_history.len(),
+        "efficient": efficient,
+        "core_ghz": c.core_ghz,
+        "procs_ready": c.procs_ready,
+        "procs": procs,
+    })
+}
+
+/// `dump gpu`.
+fn dump_gpu(sysmon: &Sysmon) -> Value {
+    let g = &sysmon.gpu;
+    let procs: Vec<Value> = g
+        .procs
+        .iter()
+        .map(|(name, mib)| json!({ "name": name, "mib": mib }))
+        .collect();
+    json!({
+        "ok": true,
+        "available": g.available,
+        "name": g.name,
+        "driver": g.driver,
+        "percent": g.percent,
+        "temp_c": g.temp_c,
+        "mem_used_mb": g.mem_used_mb,
+        "mem_total_mb": g.mem_total_mb,
+        "power_w": g.power_w,
+        "power_limit_w": g.power_limit_w,
+        "pstate": g.pstate.map(|p| format!("P{p}")).unwrap_or_default(),
+        "history_len": sysmon.gpu_history.len(),
+        "procs": procs,
+    })
+}
+
+/// `dump net` (read by `test_network_data`).
+fn dump_net(n: &Network) -> Value {
+    json!({
+        "ok": true,
+        "iface": n.iface,
+        "connected": n.connected,
+        "wifi": n.wifi,
+        "ip": n.ip,
+        "gateway": n.gateway,
+        "mac": n.mac,
+        "mtu": n.mtu,
+        "speed": n.speed,
+        "rx_rate": n.rx_rate,
+        "tx_rate": n.tx_rate,
+        "rx_total": n.rx_total,
+        "tx_total": n.tx_total,
+        "history_len": n.history.len(),
+        "dns": n.dns,
+    })
 }
 
 /// `target <kind> <part>`: where a named control is, in menu-local px. Only

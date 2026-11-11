@@ -116,6 +116,17 @@ impl App {
             return;
         }
 
+        // The network dropdown, likewise: nothing clickable inside.
+        if let Some(host) = self.popups.network.host() {
+            if host.is_menu(surface) {
+                return;
+            }
+            if host.is_catcher(surface) {
+                self.popups.network.close();
+                return;
+            }
+        }
+
         // 2. A bar: first the click targets inside boxes (workspace pills,
         // left button), then the module whose box is under the pointer.
         let Some(position) = self.outputs.iter().position(|o| {
@@ -158,6 +169,19 @@ impl App {
         if let Some(found) = sysmon_box.map(|b| (b.name, b.rect)) {
             if button == BTN_RIGHT {
                 self.open_sysmon_popup(found.0, position, found.1);
+            }
+            return;
+        }
+        // A right click on the network box opens its dropdown (reopens it if
+        // open, as in C). It's independent of the sysmon three.
+        let net = bar.and_then(|bar| {
+            bar.boxes()
+                .iter()
+                .find(|b| b.name == "network" && b.rect.contains(x, y))
+        });
+        if let Some(rect) = net.map(|b| b.rect) {
+            if button == BTN_RIGHT {
+                self.open_network_popup(position, rect);
             }
             return;
         }
@@ -339,6 +363,43 @@ impl App {
                 .mem
                 .open(&env, output.wl_output(), trigger, all, sysmon, text),
         }
+    }
+
+    /// Opens the network dropdown under the box `trigger` on the monitor at
+    /// `position` in `outputs`.
+    fn open_network_popup(&mut self, position: usize, trigger: BoxRect) {
+        let Some(output_width) = self.outputs.get(position).map(|o| self.output_size(o).0) else {
+            return;
+        };
+        let Self {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter,
+            test_mode,
+            outputs,
+            popups,
+            renderer,
+            ..
+        } = self;
+        let Some(output) = outputs.get(position) else {
+            return;
+        };
+        let env = PopupEnv {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter: viewporter.as_ref(),
+            test_mode: *test_mode,
+        };
+        popups.network.open(
+            &env,
+            (output.wl_output(), output_width),
+            trigger,
+            outputs.iter().map(Output::wl_output),
+            &mut renderer.network,
+            &mut renderer.text,
+        );
     }
 
     /// Runs a power menu card's action.

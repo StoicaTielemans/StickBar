@@ -1,5 +1,6 @@
-//! The 5 s sysmon poll (the C bar's `create_sysmon_timer()` in `main.c`),
-//! matching the reference bar's `Timer { interval: 5000 }`. A plain
+//! The 5 s poll (the C bar's `create_sysmon_timer()` in `main.c`), matching
+//! the reference bar's `Timer { interval: 5000 }`. Sysmon and the network
+//! share it (`App::poll_5s`), as in the C bar. A plain
 //! monotonic timer: unlike the clock, it doesn't need wall-clock alignment.
 
 use std::time::Duration;
@@ -18,7 +19,7 @@ const INTERVAL: Duration = Duration::from_secs(5);
 pub(crate) fn start(handle: &LoopHandle<'static, App>) -> Result<(), String> {
     handle
         .insert_source(Timer::from_duration(INTERVAL), |_deadline, (), app| {
-            app.sysmon_poll();
+            app.poll_5s();
             TimeoutAction::ToDuration(INTERVAL)
         })
         .map(|_token| ())

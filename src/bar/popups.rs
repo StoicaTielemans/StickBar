@@ -12,7 +12,7 @@ use super::{popup_host::PopupHost, popup_surface::PopupSurface};
 use crate::{
     modules::{
         clock::calendar::CalendarPopup, cpu::popup::CpuPopup, gpu::popup::GpuPopup,
-        mem::popup::MemPopup, powermenu::PowerMenu,
+        mem::popup::MemPopup, network::popup::NetworkPopup, powermenu::PowerMenu,
     },
     render::Renderer,
 };
@@ -30,17 +30,20 @@ pub(crate) struct Popups {
     pub(crate) cpu: CpuPopup,
     /// The GPU dropdown.
     pub(crate) gpu: GpuPopup,
+    /// The network dropdown.
+    pub(crate) network: NetworkPopup,
 }
 
 impl Popups {
     /// The open hosts of the dropdowns that have one (everything but the
     /// power menu, whose overlays are their own catchers).
-    fn hosts(&self) -> [Option<&PopupHost>; 4] {
+    fn hosts(&self) -> [Option<&PopupHost>; 5] {
         [
             self.calendar.host(),
             self.mem.host(),
             self.cpu.host(),
             self.gpu.host(),
+            self.network.host(),
         ]
     }
 
@@ -101,6 +104,12 @@ impl Popups {
             }
             return true;
         }
+        if let Some(popup) = self.network.host_mut().and_then(|h| h.surface_mut(surface)) {
+            if popup.configure(shm, width, height) {
+                self.network.paint(&renderer.network, text);
+            }
+            return true;
+        }
         if let Some(popup) = self
             .calendar
             .host_mut()
@@ -121,6 +130,7 @@ impl Popups {
             self.mem.host_mut(),
             self.cpu.host_mut(),
             self.gpu.host_mut(),
+            self.network.host_mut(),
         ];
         let popup = self.power.surface_mut(surface).or_else(|| {
             hosts
@@ -143,6 +153,7 @@ impl Popups {
             .or_else(|| self.cpu.menu())
             .or_else(|| self.gpu.menu())
             .or_else(|| self.mem.menu())
+            .or_else(|| self.network.menu())
             .or_else(|| self.calendar.menu())
     }
 
@@ -165,6 +176,8 @@ impl Popups {
             self.gpu.snapshot(path, sysmon, text)
         } else if self.mem.host().is_some() {
             self.mem.snapshot(path, sysmon, text)
+        } else if self.network.host().is_some() {
+            self.network.snapshot(path, &renderer.network, text)
         } else {
             self.calendar.snapshot(path, text)
         }

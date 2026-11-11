@@ -41,12 +41,15 @@ src/
 │   ├── cpu.rs              /proc/stat deltas, temperature, P/E split, process sample
 │   ├── gpu.rs              NVML (nvml-wrapper): usage/temp per poll, details on open
 │   ├── memory.rs           /proc/meminfo, PSI, zram, top apps by private memory
-│   └── timer.rs            the 5 s poll (calloop Timer)
+│   └── timer.rs            the 5 s poll (calloop Timer), shared with the network
+├── network/mod.rs          Network: default route, rates, history; details via
+│                           /sys, resolv.conf and getifaddrs (nix)
 ├── util/history.rs         History2: the 120-sample ring behind every graph
 ├── modules/
 │   ├── cpu/                mod.rs (box), popup.rs (the CPU dropdown)
 │   ├── gpu/                mod.rs (box), popup.rs (the GPU dropdown)
 │   ├── mem/                mod.rs (box), popup.rs (the memory dropdown)
+│   ├── network/            mod.rs (box), popup.rs (the network dropdown)
 │   ├── workspaces/mod.rs   Workspaces: occupied/focused from Hyprland, kanji pills
 │   ├── powermenu/
 │   │   ├── mod.rs          PowerMenu: full-screen overlay per monitor, cards, the

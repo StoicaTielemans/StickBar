@@ -3,7 +3,7 @@
 //! The bar has three regions, as in the C bar: left-region modules laid out
 //! left to right from x = 0, right-region ones right to left from the right
 //! edge, and the media box centered between. So far: the Arch logo, the
-//! workspace pills, CPU, GPU and memory on the left, the clock on the right.
+//! workspace pills, CPU, GPU and memory on the left; the clock and network on the right.
 
 pub(crate) mod braille_graph;
 pub(crate) mod meter_bar;
@@ -15,7 +15,8 @@ pub(crate) mod text;
 
 use crate::{
     config::{BAR, COLORS},
-    modules::{clock::Clock, cpu, gpu, mem, powermenu::arch_logo, workspaces::Workspaces},
+    modules::{clock::Clock, cpu, gpu, mem, network, powermenu::arch_logo, workspaces::Workspaces},
+    network::Network,
     sysmon::Sysmon,
 };
 use text::TextCache;
@@ -104,8 +105,10 @@ pub(crate) struct Renderer {
     pub(crate) clock: Clock,
     /// The workspace pills' data (from Hyprland).
     pub(crate) workspaces: Workspaces,
-    /// CPU/GPU/memory figures (memory so far).
+    /// CPU/GPU/memory figures.
     pub(crate) sysmon: Sysmon,
+    /// Network status and rates.
+    pub(crate) network: Network,
 }
 
 impl Renderer {
@@ -120,6 +123,11 @@ impl Renderer {
                 let mut sysmon = Sysmon::new();
                 sysmon.poll();
                 sysmon
+            },
+            network: {
+                let mut network = Network::default();
+                network.poll();
+                network
             },
         })
     }
@@ -196,7 +204,8 @@ impl Renderer {
             clickable: true,
         });
 
-        // Right region, laid out from the right edge leftwards.
+        // Right region, laid out from the right edge leftwards: the clock,
+        // then the network box left of it.
         let clock = self
             .clock
             .render(cr, &mut self.text, width, (0.0, height))?;
@@ -204,6 +213,14 @@ impl Renderer {
             name: "clock",
             rect: clock,
             // Right-click opens the year calendar.
+            clickable: true,
+        });
+        let right = clock.x - BAR.item_spacing;
+        let network_box = network::render(cr, &mut self.text, &self.network, right, (0.0, height))?;
+        layout.boxes.push(ModuleBox {
+            name: "network",
+            rect: network_box,
+            // Right click opens its dropdown.
             clickable: true,
         });
         Ok(layout)

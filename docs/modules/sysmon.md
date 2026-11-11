@@ -197,8 +197,8 @@ dropdown, rather than one shared tooltip for all three.
   from `rustix::param::clock_ticks_per_second`. The first-figures tick hangs off the clock's
   1 s timer (`App::clock_tick` → `CpuPopup::tick`).
 - `Sysmon` lives in the `Renderer`, next to the other module data, so bar boxes and dropdowns
-  read it directly. `App::sysmon_poll()` polls, refreshes an open sysmon dropdown and marks the
-  bars dirty.
+  read it directly. `App::poll_5s()` polls, refreshes an open sysmon dropdown, does the same
+  for the network, and marks the bars dirty.
 - Dropdown sections take `Option<&cairo::Context>`: `None` only measures. That's how the height
   is fixed before the popup opens (C's `paint(NULL)` pass).
 - Numbers from `/proc` are parsed straight to `f64` (exact below 2^53), which avoids lossy

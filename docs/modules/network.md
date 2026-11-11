@@ -120,3 +120,21 @@ the identical 5000ms interval).
   `/proc/net/wireless`'s documented format, not confirmed live the way the
   Ethernet path's route/gateway/IP parsing was. Worth re-checking first if a bug ever
   shows up specifically on Wi-Fi.
+
+## In the Rust port
+
+- **Files:** `src/network/mod.rs` (`Network`: `poll()` for the box, `refresh_details()` for the
+  dropdown, and the pure parsers, unit tested on sample text), `src/modules/network/mod.rs`
+  (status icon, the box), `src/modules/network/popup.rs` (`NetworkPopup`, `open_right`).
+- **IPv4 via `nix::ifaddrs::getifaddrs()`**: the same libc call, safe-wrapped (`unsafe` is
+  forbidden here). `nix` 0.31 is the version calloop already pulls in; only its `net` feature
+  is added.
+- **Rates use `Instant`** (monotonic, like C's `CLOCK_MONOTONIC`); the previous sample is an
+  `Option<(rx, tx, Instant)>`, `None` after an interface change, so there's no -1 sentinel.
+- **One 5 s timer:** `App::poll_5s()` runs sysmon, the sysmon dropdowns, then the network and its
+  dropdown, in the C bar's order.
+- **The "no route" icon:** the C comment calls 0xF06B0 `md-help_network`, but the installed
+  Nerd Font names it `md-update` (checked with fontTools). The port keeps the code point for
+  parity; pick a different glyph in both bars if it looks wrong.
+- Verified: C's `test_network_data` passes unchanged; the dropdown is the same size as C's
+  (280x366 here) and looks the same; the box widths match for same-length labels.

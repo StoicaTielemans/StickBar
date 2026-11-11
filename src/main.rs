@@ -13,6 +13,7 @@ mod bar;
 mod config;
 mod hyprland;
 mod modules;
+mod network;
 mod render;
 mod sysmon;
 mod testing;

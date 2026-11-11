@@ -24,6 +24,9 @@ cairo-rs = { version = "0.22", features = ["png"] }
 calloop = { version = "0.14", features = ["signals"] }
 # Local time for the clock's text ("clock" = read the system clock + time zone).
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# getifaddrs() for the network dropdown's IPv4 address (no `ip` subprocess).
+# The same nix calloop already pulls in; "net" turns on its ifaddrs module.
+nix = { version = "0.31", features = ["net"] }
 # NVIDIA's NVML (the library nvidia-smi wraps), loaded at runtime like the C
 # bar's dlopen: no driver = the GPU box shows "--", the bar still starts. Uses the
 # _v2 memory call (v1 counts reserved memory) and the _v3 process queries.

@@ -144,8 +144,9 @@ must pass.
     failed. The unavailable state is identical to C's (same dropdown, 280×63). **Still to verify
     after a reboot:** `test_nvml_vs_smi`, the bar's `dump gpu` against `nvidia-smi`, and the
     GPU graph in `test_popup_graphs`.
-- [ ] **M8: Network** (`network/`, `modules/network/` ~760). Default route, rates, and the
-  info dropdown with graph. Tests: `test_network_data`, `test_popups` (network).
+- [x] **M8: Network** (`network/`, `modules/network/` ~760). Default route, rates, and the
+  info dropdown with graph. Tests: `test_network_data`, `test_popups` (network). IPv4 via
+  `nix`'s `getifaddrs`; one shared 5 s timer (`App::poll_5s`).
 - [ ] **M9: Volume + mic** (`audio/*`, `modules/{volume,mic}/` ~1.8k). The pulse thread,
   sink/source cache, scroll steps, device dropdown, mixer, and `target device|mixer`. No
   commits for no-op events. Tests: `test_audio`, `test_redraw` (pulse part), `test_popups`
@@ -247,3 +248,8 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   unoptimized C (debug: Rust 0.13 % vs C 0.07 % CPU). Release vs release (`--bin
   target/release/stickBar --against ../StickBar/build-release/stickBar`): CPU 0.02 % vs 0.08 %,
   private 7.4 MB vs 8.7 MB, RSS 29.5 MB vs 35.8 MB, 3 threads vs 5. Release binary 1.4 MB.
+- 2026-11-11 · M8 · Network. C's `test_network_data` passes unchanged, the network check from
+  `test_popups` passes, all 13 tests and 38 unit tests pass; the dropdown matches C's
+  (280x366). Release vs release: CPU 0.03 % vs 0.02 % (noise at this level), private 7.4 MB
+  vs 8.3 MB, PSS 12.7 MB vs 15.6 MB, RSS 29.8 MB vs 35.2 MB, 3 threads vs 5 (C still runs
+  every module). GPU readings still unverified (needs the reboot).

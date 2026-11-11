@@ -195,15 +195,23 @@ impl App {
         self.popups.snapshot(path, &mut self.renderer)
     }
 
-    /// The 5 s sysmon poll: fresh figures and one history sample, the open
-    /// sysmon dropdown refreshed, and every bar redrawn (bars whose pixels
-    /// didn't change skip the commit anyway).
-    pub(crate) fn sysmon_poll(&mut self) {
+    /// The 5 s poll (the C bar's 5 s branch, in its order): sysmon figures and
+    /// one history sample, the open sysmon dropdown refreshed, then the
+    /// network the same way, and every bar redrawn (bars whose pixels didn't
+    /// change skip the commit anyway).
+    pub(crate) fn poll_5s(&mut self) {
         self.renderer.sysmon.poll();
-        let Renderer { sysmon, text, .. } = &mut self.renderer;
+        let Renderer {
+            sysmon,
+            text,
+            network,
+            ..
+        } = &mut self.renderer;
         self.popups.mem.refresh_if_open(sysmon, text);
         self.popups.cpu.refresh_if_open(sysmon, text);
         self.popups.gpu.refresh_if_open(sysmon, text);
+        network.poll();
+        self.popups.network.refresh_if_open(network, text);
         self.mark_all_dirty();
     }
 

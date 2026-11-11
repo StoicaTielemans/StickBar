@@ -27,6 +27,23 @@ pub(crate) const ICON_CHEVRON_RIGHT: char = '\u{f054}';
 pub(crate) const ICON_CPU: char = '\u{f0ee0}';
 /// `md-expansion_card`, the GPU box and its dropdown's header.
 pub(crate) const ICON_GPU: char = '\u{f08ae}';
+/// The network box's "no default route" icon. The C bar calls it
+/// `md-help_network`, but the installed font names this code point
+/// `md-update`; kept as is for parity with the C bar (see
+/// `docs/modules/network.md`).
+pub(crate) const ICON_NETWORK_UNKNOWN: char = '\u{f06b0}';
+/// `md-wifi_off`: on Wi-Fi, interface down.
+pub(crate) const ICON_WIFI_OFF: char = '\u{f05aa}';
+/// `md-ethernet_cable_off`: on Ethernet, interface down.
+pub(crate) const ICON_ETHERNET_OFF: char = '\u{f0202}';
+/// `md-wifi`: on Wi-Fi, up.
+pub(crate) const ICON_WIFI: char = '\u{f05a9}';
+/// `md-ethernet`: on Ethernet, up.
+pub(crate) const ICON_ETHERNET: char = '\u{f0200}';
+/// `↓`, before the download rate. Plain Unicode, but a const like every glyph.
+pub(crate) const ARROW_DOWN: char = '\u{2193}';
+/// `↑`, before the upload rate.
+pub(crate) const ARROW_UP: char = '\u{2191}';
 /// `md-memory`, the memory box and its dropdown's header.
 pub(crate) const ICON_MEM: char = '\u{f035b}';
 /// `linux-archlinux`, the bar's leftmost item (opens the power menu). In the

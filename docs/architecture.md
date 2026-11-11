@@ -15,13 +15,16 @@ src/
 │   ├── mod.rs              App: all state (the AppContext equivalent), the SCTK
 │   │                       handler impls (frame callbacks, layer configure/closed,
 │   │                       shm, registry), and the delegate macros wiring them up
-│   └── output.rs           OutputHandler: a bar per monitor, dropped when it goes
+│   └── output.rs           Output: one tracked monitor (index, name, its bar);
+│                           OutputHandler: a record + bar per monitor, the
+│                           STICKBAR_TEST_OUTPUT filter
 ├── bar/
 │   ├── bar_surface.rs      BarSurface: the layer surface, two shm buffers, the
 │   │                       prev/next cairo frames, dirty + frame-callback pacing,
 │   │                       draw -> diff -> commit only the changed rectangle
 │   └── damage.rs           changed_rect(): the frame diff, with unit tests
 ├── render/mod.rs           render_output(): the bar background (modules from M3)
+├── testing/mod.rs          the test-control channel on stdin (STICKBAR_TEST_CONTROL=1)
 └── config/
     ├── colors.rs           Color + the Catppuccin Mocha palette
     └── bar.rs              BAR geometry (height so far)

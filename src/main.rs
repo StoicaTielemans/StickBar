@@ -12,6 +12,7 @@
 mod bar;
 mod config;
 mod render;
+mod testing;
 mod wayland;
 
 use std::process::ExitCode;
@@ -65,7 +66,7 @@ fn main() -> ExitCode {
 
     // 3. List the compositor's globals and bind the ones the bar needs. Monitors
     // are reported later, through the event loop, as SCTK learns their details.
-    let (globals, queue) = match registry_queue_init::<App>(&conn) {
+    let (globals, mut queue) = match registry_queue_init::<App>(&conn) {
         Ok(pair) => pair,
         Err(err) => {
             eprintln!("stickBar: couldn't read the Wayland globals: {err}");
@@ -73,13 +74,20 @@ fn main() -> ExitCode {
         }
     };
     let qh = queue.handle();
-    let mut app = match App::new(&globals, &qh) {
+    let mut app = match App::new(&globals, &qh, testing::enabled()) {
         Ok(app) => app,
         Err(message) => {
             eprintln!("stickBar: {message}");
             return ExitCode::FAILURE;
         }
     };
+    // One round trip before the loop starts, as the C bar's wayland_connect()
+    // does: the monitors' details arrive and each gets its bar, so everything
+    // after this (the test-control channel's first commands) sees them.
+    if let Err(err) = queue.roundtrip(&mut app) {
+        eprintln!("stickBar: Wayland connection lost during setup ({err}) -- exiting");
+        return ExitCode::FAILURE;
+    }
 
     // 4. One event loop, every input a source on it (the C bar's epoll loop):
     // the Wayland socket and the signals for now; timers, Hyprland's socket and
@@ -110,6 +118,9 @@ fn main() -> ExitCode {
         eprintln!("stickBar: couldn't watch for signals: {}", err.error);
         return ExitCode::FAILURE;
     }
+
+    // The test-control channel on stdin, only with STICKBAR_TEST_CONTROL=1.
+    testing::start(&event_loop.handle());
 
     // 5. Run. Each pass: wait for and handle whatever arrived, then draw every
     // bar it made dirty. A dispatch error means the Wayland connection is gone

@@ -60,25 +60,34 @@ must pass.
   it. The pango text helpers + layout cache (`render/module_box.c`), glyphs, fonts and the
   rest of `BAR` move to M3. The output `index` moves to M5. `util/*` comes piece by piece with
   its users.
-- [ ] **M2: Test-control channel + pointer** (`testing/test_control.c` ~665,
-  `wayland/pointer.c`, `render/box_rects.c`). The `STICKBAR_TEST_CONTROL` stdin channel,
-  `STICKBAR_TEST_OUTPUT`, empty input regions in test mode, `rects`/`click`, and button/motion/scroll
-  routing through one dispatch path. Built as a command table that later milestones add
-  to. *Every later test depends on this, so it comes before any module.*
+- [x] **M2: Test-control channel** (`testing/test_control.c`, the test bits of
+  `wayland/output.c` and `bar/bar_surface.c`). The `STICKBAR_TEST_CONTROL` stdin channel
+  (`ping`, `outputs`, `rects`; one `match` arm per command, added as modules land),
+  `STICKBAR_TEST_OUTPUT`, empty input regions in test mode, per-monitor `Output` records
+  with their `index` (moved here from M5, since `outputs` reports it), and the setup round trip
+  so monitors are known before the first command. New guard test:
+  `test_control_channel`, which passes against both bars.
+  *Moved out of M2 (unused code fails the build):* box-rect recording goes to M3, the first
+  box drawn. The pointer (`wl_seat`), click routing and `click`/`menu-*`/`catcher-click` go
+  to M4, where the clock's right-click opening the calendar is the first thing that reacts
+  to a click.
 - [ ] **M3: Clock** (`modules/clock/clock.c`, plus `render/module_box.c` and `config/glyphs.c`
   from M1, the first text drawn). Fonts, `BAR` spacing/border/padding, the pango text
-  helpers with the layout cache, and the box, repainting only on the minute,
+  helpers with the layout cache, box-rect recording (`render/box_rects.c`, so `rects` reports
+  the clock), and the box, repainting only on the minute,
   `STICKBAR_TEST_CLOCK_SECONDS`. Tests: `test_clock_alignment`, `test_redraw` (clock
   part).
-- [ ] **M4: Popup infrastructure + year calendar** (`bar/popup_surface.c`,
-  `bar/popup_host.c`, `render/popup_chrome.c`, `render/popup_style.h`,
-  `modules/clock/clock_calendar_popup.c`). Transient layer surfaces, catchers with
+- [ ] **M4: Pointer, popup infrastructure + year calendar** (`wayland/pointer.c`,
+  `bar/popup_surface.c`, `bar/popup_host.c`, `render/popup_chrome.c`, `render/popup_style.h`,
+  `modules/clock/clock_calendar_popup.c`). The `wl_seat` pointer, with button/motion/scroll
+  routed through one dispatch path that the real pointer and the channel's `click`/`menu-*`
+  commands share. Transient layer surfaces, catchers with
   `wp_viewport`, anchoring under the box, open/close/resize, and the `menu`/`snapshot`/`catcher-click`
   commands. Read `docs/popups.md` and BUG.md "Popups" first. Tests: `test_popups`
   (calendar part).
-- [ ] **M5: Hyprland + workspaces** (`hyprland/*`, `modules/workspaces/` ~560). Each output's
-  `index` by binding order (moved from M1; check that the same monitor gets the same
-  workspace range as in the C bar). The request
+- [ ] **M5: Hyprland + workspaces** (`hyprland/*`, `modules/workspaces/` ~560). Check that
+  the same monitor gets the same `index` (ported in M2), and so the same workspace range, as
+  in the C bar. The request
   socket, event socket line framing, click-to-focus with the classic→Lua fallback, and kanji pills
   per 5-wide output range. Cross-check against `hyprctl -j workspaces`. Read BUG.md
   "Hyprland IPC".
@@ -132,3 +141,6 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   then none while idle. `perf_compare --against main` (60 s; the C bar runs every module,
   so this is a baseline, not a comparison): CPU 0.00 % vs 0.03 %, private memory 0.9 MB vs
   8.6 MB, RSS 7.3 MB vs 34.5 MB, 1 thread vs 5. Release binary 628 KB.
+- 2026-11-11 · M2 · Test-control channel. `test_control_channel` passes against the Rust
+  and C bars and fails with either bug put back (no input region; EOF not removed, which used
+  200 ticks/2 s); M1 tests still pass. Idle cost unchanged from M1.

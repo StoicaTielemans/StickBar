@@ -10,6 +10,8 @@
 
 mod output;
 
+pub(crate) use output::Output;
+
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_dispatch2, delegate_registry,
@@ -42,8 +44,13 @@ pub(crate) struct App {
     output_state: OutputState,
     /// `zwlr_layer_shell_v1`: turns a surface into a bar docked to a screen edge.
     layer_shell: LayerShell,
-    /// One bar per monitor.
-    bars: Vec<BarSurface>,
+    /// Every tracked monitor, each with its bar (the C bar's `Output` list).
+    outputs: Vec<Output>,
+    /// How many monitors have been reported so far; the next one's `index`.
+    next_output_index: usize,
+    /// `STICKBAR_TEST_CONTROL=1`: the tests drive this instance (see `testing/`),
+    /// so its surfaces take no pointer input and the user's real clicks pass through.
+    test_mode: bool,
     /// Set by SIGINT/SIGTERM: the main loop stops after the current pass.
     pub(crate) exit: bool,
 }
@@ -52,7 +59,11 @@ impl App {
     /// Binds the globals the bar can't work without. The error is the message
     /// to print, the same one the C bar prints, since the most likely cause is
     /// running under a compositor that isn't wlroots-based.
-    pub(crate) fn new(globals: &GlobalList, qh: &QueueHandle<Self>) -> Result<Self, String> {
+    pub(crate) fn new(
+        globals: &GlobalList,
+        qh: &QueueHandle<Self>,
+        test_mode: bool,
+    ) -> Result<Self, String> {
         let missing = |what: &str| {
             format!(
                 "compositor is missing a required Wayland global ({what}) -- \
@@ -70,7 +81,9 @@ impl App {
             shm,
             output_state: OutputState::new(globals, qh),
             layer_shell,
-            bars: Vec::new(),
+            outputs: Vec::new(),
+            next_output_index: 0,
+            test_mode,
             exit: false,
         })
     }
@@ -78,14 +91,42 @@ impl App {
     /// Redraws every bar that's dirty and free to draw. The main loop calls this
     /// after each pass, so everything changed in one pass is drawn once.
     pub(crate) fn flush_dirty(&mut self, qh: &QueueHandle<Self>) {
-        for bar in &mut self.bars {
+        for bar in self.bars_mut() {
             bar.flush(qh);
         }
     }
 
+    /// Asks every bar for a redraw (the C bar's `output_mark_all_dirty`).
+    pub(crate) fn mark_all_dirty(&mut self) {
+        for bar in self.bars_mut() {
+            bar.mark_dirty();
+        }
+    }
+
+    /// Every tracked monitor, in the order they were reported.
+    pub(crate) fn outputs(&self) -> &[Output] {
+        &self.outputs
+    }
+
+    /// A monitor's current mode size in pixels, or (0, 0) if it isn't known.
+    /// Read from SCTK when asked rather than stored, so it's never stale.
+    pub(crate) fn output_size(&self, output: &Output) -> (i32, i32) {
+        self.output_state
+            .info(output.wl_output())
+            .and_then(|info| info.modes.into_iter().find(|mode| mode.current))
+            .map_or((0, 0), |mode| mode.dimensions)
+    }
+
+    /// Every existing bar.
+    fn bars_mut(&mut self) -> impl Iterator<Item = &mut BarSurface> {
+        self.outputs
+            .iter_mut()
+            .filter_map(|output| output.bar.as_mut())
+    }
+
     /// The bar whose surface is `surface`, if any.
     fn bar_for_surface(&mut self, surface: &WlSurface) -> Option<&mut BarSurface> {
-        self.bars.iter_mut().find(|bar| bar.wl_surface() == surface)
+        self.bars_mut().find(|bar| bar.wl_surface() == surface)
     }
 }
 
@@ -141,11 +182,19 @@ impl CompositorHandler for App {
 }
 
 impl LayerShellHandler for App {
-    /// The compositor removed a bar's layer surface (e.g. its monitor is going
-    /// away): drop that bar, which destroys its surface and buffers.
+    /// The compositor removed a bar's layer surface: drop that bar, which
+    /// destroys its surface and buffers. The monitor's record stays (it
+    /// reports `has_bar: false` to the tests, like the C bar).
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
-        self.bars
-            .retain(|bar| bar.wl_surface() != layer.wl_surface());
+        for output in &mut self.outputs {
+            if output
+                .bar
+                .as_ref()
+                .is_some_and(|bar| bar.wl_surface() == layer.wl_surface())
+            {
+                output.bar = None;
+            }
+        }
     }
 
     /// The compositor told a bar its size: allocate for it and draw.
@@ -162,11 +211,12 @@ impl LayerShellHandler for App {
             return; // never happens with three anchors, but would break allocation
         }
         let shm = &self.shm;
-        if let Some(bar) = self
-            .bars
+        let bar = self
+            .outputs
             .iter_mut()
-            .find(|bar| bar.wl_surface() == layer.wl_surface())
-        {
+            .filter_map(|output| output.bar.as_mut())
+            .find(|bar| bar.wl_surface() == layer.wl_surface());
+        if let Some(bar) = bar {
             bar.configure(shm, width, height);
         }
     }

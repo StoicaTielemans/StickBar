@@ -38,6 +38,7 @@ pass, 1 is fail, 77 is skipped (for example, no NVIDIA driver).
 
 | Test | Checks | Guards against |
 |---|---|---|
+| `test_control_channel.py` | On a test-control instance: `ping`, `outputs` (only the test monitor, with a bar and hyprctl's width), `rects` by name and index, an unknown command answered with an error. The bar surface gets an empty input region before its first commit. After stdin closes, the bar keeps running and stays idle. | A channel that stops answering, a test bar that eats the user's real clicks, a loop spinning on a closed stdin (200 ticks/2 s when put back). |
 | `test_wayland_disconnect.py` | Runs the bar through `lib/wlproxy.py`, kills the proxy, and expects the bar to exit with status 1 within 3s. | Spinning at 100% CPU after a compositor crash or restart. |
 | `test_clock_alignment.py` | With `STICKBAR_TEST_CLOCK_SECONDS` (seconds shown), the first commit of every second lands within 50ms of the second boundary (measured: under 1ms). | Clock seconds lagging real time by up to 1s. |
 | `test_no_subprocess.py` | The bar spawns no child processes over 12s. It samples `/proc` every 3ms, which covers two 5s polls. | Running `nvidia-smi` every 5s again. |

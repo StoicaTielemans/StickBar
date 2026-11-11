@@ -16,7 +16,7 @@
 //! monitor shows. A redraw requested meanwhile just sets `dirty`.
 
 use smithay_client_toolkit::{
-    compositor::{CompositorState, FrameCallbackData},
+    compositor::{CompositorState, FrameCallbackData, Region},
     reexports::client::{
         QueueHandle,
         protocol::{wl_output::WlOutput, wl_shm, wl_surface::WlSurface},
@@ -64,8 +64,6 @@ struct Frames {
 
 /// One monitor's bar.
 pub(crate) struct BarSurface {
-    /// The monitor this bar is on.
-    output: WlOutput,
     /// The layer surface (anchored top/left/right, 20 px tall, reserving its space).
     layer: LayerSurface,
     /// Size-dependent state; `None` until the compositor's first configure.
@@ -79,19 +77,34 @@ pub(crate) struct BarSurface {
 impl BarSurface {
     /// Creates the bar's layer surface on `output` and commits it once with no
     /// buffer, which asks the compositor for the first configure (the size).
+    ///
+    /// In test mode the surface gets an empty input region first, so it takes no
+    /// pointer input at all: the user's real clicks pass through to whatever is
+    /// underneath instead of closing a test's popups mid-test (which happened
+    /// with the C bar, once while the user was in a fullscreen game). Tests click
+    /// through the test-control channel instead.
     pub(crate) fn new(
         qh: &QueueHandle<App>,
         compositor: &CompositorState,
         layer_shell: &LayerShell,
-        output: WlOutput,
+        output: &WlOutput,
+        test_mode: bool,
     ) -> Self {
         let surface = compositor.create_surface(qh);
+        if test_mode {
+            // A region with nothing added to it is empty. The surface keeps its
+            // own copy of the region, so this one can be dropped right after.
+            match Region::new(compositor) {
+                Ok(region) => surface.set_input_region(Some(region.wl_region())),
+                Err(err) => eprintln!("stickBar: couldn't create an empty input region: {err}"),
+            }
+        }
         let layer = layer_shell.create_layer_surface(
             qh,
             surface,
             Layer::Top,
             Some(NAMESPACE),
-            Some(&output),
+            Some(output),
         );
         // Width 0 = "as wide as the anchors allow", i.e. the full monitor width.
         layer.set_size(0, u32::from(BAR.height));
@@ -100,7 +113,6 @@ impl BarSurface {
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.commit();
         Self {
-            output,
             layer,
             frames: None,
             dirty: false,
@@ -108,9 +120,9 @@ impl BarSurface {
         }
     }
 
-    /// The monitor this bar is on.
-    pub(crate) const fn output(&self) -> &WlOutput {
-        &self.output
+    /// Asks for a redraw at the next opportunity.
+    pub(crate) const fn mark_dirty(&mut self) {
+        self.dirty = true;
     }
 
     /// The bar's `wl_surface`, for matching frame callbacks and pointer events.

@@ -13,9 +13,22 @@ publish = false
 name = "stickBar"
 path = "src/main.rs"
 
-# No dependencies yet: each crate (smithay-client-toolkit, cairo-rs, pango, zbus, ...)
-# is added when the module that needs it is ported, so nothing unused gets compiled in.
+# Each crate is added when the module that needs it is ported, so nothing unused
+# gets compiled in. Crate choices and why: docs/porting.md.
 [dependencies]
+# Safe bindings to the system cairo library: all drawing.
+cairo-rs = "0.22"
+# The event loop every input joins (the C bar's epoll loop). Same version SCTK uses;
+# `signals` adds the signalfd-based SIGINT/SIGTERM/SIGUSR1 source.
+calloop = { version = "0.14", features = ["signals"] }
+# Wayland toolkit: compositor, shm pools, outputs, layer-shell. API changes between
+# releases, so it stays pinned to one minor version.
+smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop"] }
+# Use the system libwayland-client instead of wayland-rs's pure-Rust transport.
+# Not called directly: this only switches the backend, so WAYLAND_DEBUG=1 prints
+# libwayland's own `[HH:MM:SS.micro] wl_surface#N.commit()` lines with wall-clock
+# timestamps, which tests/lib/common.py parses (test_clock_alignment, test_redraw).
+wayland-backend = { version = "0.3", features = ["client_system"] }
 
 # `cargo build` (debug) is the default dev profile, the equivalent of the C bar's
 # `build/` at -O0, and what tests/ run against. `cargo build --release` is what the

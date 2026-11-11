@@ -16,5 +16,7 @@ disallowed-methods = [
     { path = "std::thread::sleep", reason = "never block the event loop; use a calloop Timer" },
     { path = "std::process::Command::output", reason = "blocks until the child exits; use spawn() and watch the child" },
     { path = "std::process::Command::status", reason = "blocks until the child exits; use spawn() and watch the child" },
+    { path = "cairo::Context::show_text", reason = "cairo's toy text API can't shape Nerd Font icons or kanji; draw text through src/render's pango helpers" },
+    { path = "cairo::Context::text_path", reason = "cairo's toy text API can't shape Nerd Font icons or kanji; draw text through src/render's pango helpers" },
     { path = "std::thread::spawn", reason = "use thread::Builder::new().name(..) so the thread shows by name in /proc, and only start it after the SIGUSR1 source exists" },
 ]

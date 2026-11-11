@@ -1,5 +1,40 @@
 # Architecture
 
+## Rust layout (ported so far)
+
+The Rust port keeps the C bar's shape: one directory per concern (`mod.rs` inside),
+the same names. Everything below this section still describes the **C bar**, the
+reference for the parts not yet ported (progress: [`porting.md`](porting.md)).
+
+```
+src/
+├── main.rs                 entry point, the C main.c: signals first, connect, bind,
+│                           the calloop event loop, exit status (0 on SIGINT/SIGTERM,
+│                           1 when the compositor connection is lost)
+├── wayland/
+│   ├── mod.rs              App: all state (the AppContext equivalent), the SCTK
+│   │                       handler impls (frame callbacks, layer configure/closed,
+│   │                       shm, registry), and the delegate macros wiring them up
+│   └── output.rs           OutputHandler: a bar per monitor, dropped when it goes
+├── bar/
+│   ├── bar_surface.rs      BarSurface: the layer surface, two shm buffers, the
+│   │                       prev/next cairo frames, dirty + frame-callback pacing,
+│   │                       draw -> diff -> commit only the changed rectangle
+│   └── damage.rs           changed_rect(): the frame diff, with unit tests
+├── render/mod.rs           render_output(): the bar background (modules from M3)
+└── config/
+    ├── colors.rs           Color + the Catppuccin Mocha palette
+    └── bar.rs              BAR geometry (height so far)
+```
+
+How an event becomes pixels: SCTK reads the Wayland socket and calls a handler
+method on `App` (`&mut App`, so all state is in that one struct). Handlers only
+mark bars dirty; after each loop pass, `main.rs` calls `App::flush_dirty()`, which
+draws each dirty bar that isn't waiting on a frame callback, so a burst of
+events in one pass is drawn once.
+
+# C bar architecture (reference)
+
 ## File layout
 
 One subdirectory per concern, and one directory per bar widget under `modules/` —

@@ -25,7 +25,7 @@
 | Concern | C bar | Rust | Why |
 |---|---|---|---|
 | Event loop | hand-rolled epoll in `main.c` | **calloop**: one loop, every fd a source | It's what smithay-client-toolkit is built on, and it's safe |
-| Wayland | raw libwayland + vendored XML | **smithay-client-toolkit** (layer-shell, shm, seat, output) + `wayland-protocols` (viewporter, subsurface) | Safe and maintained. Pin one SCTK version, since its API changes between releases |
+| Wayland | raw libwayland + vendored XML | **smithay-client-toolkit** (layer-shell, shm, seat, output) + `wayland-protocols` (viewporter, subsurface), on the **system libwayland** (`wayland-backend` `client_system`) | Safe and maintained. Pin one SCTK version, since its API changes between releases. The system backend keeps `WAYLAND_DEBUG` in libwayland's wall-clock format, which the tests parse; the pure-Rust transport prints a different one |
 | Drawing | cairo + pangocairo | **cairo-rs** (`png` feature), **pango**, **pangocairo** crates | The same C libraries behind safe wrappers |
 | Draw → shm | cairo draws straight into the memfd | cairo draws into its own `ImageSurface`, then the bytes are copied into SCTK's `SlotPool` buffer | Drawing straight into the shm buffer needs `unsafe`. A copy is about 200 KB per bar frame. Measure it in M1 |
 | Threads → main loop | eventfd (`util/notify_fd.c`) | **calloop `channel`**: worker threads send messages, the main loop wakes | Same pattern without raw fds |
@@ -49,21 +49,25 @@ Each lists: the C files to read on `main` (rough line count), what to build, and
 must pass.
 
 - [x] **M0: Skeleton.** Cargo project, lint policy, `build.sh`, tests pointed at `target/`.
-- [ ] **M1: An empty bar on every monitor** (~2.6k C lines: `main.c`, `wayland/*`,
-  `bar/bar_surface.c`, `config/*`, `render/render.c`, `render/module_box.c`, `util/*`).
-  Connect, track outputs and their `index` by binding order, create one 20 px top layer
-  surface per output with an exclusive zone, double-buffered shm, frame-callback-throttled
-  redraw with dirty flags and minimal damage, colours, fonts and glyph consts, and the pango
-  text helpers with the layout cache. Exit with status 1 when the compositor goes away.
-  When cairo-rs lands, add `cairo::Context::show_text` and `text_path` (the toy text API)
-  to `clippy.toml`'s `disallowed-methods`. The path only resolves once the crate is a dependency.
-  Tests: `test_wayland_disconnect`, `test_stdin_intact`.
+- [x] **M1: An empty bar on every monitor** (`main.c`, `wayland/{registry,output,event_loop,shm_buffer}.c`,
+  `bar/bar_surface.c`, `config/config.c`, `render/render.c`). Signals first, connect,
+  one 20 px top layer surface per output with an exclusive zone, two shm buffers,
+  frame-callback-throttled redraw with a dirty flag, draw → diff → commit only the changed
+  rectangle, the Catppuccin palette, and exit 1 when the compositor goes away. The cairo toy
+  text API is in `clippy.toml`'s `disallowed-methods`. Tests: `test_wayland_disconnect`,
+  `test_stdin_intact`.
+  *Moved out of M1:* `dead_code` is an error, so code can't be ported before something uses
+  it. The pango text helpers + layout cache (`render/module_box.c`), glyphs, fonts and the
+  rest of `BAR` move to M3. The output `index` moves to M5. `util/*` comes piece by piece with
+  its users.
 - [ ] **M2: Test-control channel + pointer** (`testing/test_control.c` ~665,
   `wayland/pointer.c`, `render/box_rects.c`). The `STICKBAR_TEST_CONTROL` stdin channel,
   `STICKBAR_TEST_OUTPUT`, empty input regions in test mode, `rects`/`click`, and button/motion/scroll
   routing through one dispatch path. Built as a command table that later milestones add
   to. *Every later test depends on this, so it comes before any module.*
-- [ ] **M3: Clock** (`modules/clock/clock.c`). The box, repainting only on the minute,
+- [ ] **M3: Clock** (`modules/clock/clock.c`, plus `render/module_box.c` and `config/glyphs.c`
+  from M1, the first text drawn). Fonts, `BAR` spacing/border/padding, the pango text
+  helpers with the layout cache, and the box, repainting only on the minute,
   `STICKBAR_TEST_CLOCK_SECONDS`. Tests: `test_clock_alignment`, `test_redraw` (clock
   part).
 - [ ] **M4: Popup infrastructure + year calendar** (`bar/popup_surface.c`,
@@ -72,7 +76,9 @@ must pass.
   `wp_viewport`, anchoring under the box, open/close/resize, and the `menu`/`snapshot`/`catcher-click`
   commands. Read `docs/popups.md` and BUG.md "Popups" first. Tests: `test_popups`
   (calendar part).
-- [ ] **M5: Hyprland + workspaces** (`hyprland/*`, `modules/workspaces/` ~560). The request
+- [ ] **M5: Hyprland + workspaces** (`hyprland/*`, `modules/workspaces/` ~560). Each output's
+  `index` by binding order (moved from M1; check that the same monitor gets the same
+  workspace range as in the C bar). The request
   socket, event socket line framing, click-to-focus with the classic→Lua fallback, and kanji pills
   per 5-wide output range. Cross-check against `hyprctl -j workspaces`. Read BUG.md
   "Hyprland IPC".
@@ -122,3 +128,7 @@ write the code:
 ## Progress log
 Each finished milestone gets a line here: date, commit, and a short perf_compare summary.
 - 2026-11-11 · M0 · Cargo skeleton and lint policy (2236e2e). Release binary 286 KB.
+- 2026-11-11 · M1 · Empty bar on every monitor. Both M1 tests pass; one commit per output,
+  then none while idle. `perf_compare --against main` (60 s; the C bar runs every module,
+  so this is a baseline, not a comparison): CPU 0.00 % vs 0.03 %, private memory 0.9 MB vs
+  8.6 MB, RSS 7.3 MB vs 34.5 MB, 1 thread vs 5. Release binary 628 KB.

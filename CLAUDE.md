@@ -119,6 +119,9 @@ silently drift.
 - Don't paper over borrow-checker errors with `.clone()` or `Rc<RefCell<…>>` by
   reflex. Restructure ownership first, and if shared mutable state is genuinely
   needed, say why in a comment.
+- Every module sets `clickable: true` on the `ModuleBox` of any box that reacts to a click
+  (any button), and every dropdown reports its click targets to `App::cursor_shape_at`, so
+  the pointer shows a hand there (a Rust-only addition: `docs/porting.md`).
 - Worker threads (pulse, PipeWire, D-Bus) use `thread::Builder::new().name(..)`, start
   only after the SIGUSR1 signal source exists, and talk to the main loop through a
   calloop channel.

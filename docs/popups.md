@@ -26,6 +26,11 @@ and a left click on its timeline seeks to that spot
   was free and is a conventional way to expose a secondary action. Status-only
   widgets (CPU/GPU/memory, network, privacy) have no obvious "primary action", so
   left-click does nothing; `SystemMonitorWidget.qml` has no `onClicked` at all.
+- **Hand cursor (Rust port only):** the C bar never sets a cursor. The Rust port shows a
+  hand over every bar box and dropdown target that reacts to a click (any button, so
+  right-click-only boxes count) and the arrow elsewhere, catchers included. Each module
+  marks its boxes `clickable`, and each dropdown answers "is (x, y) a target". See
+  `docs/porting.md` "Rust-only additions".
 - **Look**: a `mantle` surface with the module's accent as a
   `BAR.module_border_width` border, square corners; a header (glyph, bold title,
   dim summary, and a filled status pill on the right); `base` cards with a 1px

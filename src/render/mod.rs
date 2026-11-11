@@ -53,6 +53,9 @@ pub(crate) struct ModuleBox {
     pub(crate) name: &'static str,
     /// Where its box is.
     pub(crate) rect: BoxRect,
+    /// Whether the box reacts to a click (any button). The pointer turns into
+    /// a hand over it (a Rust-only addition: see `docs/porting.md`).
+    pub(crate) clickable: bool,
 }
 
 /// The drawing state every bar shares: the text cache and each module's data.
@@ -92,6 +95,8 @@ impl Renderer {
         Ok(vec![ModuleBox {
             name: "clock",
             rect: clock,
+            // Right-click opens the year calendar.
+            clickable: true,
         }])
     }
 

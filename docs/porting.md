@@ -136,6 +136,25 @@ must pass.
   `git branch c-legacy main`, merge `rust-rewrite` into `main` (a merge, not a squash),
   push all three branches, and point Hyprland's exec line at `target/release/stickBar`.
 
+## Rust-only additions
+
+Things the C bar never had, added during the port. They're not part of "parity with
+the C bar", so the C bar's tests don't cover them; each has its own test, which skips
+against the C bar.
+
+- **Hand cursor over clickable things** (added after M4, at the user's request). Over
+  anything that reacts to a click (any button), the pointer shows a hand; elsewhere
+  the arrow. That covers bar boxes (the clock: its right-click opens the calendar) and
+  dropdown targets (the calendar's chevrons and year text). It uses the
+  `wp_cursor_shape_v1` protocol through SCTK's `CursorShapeManager`: the bar names the
+  shape and Hyprland draws it from the user's cursor theme, with no images loaded and no
+  `wayland-cursor`. The shape is sent on each pointer enter (tagged with its serial, which
+  the protocol requires) and after that only when it changes, never per mouse move. Each
+  module marks its boxes `clickable` in the `ModuleBox` it returns. Code:
+  `src/wayland/pointer.rs` (`cursor_shape_at`, `update_cursor`). Test:
+  `tests/test_cursor_shape.py`, which asks the bar for its decision through the
+  `cursor`/`menu-cursor` commands, because test bars take no real input.
+
 ## Pieces to try writing yourself (optional, for learning Rust)
 Small, self-contained, and covered by tests. Ask Claude to explain compiler errors, not to
 write the code:
@@ -163,3 +182,6 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   --against main` (C runs every module): CPU 0.02 % vs 0.10 %, private 4.5 MB vs 8.7 MB,
   RSS 21.6 MB vs 34.8 MB. Release binary 912 KB. The real pointer was not exercised by the
   tests (test bars take no input); it uses the same routing.
+- 2026-11-11 · Rust-only · Hand cursor over clickable boxes and dropdown targets
+  (`wp_cursor_shape_v1`). `test_cursor_shape` passes (skips on the C bar) and fails with the
+  clock's `clickable` turned off. No new wakeups, so idle cost is unchanged.

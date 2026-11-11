@@ -20,6 +20,9 @@
 //!                        -> a click / move on the open menu, menu-local px
 //! catcher-click          -> a click on a click-catcher (closes the dropdown)
 //! snapshot <png>         -> the open menu's picture, drawn again into a PNG
+//! cursor <output> <x> <y> / menu-cursor <x> <y>
+//!                        -> {"ok":true,"shape":"pointer"|"default"}: the cursor
+//!                           the bar would show there (Rust only)
 //! anything else          -> {"ok":false,"error":"unknown command"}
 //! ```
 //!
@@ -39,6 +42,7 @@ use calloop::{
     generic::{Generic, NoIoDrop},
 };
 use serde_json::{Value, json};
+use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
 
 use crate::{
     bar::{BarSurface, popup_surface::PopupSurface},
@@ -141,6 +145,8 @@ fn dispatch(app: &mut App, line: &str) -> Value {
         "menu" => menu(app),
         "menu-click" | "menu-motion" if !rest.is_empty() => menu_input(app, command, rest),
         "catcher-click" => catcher_click(app),
+        "cursor" if !rest.is_empty() => cursor(app, rest),
+        "menu-cursor" if !rest.is_empty() => menu_cursor(app, rest),
         "snapshot" if !rest.is_empty() => match app.snapshot(rest) {
             Ok(()) => json!({ "ok": true }),
             Err(err) => error(&err),
@@ -215,6 +221,45 @@ fn catcher_click(app: &mut App) -> Value {
     };
     app.pointer_button(&surface, 5.0, 5.0, BTN_LEFT);
     json!({ "ok": true })
+}
+
+/// `cursor <output> <x> <y>`: which cursor the bar would show at a point on
+/// that monitor's bar. Test bars never set a real cursor (they take no
+/// pointer input), so the tests check the decision instead.
+fn cursor(app: &App, args: &str) -> Value {
+    let mut parts = args.split_whitespace();
+    let name = parts.next().unwrap_or_default();
+    let x = parts.next().and_then(|v| v.parse::<f64>().ok());
+    let y = parts.next().and_then(|v| v.parse::<f64>().ok());
+    let surface = find_output(app, name)
+        .and_then(|o| o.bar.as_ref())
+        .map(BarSurface::wl_surface);
+    let (Some(surface), Some(x), Some(y)) = (surface, x, y) else {
+        return error("usage: cursor <output> <x> <y>");
+    };
+    shape_reply(app.cursor_shape_at(surface, x, y))
+}
+
+/// `menu-cursor <x> <y>`: which cursor the bar would show over the open menu.
+fn menu_cursor(app: &App, args: &str) -> Value {
+    let mut parts = args.split_whitespace();
+    let x = parts.next().and_then(|v| v.parse::<f64>().ok());
+    let y = parts.next().and_then(|v| v.parse::<f64>().ok());
+    let surface = app.popups().latest_menu().map(PopupSurface::wl_surface);
+    let (Some(surface), Some(x), Some(y)) = (surface, x, y) else {
+        return error("usage: menu-cursor <x> <y> (with a menu open)");
+    };
+    shape_reply(app.cursor_shape_at(surface, x, y))
+}
+
+/// The reply for a cursor shape: only the two shapes the bar uses have names.
+fn shape_reply(shape: Shape) -> Value {
+    let name = if shape == Shape::Pointer {
+        "pointer"
+    } else {
+        "default"
+    };
+    json!({ "ok": true, "shape": name })
 }
 
 /// `left`/`right`/`middle` as a button code; anything else is left, as in C.

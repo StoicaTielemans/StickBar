@@ -218,6 +218,14 @@ impl CalendarPopup {
         }
     }
 
+    /// Whether (x, y) is on something clickable (a chevron or the year text),
+    /// for the hand cursor.
+    pub(crate) fn is_target(&self, x: f64, y: f64) -> bool {
+        self.view
+            .as_ref()
+            .is_some_and(|view| view.target_at(x, y) != Hover::Nothing)
+    }
+
     /// The pointer moved over the popup (or left it: pass a point outside):
     /// highlights the header target under it.
     pub(crate) fn motion(&mut self, x: f64, y: f64, text: &mut TextCache) {

@@ -14,7 +14,7 @@ pub(crate) mod shm_buffers;
 pub(crate) mod viewporter;
 
 pub(crate) use output::Output;
-pub(crate) use pointer::{BTN_LEFT, BTN_MIDDLE, BTN_RIGHT};
+pub(crate) use pointer::{BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Mouse};
 
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -23,12 +23,12 @@ use smithay_client_toolkit::{
     reexports::client::{
         Connection, QueueHandle,
         globals::GlobalList,
-        protocol::{wl_output, wl_pointer::WlPointer, wl_surface::WlSurface},
+        protocol::{wl_output, wl_surface::WlSurface},
     },
     reexports::protocols::wp::viewporter::client::wp_viewporter::WpViewporter,
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
-    seat::SeatState,
+    seat::{SeatState, pointer::cursor_shape::CursorShapeManager},
     shell::{
         WaylandSurface,
         wlr_layer::{LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure},
@@ -58,7 +58,9 @@ pub(crate) struct App {
     /// Tracks seats (input devices) and reports them to `pointer.rs`.
     seat_state: SeatState,
     /// The mouse, once the seat reports one.
-    pointer: Option<WlPointer>,
+    pointer: Option<Mouse>,
+    /// `wp_cursor_shape_manager_v1`, if offered: sets the hand cursor.
+    cursor_shapes: Option<CursorShapeManager>,
     /// The handle new Wayland objects are created with (popups need it when a
     /// click opens one).
     qh: QueueHandle<Self>,
@@ -107,6 +109,7 @@ impl App {
             viewporter: viewporter::bind(globals, qh),
             seat_state: SeatState::new(globals, qh),
             pointer: None,
+            cursor_shapes: CursorShapeManager::bind(globals, qh).ok(),
             qh: qh.clone(),
             popups: Popups::default(),
             outputs: Vec::new(),

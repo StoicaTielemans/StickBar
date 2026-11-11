@@ -102,3 +102,22 @@ and a left click on its timeline seeks to that spot
   visible samples only, and the axis label comes from the real span
   (`braille_graph_span_label()`: e.g. `8 min ago`). 30 cells stays as each card's
   minimum width.
+
+## In the Rust port
+
+- **Files:** `src/bar/popup_surface.rs` (`PopupSurface`: a menu or a catcher),
+  `src/bar/popup_host.rs` (`PopupHost`: a menu and its catchers, placed under the box),
+  `src/bar/popups.rs` (`Popups`: one field per dropdown kind, which replaces the C
+  `POPUP_ROUTES` table), `src/render/popup_chrome.rs` (frame and card), and
+  `src/wayland/pointer.rs` (seat, pointer and routing). A dropdown holds
+  `Option<PopupHost>`; dropping it closes the menu and every catcher.
+- **First paint:** a paint before the first configure only sets `needs_paint`, and
+  `PopupSurface::configure` returns it so the owner paints again. Nothing keeps the drawn
+  frame: the drawing goes into a temporary image that's freed after the copy into shm, so an
+  open dropdown costs only its shm buffer (keeping a copy would add its full size again).
+  `snapshot` redraws into a fresh image, the same as C. Because of that, `test_calendar`
+  checks the first paint in the `WAYLAND_DEBUG` log rather than in a snapshot.
+- **Catchers** with a viewporter: 1×1 buffer, `set_destination` on every configure. Without
+  one: a full-size transparent buffer. SCTK has no viewporter helper:
+  `src/wayland/viewporter.rs` binds it and implements SCTK's `Dispatch2` for it (it has no
+  events).

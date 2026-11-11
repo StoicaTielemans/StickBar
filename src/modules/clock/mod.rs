@@ -4,6 +4,7 @@
 //! tick only reports a change when the text actually changed, which without
 //! seconds is once a minute, so the bar commits once a minute.
 
+pub(crate) mod calendar;
 pub(crate) mod timer;
 
 use chrono::{Datelike, Local, NaiveDateTime, Timelike};

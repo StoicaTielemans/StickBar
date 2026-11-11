@@ -19,3 +19,7 @@
 pub(crate) const ICON_CALENDAR: char = '\u{f00ee}';
 /// `md-clock`, before the clock's time.
 pub(crate) const ICON_CLOCK: char = '\u{f0954}';
+/// `fa-chevron_left`, the calendar's previous-year button.
+pub(crate) const ICON_CHEVRON_LEFT: char = '\u{f053}';
+/// `fa-chevron_right`, the calendar's next-year button.
+pub(crate) const ICON_CHEVRON_RIGHT: char = '\u{f054}';

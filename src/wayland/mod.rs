@@ -9,8 +9,12 @@
 //! the protocol objects to those handlers.
 
 mod output;
+mod pointer;
+pub(crate) mod shm_buffers;
+pub(crate) mod viewporter;
 
 pub(crate) use output::Output;
+pub(crate) use pointer::{BTN_LEFT, BTN_MIDDLE, BTN_RIGHT};
 
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
@@ -19,10 +23,12 @@ use smithay_client_toolkit::{
     reexports::client::{
         Connection, QueueHandle,
         globals::GlobalList,
-        protocol::{wl_output, wl_surface::WlSurface},
+        protocol::{wl_output, wl_pointer::WlPointer, wl_surface::WlSurface},
     },
+    reexports::protocols::wp::viewporter::client::wp_viewporter::WpViewporter,
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
+    seat::SeatState,
     shell::{
         WaylandSurface,
         wlr_layer::{LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure},
@@ -30,7 +36,10 @@ use smithay_client_toolkit::{
     shm::{Shm, ShmHandler},
 };
 
-use crate::{bar::BarSurface, render::Renderer};
+use crate::{
+    bar::{BarSurface, popups::Popups},
+    render::Renderer,
+};
 
 /// All of the bar's state, handed to every Wayland event handler.
 pub(crate) struct App {
@@ -44,6 +53,17 @@ pub(crate) struct App {
     output_state: OutputState,
     /// `zwlr_layer_shell_v1`: turns a surface into a bar docked to a screen edge.
     layer_shell: LayerShell,
+    /// `wp_viewporter`, if offered: lets click-catchers use a 1x1 buffer.
+    viewporter: Option<WpViewporter>,
+    /// Tracks seats (input devices) and reports them to `pointer.rs`.
+    seat_state: SeatState,
+    /// The mouse, once the seat reports one.
+    pointer: Option<WlPointer>,
+    /// The handle new Wayland objects are created with (popups need it when a
+    /// click opens one).
+    qh: QueueHandle<Self>,
+    /// Every dropdown (open or closed).
+    popups: Popups,
     /// Every tracked monitor, each with its bar (the C bar's `Output` list).
     outputs: Vec<Output>,
     /// Drawing state shared by every bar: the text cache and the modules.
@@ -84,6 +104,11 @@ impl App {
             shm,
             output_state: OutputState::new(globals, qh),
             layer_shell,
+            viewporter: viewporter::bind(globals, qh),
+            seat_state: SeatState::new(globals, qh),
+            pointer: None,
+            qh: qh.clone(),
+            popups: Popups::default(),
             outputs: Vec::new(),
             renderer,
             next_output_index: 0,
@@ -134,6 +159,16 @@ impl App {
             .info(output.wl_output())
             .and_then(|info| info.modes.into_iter().find(|mode| mode.current))
             .map_or((0, 0), |mode| mode.dimensions)
+    }
+
+    /// Every dropdown, for the tests' `menu` and `catcher-click` commands.
+    pub(crate) const fn popups(&self) -> &Popups {
+        &self.popups
+    }
+
+    /// Saves the open dropdown's picture as a PNG (the tests' `snapshot`).
+    pub(crate) fn snapshot(&mut self, path: &str) -> Result<(), String> {
+        self.popups.snapshot(path, &mut self.renderer.text)
     }
 
     /// Every existing bar.
@@ -214,11 +249,14 @@ impl LayerShellHandler for App {
                 .is_some_and(|bar| bar.wl_surface() == layer.wl_surface())
             {
                 output.bar = None;
+                return;
             }
         }
+        self.popups.closed(layer.wl_surface());
     }
 
-    /// The compositor told a bar its size: allocate for it and draw.
+    /// The compositor told a surface its size: a bar allocates for it and
+    /// draws; a popup surface does what `PopupSurface::configure` says.
     fn configure(
         &mut self,
         _conn: &Connection,
@@ -239,7 +277,15 @@ impl LayerShellHandler for App {
             .find(|bar| bar.wl_surface() == layer.wl_surface());
         if let Some(bar) = bar {
             bar.configure(shm, width, height);
+            return;
         }
+        // Not a bar: one of the open dropdowns' surfaces.
+        let _owned: bool = self.popups.configure(
+            layer.wl_surface(),
+            &self.shm,
+            (width, height),
+            &mut self.renderer.text,
+        );
     }
 }
 
@@ -253,8 +299,8 @@ impl ProvidesRegistryState for App {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
     }
-    // Globals that can come and go at runtime: monitors.
-    registry_handlers![OutputState];
+    // Globals that can come and go at runtime: monitors and seats.
+    registry_handlers![OutputState, SeatState];
 }
 
 delegate_registry!(App);

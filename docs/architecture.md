@@ -15,6 +15,10 @@ src/
 │   ├── mod.rs              App: all state (the AppContext equivalent), the SCTK
 │   │                       handler impls (frame callbacks, layer configure/closed,
 │   │                       shm, registry), and the delegate macros wiring them up
+│   ├── pointer.rs          seat + pointer; App::pointer_button/pointer_motion, the
+│   │                       one routing path real and injected input share
+│   ├── shm_buffers.rs      ShmBuffers: a surface's two shm buffers (bars + popups)
+│   ├── viewporter.rs       optional wp_viewporter bind (SCTK has no helper)
 │   └── output.rs           Output: one tracked monitor (index, name, its bar);
 │                           OutputHandler: a record + bar per monitor, the
 │                           STICKBAR_TEST_OUTPUT filter
@@ -23,17 +27,23 @@ src/
 │   │                       prev/next cairo frames, Dirty (clean/clock/full) +
 │   │                       frame-callback pacing, draw -> diff -> commit only the
 │   │                       changed rectangle, and the boxes of the last frame
-│   └── damage.rs           changed_rect(): the frame diff, with unit tests
+│   ├── damage.rs           changed_rect(): the frame diff, with unit tests
+│   ├── popup_surface.rs    PopupSurface: an overlay menu or a top-layer catcher
+│   │                       (1x1 + viewporter), first-paint-after-configure
+│   ├── popup_host.rs       PopupHost: a menu under its box + a catcher per monitor
+│   └── popups.rs           Popups: every dropdown kind; configure/menu routing
 ├── modules/
 │   └── clock/
 │       ├── mod.rs          Clock: cached text, tick(), its box
+│       ├── calendar.rs     CalendarPopup: the year calendar (chrono date maths)
 │       └── timer.rs        wall-clock-aligned timerfd (rustix), ECANCELED re-arm
 ├── render/
 │   ├── mod.rs              Renderer (shared by every bar: text cache + modules),
 │   │                       render_output(), render_clock_only(), BoxRect/ModuleBox
 │   ├── text.rs             TextCache: pango context, font descriptions, LRU of 64
 │   │                       shaped layouts; all text goes through here
-│   └── module_box.rs       draw_rect() and label(): the bordered module box
+│   ├── module_box.rs       draw_rect() and label(): the bordered module box
+│   └── popup_chrome.rs     draw_frame() and draw_card(): the dropdown look
 ├── testing/mod.rs          the test-control channel on stdin (STICKBAR_TEST_CONTROL=1)
 └── config/
     ├── colors.rs           Color + the Catppuccin Mocha palette

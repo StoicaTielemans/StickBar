@@ -77,6 +77,28 @@ impl TextCache {
             .map_or(0.0, |cached| cached.width)
     }
 
+    /// The logical (width, height) in px of `text`, for laying out around it.
+    pub(crate) fn size(&mut self, text: &str, size: i32, bold: bool) -> (f64, f64) {
+        self.layout(text, size, bold)
+            .map_or((0.0, 0.0), |cached| (cached.width, cached.height))
+    }
+
+    /// Draws `text` starting at `x`, vertically centered in the row `y..y + h`.
+    pub(crate) fn draw_left(
+        &mut self,
+        cr: &cairo::Context,
+        (x, y, h): (f64, f64, f64),
+        text: &str,
+        size: i32,
+        bold: bool,
+        color: Color,
+    ) -> Result<(), cairo::Error> {
+        let Some(cached) = self.layout(text, size, bold) else {
+            return Ok(());
+        };
+        show(cr, cached, x, y + (h - cached.height) / 2.0, color)
+    }
+
     /// Draws `text` centered in `rect`.
     pub(crate) fn draw_centered(
         &mut self,
@@ -90,14 +112,14 @@ impl TextCache {
         let Some(cached) = self.layout(text, size, bold) else {
             return Ok(()); // nothing shaped, nothing to draw
         };
-        cr.save()?;
-        color.set_source(cr);
-        cr.move_to(
-            rect.x + (rect.w - cached.width) / 2.0,
+        let x = rect.x + (rect.w - cached.width) / 2.0;
+        show(
+            cr,
+            cached,
+            x,
             rect.y + (rect.h - cached.height) / 2.0,
-        );
-        pangocairo::functions::show_layout(cr, &cached.layout);
-        cr.restore()
+            color,
+        )
     }
 
     /// The cached layout for (text, size, bold), shaping it first if needed.
@@ -185,4 +207,19 @@ impl TextCache {
         }
         self.count -= 1;
     }
+}
+
+/// Draws a shaped layout with its top-left corner at (x, y).
+fn show(
+    cr: &cairo::Context,
+    cached: &CachedLayout,
+    x: f64,
+    y: f64,
+    color: Color,
+) -> Result<(), cairo::Error> {
+    cr.save()?;
+    color.set_source(cr);
+    cr.move_to(x, y);
+    pangocairo::functions::show_layout(cr, &cached.layout);
+    cr.restore()
 }

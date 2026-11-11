@@ -16,8 +16,9 @@ path = "src/main.rs"
 # Each crate is added when the module that needs it is ported, so nothing unused
 # gets compiled in. Crate choices and why: docs/porting.md.
 [dependencies]
-# Safe bindings to the system cairo library: all drawing.
-cairo-rs = "0.22"
+# Safe bindings to the system cairo library: all drawing. "png" = writing a
+# popup's picture to a file, for the tests' `snapshot` command.
+cairo-rs = { version = "0.22", features = ["png"] }
 # The event loop every input joins (the C bar's epoll loop). Same version SCTK uses;
 # `signals` adds the signalfd-based SIGINT/SIGTERM/SIGUSR1 source.
 calloop = { version = "0.14", features = ["signals"] }

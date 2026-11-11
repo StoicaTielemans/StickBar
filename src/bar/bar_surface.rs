@@ -25,23 +25,23 @@ use smithay_client_toolkit::{
     compositor::{CompositorState, FrameCallbackData, Region},
     reexports::client::{
         QueueHandle,
-        protocol::{wl_output::WlOutput, wl_shm, wl_surface::WlSurface},
+        protocol::{wl_output::WlOutput, wl_surface::WlSurface},
     },
     shell::{
         WaylandSurface,
         wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface},
     },
-    shm::{
-        Shm,
-        slot::{Buffer, SlotPool},
-    },
+    shm::Shm,
 };
 
 use super::damage::{Rect, changed_rect};
 use crate::{
     config::BAR,
     render::{ModuleBox, Renderer},
-    wayland::App,
+    wayland::{
+        App,
+        shm_buffers::{ShmBuffers, copy_pixels},
+    },
 };
 
 /// The layer-shell namespace. Kept identical to the C bar's, so any Hyprland
@@ -69,13 +69,8 @@ struct Frames {
     height: i32,
     /// Bytes per row, as cairo lays out ARGB32 images (shared with the shm buffers).
     stride: i32,
-    /// The shared-memory pool both buffers live in (the memfd the compositor reads).
-    pool: SlotPool,
-    /// First of the two shm buffers: while the compositor holds one, the bar can
-    /// draw into the other.
-    buffer_a: Buffer,
-    /// Second of the two shm buffers.
-    buffer_b: Buffer,
+    /// The two shared-memory buffers the compositor reads from.
+    buffers: ShmBuffers,
     /// The frame the compositor currently shows.
     prev: cairo::ImageSurface,
     /// The frame being drawn now; swapped with `prev` after each commit.
@@ -225,31 +220,20 @@ impl BarSurface {
         // 3. Copy into a free shm buffer. If the compositor still holds both,
         // stay dirty: the release event wakes the loop, and the flush after
         // that pass draws again.
-        let buffer = if frames.buffer_a.canvas(&mut frames.pool).is_some() {
-            &frames.buffer_a
-        } else {
-            &frames.buffer_b
-        };
-        let Some(canvas) = buffer.canvas(&mut frames.pool) else {
-            return;
-        };
-        let mut copied = false;
-        let read = frames.next.with_data(|pixels| {
-            // Same size by construction; checked anyway because copy_from_slice
-            // would panic on a mismatch.
-            if canvas.len() == pixels.len() {
-                canvas.copy_from_slice(pixels);
-                copied = true;
-            }
-        });
-        if read.is_err() || !copied {
-            eprintln!("stickBar: couldn't copy the frame into the shm buffer");
-            return;
-        }
-
         let surface = self.layer.wl_surface();
-        if let Err(err) = buffer.attach_to(surface) {
-            eprintln!("stickBar: attaching the bar buffer failed: {err}");
+        let mut read_ok = false;
+        let next = &frames.next;
+        let attached = frames.buffers.write_and_attach(surface, |canvas| {
+            let mut copied = false;
+            read_ok = next
+                .with_data(|pixels| copied = copy_pixels(canvas, pixels))
+                .is_ok();
+            read_ok && copied
+        });
+        if !attached {
+            if !read_ok {
+                eprintln!("stickBar: couldn't read the drawn bar frame");
+            }
             return;
         }
         if let Some((x, y, w, h)) = damage.to_i32() {
@@ -283,25 +267,12 @@ impl Frames {
         // into a buffer byte for byte. Cairo's ARGB32 is native-endian, which
         // on x86 is exactly wl_shm's ARGB8888.
         let stride = next.stride();
-        let frame_bytes = usize::try_from(stride)
-            .ok()
-            .zip(usize::try_from(height).ok())
-            .map(|(s, h)| s * h)
-            .ok_or("negative stride or height")?;
-        let mut pool = SlotPool::new(frame_bytes * 2, shm).map_err(|e| e.to_string())?;
-        let (buffer_a, _) = pool
-            .create_buffer(width, height, stride, wl_shm::Format::Argb8888)
-            .map_err(|e| e.to_string())?;
-        let (buffer_b, _) = pool
-            .create_buffer(width, height, stride, wl_shm::Format::Argb8888)
-            .map_err(|e| e.to_string())?;
+        let buffers = ShmBuffers::new(shm, width, height, stride)?;
         Ok(Self {
             width,
             height,
             stride,
-            pool,
-            buffer_a,
-            buffer_b,
+            buffers,
             prev,
             next,
             prev_valid: false,

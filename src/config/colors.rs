@@ -14,6 +14,14 @@ pub(crate) struct Color {
 }
 
 impl Color {
+    /// Fully transparent: "no fill" or "no border" for `draw_rect`.
+    pub(crate) const TRANSPARENT: Self = Self {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 0.0,
+    };
+
     /// An opaque colour from 0-255 channel values, so the palette below can be
     /// written as the same hex triples as the reference `config.js`.
     // `as` is banned crate-wide, but `f64::from(u8)` (the lossless conversion the
@@ -29,6 +37,15 @@ impl Color {
             g: g as f64 / 255.0,
             b: b as f64 / 255.0,
             a: 1.0,
+        }
+    }
+
+    /// The same colour with its opacity scaled by `factor` (e.g. 0.4 for the
+    /// calendar's past days).
+    pub(crate) const fn with_alpha(self, factor: f64) -> Self {
+        Self {
+            a: self.a * factor,
+            ..self
         }
     }
 

@@ -13,8 +13,20 @@
 //! ping                   -> {"ok":true}
 //! outputs                -> {"ok":true,"outputs":[{name,index,width,height,has_bar}]}
 //! rects <name|index>     -> {"ok":true,"rects":{module:[x,y,w,h],...}}
+//! click <output> <x> <y> <left|right|middle>
+//!                        -> a click on that monitor's bar, bar-local px
+//! menu                   -> {"ok":true,"open":bool,"width","height","catchers"}
+//! menu-click <x> <y> [button] / menu-motion <x> <y>
+//!                        -> a click / move on the open menu, menu-local px
+//! catcher-click          -> a click on a click-catcher (closes the dropdown)
+//! snapshot <png>         -> the open menu's picture, drawn again into a PNG
 //! anything else          -> {"ok":false,"error":"unknown command"}
 //! ```
+//!
+//! Injected input goes through `App::pointer_button`/`pointer_motion`, the
+//! same routing real pointer events take, so only the compositor's "which
+//! surface is under the cursor" step is skipped. Nothing on screen is clicked
+//! and the user's cursor never moves.
 
 use std::{
     fs::File,
@@ -29,8 +41,8 @@ use calloop::{
 use serde_json::{Value, json};
 
 use crate::{
-    bar::BarSurface,
-    wayland::{App, Output},
+    bar::{BarSurface, popup_surface::PopupSurface},
+    wayland::{App, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Output},
 };
 
 /// The environment variable that turns the channel on (exactly `1`, as in C).
@@ -118,14 +130,99 @@ fn pump(file: &NoIoDrop<File>, pending: &mut Vec<u8>, app: &mut App) -> PostActi
 }
 
 /// Runs one command and builds its reply.
-fn dispatch(app: &App, line: &str) -> Value {
+fn dispatch(app: &mut App, line: &str) -> Value {
     let (command, rest) = line.split_once(' ').unwrap_or((line, ""));
     let rest = rest.trim();
     match command {
         "ping" => json!({ "ok": true }),
         "outputs" => outputs(app),
         "rects" if !rest.is_empty() => rects(app, rest),
+        "click" if !rest.is_empty() => click(app, rest),
+        "menu" => menu(app),
+        "menu-click" | "menu-motion" if !rest.is_empty() => menu_input(app, command, rest),
+        "catcher-click" => catcher_click(app),
+        "snapshot" if !rest.is_empty() => match app.snapshot(rest) {
+            Ok(()) => json!({ "ok": true }),
+            Err(err) => error(&err),
+        },
         _ => error("unknown command"),
+    }
+}
+
+/// `click <output> <x> <y> <button>`: a press on that monitor's bar.
+fn click(app: &mut App, args: &str) -> Value {
+    let usage = || error("usage: click <output> <x> <y> <button>");
+    let mut parts = args.split_whitespace();
+    let (Some(name), Some(x), Some(y), Some(button)) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return usage();
+    };
+    let (Ok(x), Ok(y)) = (x.parse::<f64>(), y.parse::<f64>()) else {
+        return usage();
+    };
+    // A copy of the surface handle (cheap: a reference count), so `app` is free
+    // to be borrowed mutably by the click itself.
+    let surface = find_output(app, name)
+        .and_then(|o| o.bar.as_ref())
+        .map(|bar| bar.wl_surface().clone());
+    let Some(surface) = surface else {
+        return usage();
+    };
+    app.pointer_button(&surface, x, y, parse_button(button));
+    json!({ "ok": true })
+}
+
+/// `menu`: whether a dropdown is open, its size, and how many catchers exist.
+fn menu(app: &App) -> Value {
+    let catchers = app.popups().catchers().count();
+    match app.popups().latest_menu().and_then(PopupSurface::menu_size) {
+        Some((width, height)) => {
+            json!({ "ok": true, "open": true, "width": width, "height": height, "catchers": catchers })
+        }
+        None => json!({ "ok": true, "open": false, "catchers": catchers }),
+    }
+}
+
+/// `menu-click <x> <y> [button]` / `menu-motion <x> <y>`, menu-local px.
+fn menu_input(app: &mut App, command: &str, args: &str) -> Value {
+    let Some(surface) = app.popups().latest_menu().map(|m| m.wl_surface().clone()) else {
+        return error("no open menu");
+    };
+    let mut parts = args.split_whitespace();
+    let x = parts.next().and_then(|v| v.parse::<f64>().ok());
+    let y = parts.next().and_then(|v| v.parse::<f64>().ok());
+    let (Some(x), Some(y)) = (x, y) else {
+        return error("usage: menu-* <x> <y> [arg]");
+    };
+    if command == "menu-motion" {
+        app.pointer_motion(&surface, x, y);
+    } else {
+        app.pointer_button(&surface, x, y, parse_button(parts.next().unwrap_or("left")));
+    }
+    json!({ "ok": true })
+}
+
+/// `catcher-click`: a left click on the first click-catcher.
+fn catcher_click(app: &mut App) -> Value {
+    let Some(surface) = app
+        .popups()
+        .catchers()
+        .next()
+        .map(|c| c.wl_surface().clone())
+    else {
+        return error("no catcher");
+    };
+    app.pointer_button(&surface, 5.0, 5.0, BTN_LEFT);
+    json!({ "ok": true })
+}
+
+/// `left`/`right`/`middle` as a button code; anything else is left, as in C.
+fn parse_button(name: &str) -> u32 {
+    match name {
+        "right" => BTN_RIGHT,
+        "middle" => BTN_MIDDLE,
+        _ => BTN_LEFT,
     }
 }
 

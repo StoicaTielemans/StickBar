@@ -80,14 +80,20 @@ must pass.
   no-op check passes trivially until M9). The clock box is **pixel-identical** to the C bar's
   (grim of both, byte-equal PNGs). *Deferred:* `BAR.item_spacing` (no gap with a single box)
   and the other font sizes arrive with their first users.
-- [ ] **M4: Pointer, popup infrastructure + year calendar** (`wayland/pointer.c`,
-  `bar/popup_surface.c`, `bar/popup_host.c`, `render/popup_chrome.c`, `render/popup_style.h`,
-  `modules/clock/clock_calendar_popup.c`). The `wl_seat` pointer, with button/motion/scroll
-  routed through one dispatch path that the real pointer and the channel's `click`/`menu-*`
-  commands share. Transient layer surfaces, catchers with
-  `wp_viewport`, anchoring under the box, open/close/resize, and the `menu`/`snapshot`/`catcher-click`
-  commands. Read `docs/popups.md` and BUG.md "Popups" first. Tests: `test_popups`
-  (calendar part).
+- [x] **M4: Pointer, popup infrastructure + year calendar** (`wayland/pointer.c`,
+  `bar/popup_surface.c`, `bar/popup_host.c`, `render/popup_chrome.c`,
+  `modules/clock/clock_calendar_popup.c`, the click/menu parts of `testing/test_control.c`).
+  The `wl_seat` pointer, with presses and motion routed through one path (`App::pointer_button`
+  / `pointer_motion`) that the channel's `click`/`menu-click`/`menu-motion`/`catcher-click` also
+  use. Popup surfaces (overlay menu, top-layer catchers with a 1×1 buffer stretched by
+  `wp_viewporter`), `PopupHost`, the `Popups` routing table, the frame/card chrome, `menu` and
+  `snapshot`, and the calendar: chrono date maths, year navigation, hover. The shm buffer pair is
+  now shared by bars and popups (`wayland/shm_buffers.rs`). The calendar is pixel-identical to
+  the C bar's (opened, next year, hovered).
+  `test_popups` waits for the cpu/mem/volume boxes (M7, M9), so the new **`test_calendar`** guard
+  covers the clock's part plus navigation and hover. It passes against both bars, and fails
+  with the first-paint fix removed. *Moved on:* left-anchored opening → M7 (the first left-region
+  dropdown); host resize, button release and scroll → M9 (sliders, the mixer).
 - [ ] **M5: Hyprland + workspaces** (`hyprland/*`, `modules/workspaces/` ~560). Check that
   the same monitor gets the same `index` (ported in M2), and so the same workspace range, as
   in the C bar. The request
@@ -152,3 +158,8 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   CPU 0.02 % vs 0.08 %, private 4.5 MB vs 8.7 MB, RSS 21.4 MB vs 35.1 MB. Threads 2 (pango's
   fontconfig thread, which inherits the blocked SIGUSR1: checked in `/proc/*/task/*/status`).
   Release binary 787 KB.
+- 2026-11-11 · M4 · Pointer, popups, calendar. All 6 ported tests pass; calendar
+  pixel-identical to C in 3 states. Opening it adds 3.8 MB RSS (C: 3.7). `perf_compare
+  --against main` (C runs every module): CPU 0.02 % vs 0.10 %, private 4.5 MB vs 8.7 MB,
+  RSS 21.6 MB vs 34.8 MB. Release binary 912 KB. The real pointer was not exercised by the
+  tests (test bars take no input); it uses the same routing.

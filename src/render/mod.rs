@@ -6,6 +6,7 @@
 //! the right edge.
 
 pub(crate) mod module_box;
+pub(crate) mod popup_chrome;
 pub(crate) mod text;
 
 use crate::{config::COLORS, modules::clock::Clock};
@@ -24,6 +25,26 @@ pub(crate) struct BoxRect {
     pub(crate) h: f64,
 }
 
+impl BoxRect {
+    /// Whether (x, y) is inside: left/top edges included, right/bottom excluded,
+    /// so neighbouring boxes never both claim a point.
+    pub(crate) fn contains(self, x: f64, y: f64) -> bool {
+        x >= self.x && x < self.x + self.w && y >= self.y && y < self.y + self.h
+    }
+}
+
+/// Converts a length or position in px from cairo's `f64` to a whole number,
+/// dropping the fraction (like the C bar's `(int)` casts), for Wayland requests
+/// that take integers (surface sizes, margins). Out-of-range values saturate.
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    reason = "f64 -> i32 has no lossless conversion; `as` saturates and drops the fraction, which is the intent"
+)]
+pub(crate) fn whole_px(value: f64) -> i32 {
+    value as i32
+}
+
 /// Where one module's box was drawn. Each bar keeps the list from its last full
 /// redraw: the tests read it (`rects`), and from M4 clicks are hit-tested against it.
 #[derive(Clone, Copy, Debug)]
@@ -38,8 +59,8 @@ pub(crate) struct ModuleBox {
 /// One instance, owned by `App`, used by every monitor's bar.
 #[derive(Debug)]
 pub(crate) struct Renderer {
-    /// Shaped-text cache (pango).
-    text: TextCache,
+    /// Shaped-text cache (pango). Popups draw with it too.
+    pub(crate) text: TextCache,
     /// The clock module.
     pub(crate) clock: Clock,
 }

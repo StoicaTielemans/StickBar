@@ -1,5 +1,4 @@
-//! Font settings shared by every module (the C bar's `FONT`). Only the sizes
-//! in use so far; the rest (heading, display) arrive with the popups that use them.
+//! Font settings shared by every module (the C bar's `FONT`).
 
 /// Font family and sizes.
 #[derive(Debug)]
@@ -15,8 +14,12 @@ pub(crate) struct FontConfig {
     pub(crate) md: i32,
     /// Bar module box text.
     pub(crate) label: i32,
+    /// A dropdown header's icon column.
+    pub(crate) heading: i32,
     /// Large titles, e.g. the calendar's year.
     pub(crate) title: i32,
+    /// The power menu's big card icons (the reference uses 40).
+    pub(crate) display: i32,
 }
 
 /// The font settings, the same values as the C bar's `FONT`.
@@ -26,5 +29,7 @@ pub(crate) const FONT: FontConfig = FontConfig {
     sm: 10,
     md: 11,
     label: 14,
+    heading: 14,
     title: 16,
+    display: 32,
 };

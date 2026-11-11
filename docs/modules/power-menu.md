@@ -107,3 +107,23 @@ this bar has (the button, and the keybind below) always wants toggle semantics.
   `signalfd`: block everywhere, only the thread holding the `signalfd`
   itself ever actually reads a pending instance). NVML's init starts threads of its
   own, so this must stay ahead of `sysmon_client_init()`. The `hyprland.conf` line is in [`README.md`](../../README.md)'s "Power menu keybind".
+
+## In the Rust port
+
+- **Files:** `src/modules/powermenu/mod.rs` (`PowerMenu`), `src/modules/powermenu/arch_logo.rs`,
+  and the header/pill in `src/render/popup_chrome.rs`.
+- **The overlay is its own `PopupSurface` kind** (`PopupSurface::overlay`): full-screen,
+  overlay layer, compositor-sized. Its configure repaints it whenever the size changes, and
+  `size()` is `(0, 0)` until then, which is what `menu` reports, so `test_power_menu`'s
+  `wait_sized` works unchanged.
+- **Each paint starts from a fresh image**, so the C "darker on every hover" bug can't happen.
+  The dim is still painted with `Operator::Source` to state the intent.
+- **The guard lives in `App::pointer_button`** (`src/wayland/pointer.rs`): `PowerMenu::click`
+  only reports which card was picked and records it for `menu`, and the action runs only when
+  not in test mode. Don't remove it, not even temporarily.
+- **Restart/Shutdown don't block:** `systemctl` is spawned, and a thread named `power-action`
+  waits for it. That logs a failure (e.g. polkit refusing) and reaps the process. The thread
+  starts long after the signal source, so it inherits the blocked SIGUSR1. Logout goes through
+  `Dispatcher::exit()` (`dispatch hl.dsp.exit()`, falling back to `dispatch exit`).
+- **SIGUSR1** comes from calloop's signal source, set up first in `main.rs` since M1. Its
+  handler calls `App::toggle_power_menu()`.

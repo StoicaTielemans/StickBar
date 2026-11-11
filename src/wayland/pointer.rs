@@ -39,6 +39,7 @@ use smithay_client_toolkit::{
 use super::{App, Output};
 use crate::{
     bar::popup_surface::PopupEnv,
+    modules::powermenu::{PowerAction, PowerClick},
     render::{Action, BoxRect},
 };
 
@@ -77,6 +78,21 @@ impl Mouse {
 impl App {
     /// A button was pressed with the pointer at (x, y) on `surface`.
     pub(crate) fn pointer_button(&mut self, surface: &WlSurface, x: f64, y: f64, button: u32) {
+        // 0. The power menu covers whole monitors, so it goes first. Any button.
+        match self.popups.power.click(surface, x, y) {
+            PowerClick::NotOurs => {}
+            PowerClick::Absorbed | PowerClick::Closed(None) => return,
+            PowerClick::Closed(Some(action)) => {
+                // NEVER in test mode: the tests click every card, and that must
+                // not log out or reboot the machine. Don't remove this guard,
+                // not even temporarily (docs/modules/power-menu.md).
+                if !self.test_mode {
+                    self.run_power_action(action);
+                }
+                return;
+            }
+        }
+
         // 1. The calendar's own menu absorbs the click; its catcher closes it.
         if let Some(host) = self.popups.calendar.host() {
             if host.is_menu(surface) {
@@ -110,6 +126,18 @@ impl App {
             }
             return;
         }
+        // A left click on the Arch logo toggles the power menu.
+        let on_arch = bar.is_some_and(|bar| {
+            bar.boxes()
+                .iter()
+                .any(|b| b.name == "arch" && b.rect.contains(x, y))
+        });
+        if on_arch {
+            if button == BTN_LEFT {
+                self.toggle_power_menu();
+            }
+            return;
+        }
         let clock = bar
             .and_then(|bar| {
                 bar.boxes()
@@ -137,6 +165,13 @@ impl App {
     pub(crate) fn pointer_motion(&mut self, surface: &WlSurface, x: f64, y: f64) {
         if self
             .popups
+            .power
+            .motion(surface, x, y, &mut self.renderer.text)
+        {
+            return;
+        }
+        if self
+            .popups
             .calendar
             .host()
             .is_some_and(|h| h.is_menu(surface))
@@ -149,6 +184,19 @@ impl App {
     /// anything that reacts to a click (a dropdown's targets, a clickable bar
     /// box), the arrow everywhere else, catchers included.
     pub(crate) fn cursor_shape_at(&self, surface: &WlSurface, x: f64, y: f64) -> Shape {
+        if self
+            .popups
+            .power
+            .surfaces()
+            .iter()
+            .any(|s| s.wl_surface() == surface)
+        {
+            return if self.popups.power.is_card(surface, x, y) {
+                Shape::Pointer
+            } else {
+                Shape::Default
+            };
+        }
         if self
             .popups
             .calendar
@@ -201,6 +249,43 @@ impl App {
         self.pointer_motion(surface, -1.0, -1.0);
     }
 
+    /// Opens the power menu on every monitor, or closes it (the Arch logo's
+    /// left click and the SIGUSR1 keybind).
+    pub(crate) fn toggle_power_menu(&mut self) {
+        let Self {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter,
+            test_mode,
+            outputs,
+            popups,
+            renderer,
+            ..
+        } = self;
+        let env = PopupEnv {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter: viewporter.as_ref(),
+            test_mode: *test_mode,
+        };
+        popups.power.toggle(
+            &env,
+            outputs.iter().map(Output::wl_output),
+            &mut renderer.text,
+        );
+    }
+
+    /// Runs a power menu card's action.
+    fn run_power_action(&mut self, action: PowerAction) {
+        match action {
+            PowerAction::Logout => self.dispatcher.exit(),
+            PowerAction::Restart => spawn_systemctl("reboot"),
+            PowerAction::Shutdown => spawn_systemctl("poweroff"),
+        }
+    }
+
     /// Opens (or closes) the calendar under the clock box `trigger` on the
     /// monitor at `position` in `outputs`.
     fn toggle_calendar(&mut self, position: usize, trigger: BoxRect) {
@@ -236,6 +321,32 @@ impl App {
             outputs.iter().map(Output::wl_output),
             &mut renderer.text,
         );
+    }
+}
+
+/// Starts `systemctl <verb>` without blocking the event loop. A named thread
+/// waits for it, so a failure (e.g. polkit refusing) is logged and the process
+/// is reaped instead of lingering as a zombie. The thread starts long after the
+/// signal source, so it inherits the blocked SIGUSR1 like every other thread.
+fn spawn_systemctl(verb: &'static str) {
+    let mut child = match std::process::Command::new("systemctl").arg(verb).spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            eprintln!("stickBar: failed to launch 'systemctl {verb}': {err}");
+            return;
+        }
+    };
+    let waiter = std::thread::Builder::new()
+        .name("power-action".to_owned())
+        .spawn(move || match child.wait() {
+            Ok(status) if !status.success() => {
+                eprintln!("stickBar: 'systemctl {verb}' failed ({status})");
+            }
+            Ok(_) => {}
+            Err(err) => eprintln!("stickBar: waiting for 'systemctl {verb}' failed: {err}"),
+        });
+    if let Err(err) = waiter {
+        eprintln!("stickBar: couldn't start a thread to wait for 'systemctl {verb}': {err}");
     }
 }
 

@@ -9,8 +9,8 @@ instead this asks it, with the `cursor` / `menu-cursor` commands, which shape
 it would show at a point -- the exact decision the real pointer path uses.
 
 Checks:
-  - the clock box (right-click opens the calendar) and a workspace pill give
-    a hand; the gap just after the last pill (empty bar) the arrow. The pills
+  - the clock box (right-click opens the calendar), the Arch logo (opens
+    the power menu) and a workspace pill give a hand; the gap just after the last pill (empty bar) the arrow. The pills
     come from the real Hyprland (read only), so the pill check is skipped if
     the test monitor happens to show none;
   - with the calendar open, its chevrons and its year text give a hand, the
@@ -49,7 +49,11 @@ def main():
             return bar.must(command)["shape"]
 
         x, y, w, h = rects["clock"]
-        expect = [(f"cursor {bar.output} {x + w / 2:.1f} {y + h / 2:.1f}", "pointer", "the clock box")]
+        ax, _, aw, _ = rects["arch"]
+        expect = [
+            (f"cursor {bar.output} {x + w / 2:.1f} {y + h / 2:.1f}", "pointer", "the clock box"),
+            (f"cursor {bar.output} {ax + aw / 2:.1f} {h / 2:.1f}", "pointer", "the Arch logo"),
+        ]
         if "workspaces" in rects:
             wx, _, ww, _ = rects["workspaces"]
             expect += [
@@ -58,7 +62,8 @@ def main():
                 (f"cursor {bar.output} {wx + ww + 3:.1f} {h / 2:.1f}", "default", "the gap after the pills"),
             ]
         else:
-            expect.append((f"cursor {bar.output} 3 {h / 2:.1f}", "default", "the empty left end of the bar"))
+            # 3px into the gap after the Arch logo: nothing there without pills.
+            expect.append((f"cursor {bar.output} {ax + aw + 3:.1f} {h / 2:.1f}", "default", "the gap after the logo"))
         for command, wanted, what in expect:
             got = shape(command)
             if got != wanted:
@@ -82,7 +87,7 @@ def main():
 
     if failures:
         common.fail("; ".join(failures))
-    common.ok("hand over the clock, the workspace pills and the calendar's targets; "
+    common.ok("hand over the clock, the Arch logo, the workspace pills and the calendar's targets; "
               "arrow over the empty bar and the cards")
 
 

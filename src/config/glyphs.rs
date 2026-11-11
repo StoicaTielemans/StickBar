@@ -23,6 +23,15 @@ pub(crate) const ICON_CLOCK: char = '\u{f0954}';
 pub(crate) const ICON_CHEVRON_LEFT: char = '\u{f053}';
 /// `fa-chevron_right`, the calendar's next-year button.
 pub(crate) const ICON_CHEVRON_RIGHT: char = '\u{f054}';
+/// `linux-archlinux`, the bar's leftmost item (opens the power menu). In the
+/// font's ordinary (BMP) Private Use Area, unlike the 5-digit `md-` icons.
+pub(crate) const ICON_ARCH: char = '\u{f303}';
+/// `md-logout`, the power menu's Logout card.
+pub(crate) const ICON_LOGOUT: char = '\u{f0343}';
+/// `md-reload` (the C bar calls it "restart"), the power menu's Restart card.
+pub(crate) const ICON_RESTART: char = '\u{f0453}';
+/// `md-power`, the power menu's Shutdown card and its header icon.
+pub(crate) const ICON_POWER: char = '\u{f0425}';
 
 /// Workspace numerals 1-10 as kanji (一 二 三 四 五 六 七 八 九 十), matching the
 /// reference bar. These are CJK characters, not Nerd Font icons, so pango

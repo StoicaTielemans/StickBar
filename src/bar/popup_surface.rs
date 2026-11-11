@@ -47,6 +47,9 @@ enum Kind {
     },
     /// A full-monitor transparent click-catcher.
     Catcher,
+    /// A full-monitor surface that's drawn (the power menu), sized by the
+    /// compositor. It's its own click-catcher: no separate catchers.
+    Overlay,
 }
 
 /// Everything shared between [`PopupSurface::menu`] and [`PopupSurface::catcher`].
@@ -111,6 +114,24 @@ impl PopupSurface {
         }
     }
 
+    /// Creates a drawn full-monitor surface on `output`'s overlay layer (the
+    /// power menu). Its size comes from the compositor: the monitor minus the
+    /// bars' reserved strips, so it's only known at the first configure.
+    pub(crate) fn overlay(env: &PopupEnv<'_>, output: &WlOutput) -> Self {
+        let layer = new_layer(env, output, Layer::Overlay);
+        layer.set_size(0, 0);
+        layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+        layer.commit();
+        Self {
+            layer,
+            kind: Kind::Overlay,
+            viewport: None,
+            buffers: None,
+            size: (0, 0),
+            needs_paint: false,
+        }
+    }
+
     /// Creates a transparent catcher covering all of `output`. Any click on it
     /// closes the dropdown it belongs to.
     pub(crate) fn catcher(env: &PopupEnv<'_>, output: &WlOutput) -> Self {
@@ -138,16 +159,24 @@ impl PopupSurface {
     }
 
     /// A menu's size as requested, for the tests' `menu` command.
+    /// For an overlay, its configured size ((0, 0) until the first configure).
     pub(crate) const fn menu_size(&self) -> Option<(i32, i32)> {
         match self.kind {
             Kind::Menu { width, height } => Some((width, height)),
+            Kind::Overlay => Some(self.size),
             Kind::Catcher => None,
         }
     }
 
+    /// The size as last configured, in px ((0, 0) before the first configure).
+    pub(crate) const fn size(&self) -> (i32, i32) {
+        self.size
+    }
+
     /// Handles a configure. Catchers paint themselves (transparent) here. For
     /// a menu, returns true if its owner asked for a paint before this first
-    /// configure and must now paint it.
+    /// configure and must now paint it; for an overlay, also whenever its
+    /// size changed (its layout depends on it).
     pub(crate) fn configure(&mut self, shm: &Shm, width: u32, height: u32) -> bool {
         let (Ok(width), Ok(height)) = (i32::try_from(width), i32::try_from(height)) else {
             return false;
@@ -178,6 +207,14 @@ impl PopupSurface {
                     self.allocate(shm, width, height);
                 }
                 std::mem::take(&mut self.needs_paint)
+            }
+            (Kind::Overlay, _) => {
+                // Its layout depends on its size, so a new size means a repaint.
+                let resized = self.size != (width, height);
+                if resized {
+                    self.allocate(shm, width, height);
+                }
+                std::mem::take(&mut self.needs_paint) || resized
             }
         }
     }

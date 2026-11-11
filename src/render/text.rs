@@ -83,6 +83,57 @@ impl TextCache {
             .map_or((0.0, 0.0), |cached| (cached.width, cached.height))
     }
 
+    /// The *ink* width in px of `text`: the pixels the glyphs actually cover,
+    /// rather than the logical (advance) width. For most text the two are
+    /// close, but the Arch logo glyph draws 14px of ink on an 8px advance, and
+    /// a box sized from the logical width cut it off (BUG.md, "Arch logo cut off").
+    pub(crate) fn ink_width(&mut self, text: &str, size: i32, bold: bool) -> f64 {
+        self.layout(text, size, bold).map_or(0.0, |cached| {
+            let (ink, _logical) = cached.layout.pixel_extents();
+            f64::from(ink.width())
+        })
+    }
+
+    /// `text`, shortened to fit `max_w` px: the longest prefix (cut at a
+    /// character boundary, never inside one) plus `...`, or `text` itself if
+    /// it fits. Found by binary search. The candidates are measured on a
+    /// throwaway layout so they don't push real entries out of the cache.
+    pub(crate) fn truncate(&mut self, text: &str, max_w: f64, size: i32, bold: bool) -> String {
+        if self.width(text, size, bold) <= max_w {
+            return text.to_owned();
+        }
+        // Byte offsets of every character boundary, including the end.
+        let bounds: Vec<usize> = text
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain(std::iter::once(text.len()))
+            .collect();
+        let shortened = |chars: usize| {
+            let prefix = bounds
+                .get(chars)
+                .and_then(|&end| text.get(..end))
+                .unwrap_or_default();
+            format!("{prefix}...")
+        };
+        let scratch = pango::Layout::new(&self.context);
+        scratch.set_font_description(Some(&self.font(size, bold)));
+        let fits = |candidate: &str| {
+            scratch.set_text(candidate);
+            f64::from(scratch.pixel_size().0) <= max_w
+        };
+        // Keep `low` chars: always fits (or is 0); `high` is the most it could be.
+        let (mut low, mut high) = (0, bounds.len().saturating_sub(1));
+        while low < high {
+            let mid = (low + high).div_ceil(2);
+            if fits(&shortened(mid)) {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        shortened(low)
+    }
+
     /// Draws `text` starting at `x`, vertically centered in the row `y..y + h`.
     pub(crate) fn draw_left(
         &mut self,
@@ -222,4 +273,21 @@ fn show(
     cr.move_to(x, y);
     pangocairo::functions::show_layout(cr, &cached.layout);
     cr.restore()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TextCache;
+
+    #[test]
+    fn truncate_keeps_what_fits_and_never_splits_a_character() {
+        let mut text = TextCache::new().expect("pango");
+        let full = "Tuesday, 3 November \u{b7} caf\u{e9}";
+        assert_eq!(text.truncate(full, 10_000.0, 11, false), full);
+        let width = text.width("Tuesday...", 11, false);
+        let cut = text.truncate(full, width, 11, false);
+        assert_eq!(cut, "Tuesday...");
+        // Even with no room at all, the result is valid UTF-8 ending in "...".
+        assert_eq!(text.truncate(full, 0.0, 11, false), "...");
+    }
 }

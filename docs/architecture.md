@@ -38,6 +38,10 @@ src/
 │   └── dispatch.rs         Dispatcher: Lua form first, classic fallback, cached
 ├── modules/
 │   ├── workspaces/mod.rs   Workspaces: occupied/focused from Hyprland, kanji pills
+│   ├── powermenu/
+│   │   ├── mod.rs          PowerMenu: full-screen overlay per monitor, cards, the
+│   │   │                   record-only test guard (actions run in wayland/pointer.rs)
+│   │   └── arch_logo.rs    the sapphire Arch block (sized from the glyph's ink)
 │   └── clock/
 │       ├── mod.rs          Clock: cached text, tick(), its box
 │       ├── calendar.rs     CalendarPopup: the year calendar (chrono date maths)
@@ -49,7 +53,8 @@ src/
 │   ├── text.rs             TextCache: pango context, font descriptions, LRU of 64
 │   │                       shaped layouts; all text goes through here
 │   ├── module_box.rs       draw_rect() and label(): the bordered module box
-│   └── popup_chrome.rs     draw_frame() and draw_card(): the dropdown look
+│   ├── popup_chrome.rs     draw_frame(), draw_card(), draw_header(), draw_pill()
+│   └── popup_style.rs      shared dropdown layout tokens (margins, header, pill)
 ├── testing/mod.rs          the test-control channel on stdin (STICKBAR_TEST_CONTROL=1)
 └── config/
     ├── colors.rs           Color + the Catppuccin Mocha palette

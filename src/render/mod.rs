@@ -2,16 +2,17 @@
 //!
 //! The bar has three regions, as in the C bar: left-region modules laid out
 //! left to right from x = 0, right-region ones right to left from the right
-//! edge, and the media box centered between. So far: the workspace pills on
-//! the left, the clock on the right.
+//! edge, and the media box centered between. So far: the Arch logo and the
+//! workspace pills on the left, the clock on the right.
 
 pub(crate) mod module_box;
 pub(crate) mod popup_chrome;
+pub(crate) mod popup_style;
 pub(crate) mod text;
 
 use crate::{
     config::{BAR, COLORS},
-    modules::{clock::Clock, workspaces::Workspaces},
+    modules::{clock::Clock, powermenu::arch_logo, workspaces::Workspaces},
 };
 use text::TextCache;
 
@@ -127,7 +128,14 @@ impl Renderer {
         // Left region, laid out from x = 0 rightwards. Each module returns
         // where the next one starts (its right edge + item_spacing), so its
         // own box is everything up to there minus that gap (C's record_left).
-        let left = 0.0;
+        let arch = arch_logo::render(cr, &mut self.text, 0.0, (0.0, height))?;
+        layout.boxes.push(ModuleBox {
+            name: "arch",
+            rect: arch,
+            // Left click opens the power menu.
+            clickable: true,
+        });
+        let left = arch.x + arch.w + BAR.item_spacing;
         let (next, pills) =
             self.workspaces
                 .render(cr, &mut self.text, left, output_index, (0.0, height))?;

@@ -109,9 +109,8 @@ fn main() -> ExitCode {
         .handle()
         .insert_source(signals, |event, (), state| {
             if event.signal() == Signal::SIGUSR1 {
-                // The power-menu keybind's signal. Caught (rather than left to kill
-                // the bar) from the start; the menu itself arrives in M6.
-                eprintln!("stickBar: SIGUSR1 received (power menu not ported yet)");
+                // The power-menu keybind (`pkill -SIGUSR1 -x stickBar`, see README).
+                state.toggle_power_menu();
             } else {
                 state.exit = true; // SIGINT/SIGTERM: stop after this pass, exit 0
             }

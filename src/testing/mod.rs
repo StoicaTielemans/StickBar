@@ -15,11 +15,14 @@
 //! rects <name|index>     -> {"ok":true,"rects":{module:[x,y,w,h],...}}
 //! click <output> <x> <y> <left|right|middle>
 //!                        -> a click on that monitor's bar, bar-local px
-//! menu                   -> {"ok":true,"open":bool,"width","height","catchers"}
+//! menu                   -> {"ok":true,"open":bool,"width","height","catchers",
+//!                            "power_last_action"}
 //! menu-click <x> <y> [button] / menu-motion <x> <y>
 //!                        -> a click / move on the open menu, menu-local px
 //! catcher-click          -> a click on a click-catcher (closes the dropdown)
 //! snapshot <png>         -> the open menu's picture, drawn again into a PNG
+//! target power <logout|restart|shutdown|corner|header>
+//!                        -> {"ok":true,"x","y"}: a point on the power menu
 //! cursor <output> <x> <y> / menu-cursor <x> <y>
 //!                        -> {"ok":true,"shape":"pointer"|"default"}: the cursor
 //!                           the bar would show there (Rust only)
@@ -146,6 +149,7 @@ fn dispatch(app: &mut App, line: &str) -> Value {
         "menu-click" | "menu-motion" if !rest.is_empty() => menu_input(app, command, rest),
         "catcher-click" => catcher_click(app),
         "cursor" if !rest.is_empty() => cursor(app, rest),
+        "target" if !rest.is_empty() => target(app, rest),
         "menu-cursor" if !rest.is_empty() => menu_cursor(app, rest),
         "snapshot" if !rest.is_empty() => match app.snapshot(rest) {
             Ok(()) => json!({ "ok": true }),
@@ -182,11 +186,28 @@ fn click(app: &mut App, args: &str) -> Value {
 /// `menu`: whether a dropdown is open, its size, and how many catchers exist.
 fn menu(app: &App) -> Value {
     let catchers = app.popups().catchers().count();
+    let last = app.popups().power.last_action();
     match app.popups().latest_menu().and_then(PopupSurface::menu_size) {
-        Some((width, height)) => {
-            json!({ "ok": true, "open": true, "width": width, "height": height, "catchers": catchers })
+        Some((width, height)) => json!({
+            "ok": true, "open": true, "width": width, "height": height,
+            "catchers": catchers, "power_last_action": last,
+        }),
+        None => {
+            json!({ "ok": true, "open": false, "catchers": catchers, "power_last_action": last })
         }
-        None => json!({ "ok": true, "open": false, "catchers": catchers }),
+    }
+}
+
+/// `target <kind> <part>`: where a named control is, in menu-local px. Only
+/// the power menu's so far; the other kinds come with their dropdowns.
+fn target(app: &App, args: &str) -> Value {
+    let found = match args.split_once(' ') {
+        Some(("power", part)) => app.popups().power.target(part.trim()),
+        _ => None,
+    };
+    match found {
+        Some((x, y)) => json!({ "ok": true, "x": x, "y": y }),
+        None => error("target not found"),
     }
 }
 

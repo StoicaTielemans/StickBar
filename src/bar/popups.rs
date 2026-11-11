@@ -8,13 +8,18 @@
 use smithay_client_toolkit::{reexports::client::protocol::wl_surface::WlSurface, shm::Shm};
 
 use super::{popup_host::PopupHost, popup_surface::PopupSurface};
-use crate::{modules::clock::calendar::CalendarPopup, render::text::TextCache};
+use crate::{
+    modules::{clock::calendar::CalendarPopup, powermenu::PowerMenu},
+    render::text::TextCache,
+};
 
 /// All dropdowns. New kinds are added as their modules are ported.
 #[derive(Default)]
 pub(crate) struct Popups {
     /// The clock's year calendar.
     pub(crate) calendar: CalendarPopup,
+    /// The power menu (Arch logo / SIGUSR1).
+    pub(crate) power: PowerMenu,
 }
 
 impl Popups {
@@ -27,6 +32,12 @@ impl Popups {
         (width, height): (u32, u32),
         text: &mut TextCache,
     ) -> bool {
+        if let Some(overlay) = self.power.surface_mut(surface) {
+            if overlay.configure(shm, width, height) {
+                self.power.paint_all(text);
+            }
+            return true;
+        }
         let Some(popup) = self
             .calendar
             .host_mut()
@@ -42,6 +53,9 @@ impl Popups {
 
     /// The compositor closed popup surface `surface`.
     pub(crate) fn closed(&mut self, surface: &WlSurface) {
+        if let Some(overlay) = self.power.surface_mut(surface) {
+            overlay.closed();
+        }
         if let Some(popup) = self
             .calendar
             .host_mut()
@@ -51,10 +65,14 @@ impl Popups {
         }
     }
 
-    /// The most recently opened menu still open, for the tests' `menu`,
-    /// `menu-*` and `snapshot` commands.
+    /// The menu the tests' `menu`, `menu-*` and `snapshot` commands act on:
+    /// the power menu's first overlay when it's open (it covers everything),
+    /// otherwise the open dropdown.
     pub(crate) fn latest_menu(&self) -> Option<&PopupSurface> {
-        self.calendar.menu()
+        self.power
+            .surfaces()
+            .first()
+            .or_else(|| self.calendar.menu())
     }
 
     /// Every open catcher, across all dropdowns.
@@ -67,6 +85,9 @@ impl Popups {
 
     /// Saves the latest open menu's picture as a PNG at `path`.
     pub(crate) fn snapshot(&mut self, path: &str, text: &mut TextCache) -> Result<(), String> {
+        if self.power.is_open() {
+            return self.power.snapshot(path, text);
+        }
         self.calendar.snapshot(path, text)
     }
 }

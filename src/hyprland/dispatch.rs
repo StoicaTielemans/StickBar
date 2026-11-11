@@ -57,6 +57,17 @@ impl Dispatcher {
         );
     }
 
+    /// Ends the Hyprland session (the power menu's Logout). `exit` takes no
+    /// arguments, but it still goes through the same probe-and-cache path.
+    pub(crate) fn exit(&mut self) {
+        self.send(
+            "dispatch hl.dsp.exit()",
+            "dispatch exit",
+            "'dispatch exit'",
+            super::request,
+        );
+    }
+
     /// Sends `lua`, or `classic` if that's rejected (or known to be needed).
     /// `request` sends one command and returns the reply (`None` = no reply);
     /// it's a parameter so the caching rules can be unit tested.

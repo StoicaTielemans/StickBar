@@ -105,10 +105,16 @@ must pass.
   (`tests/lib/fake_hyprland.py`), so a click never switches the real workspace. It passes against
   both bars. Both bars give DP-2 index 0, and the pills are pixel-identical to C's on the real
   desktop.
-- [ ] **M6: Arch logo + power menu + SIGUSR1** (`modules/powermenu/*` ~450). This milestone is
-  placed **before** any milestone that starts a thread, so the signal-first ordering is
-  proven while the bar has a single thread. Keep the test guard (record-only actions). Tests:
-  `test_power_menu`.
+- [x] **M6: Arch logo + power menu + SIGUSR1** (`modules/powermenu/*`, the header/pill
+  parts of `render/popup_chrome.c`, `popup_style.h`, ink width and truncation from
+  `module_box.c`). The Arch logo (sized from the glyph's ink), the power menu as a full-screen
+  overlay per monitor (a new `PopupSurface::overlay` kind, centered on the configured size),
+  the header and pill chrome, Logout through `Dispatcher::exit`, and Restart/Shutdown through
+  `systemctl`, spawned and reaped by a named thread (never blocking). SIGUSR1 toggles it. The
+  test guard is kept: in test mode a card only records its action. **The C bar's own
+  `test_power_menu` passes unchanged** (SIGUSR1 blocked in every thread, keybind open/close,
+  centering, hover colours, the record-only guard). The Arch logo and the overlay (plain and
+  hovered) are pixel-identical to C.
 - [ ] **M7: CPU / memory / GPU** (`sysmon/sysmon_client.c` ~1.1k, `modules/{cpu,mem,gpu}/`,
   `render/{braille_graph,meter_bar,stat_card}.c`; ~2.4k). The shared 5 s poll, /proc parsing,
   NVML, the three dropdowns, graphs and meters, and `refresh`/`dump` commands. Tests:
@@ -195,3 +201,8 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   `perf_compare --against main` (C runs every module): CPU 0.03 % vs 0.05 %, private 5.7 MB
   vs 8.6 MB, RSS 25.5 MB vs 35.0 MB. Release binary 984 KB. A real workspace switch by
   clicking was not tested (the tests use the fake); it's left for the user to try.
+- 2026-11-11 · M6 · Arch logo + power menu. All 9 tests pass (20 unit tests), including
+  C's `test_power_menu` unchanged. Logo and overlay pixel-identical to C. `perf_compare
+  --against main` (C runs every module): CPU 0.02 % vs 0.07 %, private 5.5 MB vs 8.6 MB,
+  RSS 25.3 MB vs 35.2 MB. Release binary 1.1 MB. The real Logout/Restart/Shutdown calls are
+  untested, as in C (the guard).

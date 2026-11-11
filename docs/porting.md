@@ -219,6 +219,8 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   untested, as in C (the guard).
 - 2026-11-11 · M7a · Memory + shared stat machinery. C's memory checks pass (400 MB child →
   404 MB); dropdown matches C's size and layout; all 9 tests pass (29 unit tests). Opening the
-  dropdown adds 3.4 MB RSS (C: 2.3): each paint draws into a temporary image and copies it, and
-  the allocator may keep that freed block. `perf_compare --against main` (C runs every module):
+  dropdown adds about 2.36 MB RSS (C: 2.25), measured per memory region: 740 KB shm buffer
+  (returned on close) plus fonts/libraries and heap, almost equal in both. A first measurement
+  said 3.4 MB, but that was an artifact: an earlier open/snapshot in the same run was still
+  counted. `perf_compare --against main` (C runs every module):
   CPU 0.05 % vs 0.05 % (both poll every 5 s now), private 5.6 MB vs 8.6 MB, RSS 25.6 MB vs 35.0 MB.

@@ -58,6 +58,7 @@ Read the file for what you're touching before changing it.
 
 | Read | When | Covers |
 |---|---|---|
+| [`docs/porting.md`](docs/porting.md) | Starting or continuing any porting work | Milestone order, crate choices, per-module checklist, progress |
 | [`docs/architecture.md`](docs/architecture.md) | Finding your way around, or changing how redraws work | File layout, `AppContext`/`Output`, redraw path, measured performance; `main.c`, `bar/bar_surface.c`, `render/` |
 | [`docs/testing.md`](docs/testing.md) | Testing or verifying anything | Test-control channel, cross-reference commands, screenshots, multi-monitor gotcha; `testing/`, `tests/` |
 | [`tests/README.md`](tests/README.md) | Adding a test, or finding what guards something | What each test checks and what bug it catches |
@@ -144,7 +145,7 @@ each lint next to it. It makes these build errors:
 
 ## Scope / roadmap
 
-Port order and progress belong in this section as they're decided. Every module keeps
+Port order, crate choices and progress: [`docs/porting.md`](docs/porting.md). Every module keeps
 the C bar's shape: a `src/modules/<name>/` directory and a render function taking the
 cairo context, x and the box's top and height, returning the next x. If it needs live
 data, its fd joins the single main event loop, just like every fd in the C bar's

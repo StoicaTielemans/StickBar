@@ -40,6 +40,7 @@ use super::{App, Output};
 use crate::{
     audio::{Command, Kind, VOLUME_STEP},
     bar::popup_surface::PopupEnv,
+    config::{COLORS, Color},
     modules::powermenu::{PowerAction, PowerClick},
     render::{Action, BoxRect},
 };
@@ -127,6 +128,26 @@ impl App {
             return;
         }
 
+        // The device dropdown: its cards take left presses (meter, mute,
+        // set default); its catcher closes it.
+        if let Some(host) = self.popups.device.host() {
+            if host.is_menu(surface) {
+                if button == BTN_LEFT {
+                    let command = self.popups.device.press(
+                        (x, y),
+                        &self.renderer.audio,
+                        &mut self.renderer.text,
+                    );
+                    self.send_audio(command);
+                }
+                return;
+            }
+            if host.is_catcher(surface) {
+                self.popups.device.close();
+                return;
+            }
+        }
+
         // The network dropdown, likewise: nothing clickable inside.
         if let Some(host) = self.popups.network.host() {
             if host.is_menu(surface) {
@@ -182,13 +203,49 @@ impl App {
             // A left click on volume or mic flips the default device's mute.
             ("volume", BTN_LEFT) => self.audio.send(Command::ToggleDefaultMute(Kind::Sink)),
             ("mic", BTN_LEFT) => self.audio.send(Command::ToggleDefaultMute(Kind::Source)),
+            // A right click opens the device dropdown for that side.
+            ("volume", BTN_RIGHT) => {
+                self.open_device_popup(position, rect, (Kind::Sink, COLORS.sky));
+            }
+            ("mic", BTN_RIGHT) => {
+                self.open_device_popup(position, rect, (Kind::Source, COLORS.blue));
+            }
             _ => {}
         }
     }
 
+    /// Sends an audio command, if there is one.
+    fn send_audio(&mut self, command: Option<Command>) {
+        if let Some(command) = command {
+            self.audio.send(command);
+        }
+    }
+
+    /// A button was released, wherever: ends a volume drag. Wayland keeps
+    /// sending a dragging pointer's events to the surface it pressed on, but
+    /// the release is handled unconditionally anyway, so a drag always ends.
+    pub(crate) fn pointer_release(&mut self) {
+        self.popups
+            .device
+            .release(&self.renderer.audio, &mut self.renderer.text);
+    }
+
     /// One scroll step at (x, y) on `surface`: `up` is away from the user
-    /// (raises a volume). Only the volume and mic boxes use it, ±5 % each.
+    /// (raises a volume). ±5 % on a device card, or on the volume or mic box.
     pub(crate) fn pointer_scroll(&mut self, surface: &WlSurface, x: f64, y: f64, up: bool) {
+        if self
+            .popups
+            .device
+            .host()
+            .is_some_and(|h| h.is_menu(surface))
+        {
+            let command = self
+                .popups
+                .device
+                .scroll((x, y), up, &mut self.renderer.text);
+            self.send_audio(command);
+            return;
+        }
         let bar = self
             .outputs
             .iter()
@@ -215,6 +272,22 @@ impl App {
 
     /// The pointer moved to (x, y) on `surface`: hover highlights.
     pub(crate) fn pointer_motion(&mut self, surface: &WlSurface, x: f64, y: f64) {
+        // The device dropdown: a meter drag follows the pointer (which keeps
+        // reporting to the menu surface while the button is held), otherwise
+        // hover highlights.
+        if self
+            .popups
+            .device
+            .host()
+            .is_some_and(|h| h.is_menu(surface))
+        {
+            let command =
+                self.popups
+                    .device
+                    .motion((x, y), &self.renderer.audio, &mut self.renderer.text);
+            self.send_audio(command);
+            return;
+        }
         if self
             .popups
             .power
@@ -256,6 +329,19 @@ impl App {
             .is_some_and(|h| h.is_menu(surface))
         {
             return if self.popups.calendar.is_target(x, y) {
+                Shape::Pointer
+            } else {
+                Shape::Default
+            };
+        }
+        // Every part of a device card reacts to a click.
+        if self
+            .popups
+            .device
+            .host()
+            .is_some_and(|h| h.is_menu(surface))
+        {
+            return if self.popups.device.over_card(x, y) {
                 Shape::Pointer
             } else {
                 Shape::Default
@@ -368,6 +454,47 @@ impl App {
                 .mem
                 .open(&env, output.wl_output(), trigger, all, sysmon, text),
         }
+    }
+
+    /// Opens the device dropdown for `kind` under the box `trigger` on the
+    /// monitor at `position` in `outputs`, in the box's colour.
+    fn open_device_popup(
+        &mut self,
+        position: usize,
+        trigger: BoxRect,
+        (kind, accent): (Kind, Color),
+    ) {
+        let Some(output_width) = self.outputs.get(position).map(|o| self.output_size(o).0) else {
+            return;
+        };
+        let Self {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter,
+            test_mode,
+            outputs,
+            popups,
+            renderer,
+            ..
+        } = self;
+        let Some(output) = outputs.get(position) else {
+            return;
+        };
+        let env = PopupEnv {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter: viewporter.as_ref(),
+            test_mode: *test_mode,
+        };
+        popups.device.open(
+            &env,
+            (output.wl_output(), output_width),
+            (trigger, kind, accent),
+            outputs.iter().map(Output::wl_output),
+            (&renderer.audio, &mut renderer.text),
+        );
     }
 
     /// Opens the network dropdown under the box `trigger` on the monitor at
@@ -603,8 +730,7 @@ impl PointerHandler for App {
                         self.pointer_scroll(&event.surface, x, y, up);
                     }
                 }
-                // Releases arrive with their first users (the dropdown drags, M9b).
-                PointerEventKind::Release { .. } => {}
+                PointerEventKind::Release { .. } => self.pointer_release(),
             }
         }
     }

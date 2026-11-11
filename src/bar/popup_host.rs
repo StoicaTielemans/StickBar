@@ -7,8 +7,11 @@
 //! Right-region boxes open leftwards from their right edge (`open_right`),
 //! left-region ones rightwards from their left edge (`open_left`); the wrong
 //! one pushes the dropdown off-screen (BUG.md, "CPU/GPU/memory dropdowns
-//! off-screen"). Resizing while open arrives with the first dropdown whose
-//! height changes (the mixer, M9).
+//! off-screen").
+//!
+//! **Resizing** (`resize`) recreates the menu surface at the new size instead
+//! of calling `set_size` on it: Hyprland unmapped a layer surface that shrank
+//! in place (the C bar's `popup_host_resize`, `docs/popups.md`).
 
 use smithay_client_toolkit::{
     reexports::client::protocol::{wl_output::WlOutput, wl_surface::WlSurface},
@@ -29,6 +32,9 @@ pub(crate) struct PopupHost {
     /// the menu's: with a catcher on one monitor only, a click on another would
     /// leave the menu stuck open.
     catchers: Vec<PopupSurface>,
+    /// The monitor the menu is on, its margins and anchor: what `resize`
+    /// needs to put a new menu surface in the same place.
+    placement: (WlOutput, (i32, i32, i32, i32), Anchor),
 }
 
 impl PopupHost {
@@ -48,15 +54,12 @@ impl PopupHost {
         // the C bar: without it the first popup sat a full bar-height too low.
         let top = whole_px(trigger.y + trigger.h) - i32::from(BAR.height);
         let right = (output_width - whole_px(trigger.x + trigger.w)).max(0);
-        let menu = PopupSurface::menu(
-            env,
-            output,
-            size,
+        let placement = (
+            output.clone(),
             (top, right, 0, 0),
             Anchor::TOP | Anchor::RIGHT,
         );
-        let catchers = all_outputs.map(|o| PopupSurface::catcher(env, o)).collect();
-        Self { menu, catchers }
+        Self::open(env, placement, size, all_outputs)
     }
 
     /// Opens a `width` x `height` dropdown on `output` under the box
@@ -72,15 +75,36 @@ impl PopupHost {
         // The same bar-height correction as `open_right`.
         let top = whole_px(trigger.y + trigger.h) - i32::from(BAR.height);
         let left = whole_px(trigger.x);
-        let menu = PopupSurface::menu(
-            env,
-            output,
-            size,
+        let placement = (
+            output.clone(),
             (top, 0, 0, left),
             Anchor::TOP | Anchor::LEFT,
         );
+        Self::open(env, placement, size, all_outputs)
+    }
+
+    /// Creates the menu at `placement` and the catchers.
+    fn open<'o>(
+        env: &PopupEnv<'_>,
+        placement: (WlOutput, (i32, i32, i32, i32), Anchor),
+        size: (i32, i32),
+        all_outputs: impl Iterator<Item = &'o WlOutput>,
+    ) -> Self {
+        let (output, margins, anchor) = &placement;
+        let menu = PopupSurface::menu(env, output, size, *margins, *anchor);
         let catchers = all_outputs.map(|o| PopupSurface::catcher(env, o)).collect();
-        Self { menu, catchers }
+        Self {
+            menu,
+            catchers,
+            placement,
+        }
+    }
+
+    /// Gives the menu a new size by replacing its surface (see the module
+    /// doc); the catchers stay. The new surface paints after its configure.
+    pub(crate) fn resize(&mut self, env: &PopupEnv<'_>, size: (i32, i32)) {
+        let (output, margins, anchor) = &self.placement;
+        self.menu = PopupSurface::menu(env, output, size, *margins, *anchor);
     }
 
     /// The menu surface.

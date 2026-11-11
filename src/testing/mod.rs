@@ -16,13 +16,18 @@
 //! click <output> <x> <y> <left|right|middle>
 //!                        -> a click on that monitor's bar, bar-local px
 //! menu                   -> {"ok":true,"open":bool,"width","height","catchers",
-//!                            "power_last_action"}
+//!                            "power_last_action","device_cards"}
 //! menu-click <x> <y> [button] / menu-motion <x> <y>
 //!                        -> a click / move on the open menu, menu-local px
+//! menu-press <x> <y> [button] / menu-release / menu-scroll <x> <y> <+1|-1>
+//!                        -> press (a drag follows with menu-motion), release,
+//!                           one wheel step
 //! catcher-click          -> a click on a click-catcher (closes the dropdown)
 //! snapshot <png>         -> the open menu's picture, drawn again into a PNG
 //! target power <logout|restart|shutdown|corner|header>
-//!                        -> {"ok":true,"x","y"}: a point on the power menu
+//! target device <meter|mute|body> <fraction> <description...>
+//!                        -> {"ok":true,"x","y"}: a point on the power menu or
+//!                           a device card
 //! refresh <mem|cpu|cpu-reset|gpu|poll>
 //!                        -> run a dropdown's details refresh (cpu-reset: start
 //!                           a fresh process window first), or a full 5 s poll
@@ -155,7 +160,13 @@ fn dispatch(app: &mut App, line: &str) -> Value {
         "rects" if !rest.is_empty() => rects(app, rest),
         "click" if !rest.is_empty() => click(app, rest),
         "menu" => menu(app),
-        "menu-click" | "menu-motion" if !rest.is_empty() => menu_input(app, command, rest),
+        "menu-click" | "menu-motion" | "menu-press" | "menu-scroll" if !rest.is_empty() => {
+            menu_input(app, command, rest)
+        }
+        "menu-release" => {
+            app.pointer_release();
+            json!({ "ok": true })
+        }
         "catcher-click" => catcher_click(app),
         "cursor" if !rest.is_empty() => cursor(app, rest),
         "target" if !rest.is_empty() => target(app, rest),
@@ -198,14 +209,21 @@ fn click(app: &mut App, args: &str) -> Value {
 fn menu(app: &App) -> Value {
     let catchers = app.popups().catchers().count();
     let last = app.popups().power.last_action();
+    // -1 when the device dropdown is closed, as in C.
+    let device_cards = app
+        .popups()
+        .device
+        .card_count()
+        .map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX));
     match app.popups().latest_menu().and_then(PopupSurface::menu_size) {
         Some((width, height)) => json!({
             "ok": true, "open": true, "width": width, "height": height,
-            "catchers": catchers, "power_last_action": last,
+            "catchers": catchers, "power_last_action": last, "device_cards": device_cards,
         }),
-        None => {
-            json!({ "ok": true, "open": false, "catchers": catchers, "power_last_action": last })
-        }
+        None => json!({
+            "ok": true, "open": false, "catchers": catchers, "power_last_action": last,
+            "device_cards": device_cards,
+        }),
     }
 }
 
@@ -389,11 +407,24 @@ fn dump_net(n: &Network) -> Value {
     })
 }
 
-/// `target <kind> <part>`: where a named control is, in menu-local px. Only
-/// the power menu's so far; the other kinds come with their dropdowns.
-fn target(app: &App, args: &str) -> Value {
+/// `target <kind> <part> [...]`: where a named control is, in menu-local px:
+/// `power <part>`, or `device <part> <fraction> <description...>`.
+fn target(app: &mut App, args: &str) -> Value {
     let found = match args.split_once(' ') {
         Some(("power", part)) => app.popups().power.target(part.trim()),
+        Some(("device", rest)) => {
+            let mut parts = rest.splitn(3, ' ');
+            match (
+                parts.next(),
+                parts.next().and_then(|f| f.parse::<f64>().ok()),
+                parts.next(),
+            ) {
+                (Some(part), Some(fraction), Some(description)) => {
+                    app.device_target((description, part, fraction))
+                }
+                _ => None,
+            }
+        }
         _ => None,
     };
     match found {
@@ -413,10 +444,25 @@ fn menu_input(app: &mut App, command: &str, args: &str) -> Value {
     let (Some(x), Some(y)) = (x, y) else {
         return error("usage: menu-* <x> <y> [arg]");
     };
-    if command == "menu-motion" {
-        app.pointer_motion(&surface, x, y);
-    } else {
-        app.pointer_button(&surface, x, y, parse_button(parts.next().unwrap_or("left")));
+    match command {
+        "menu-motion" => app.pointer_motion(&surface, x, y),
+        // menu-scroll <x> <y> <+1|-1>: one wheel step, +1 = up.
+        "menu-scroll" => {
+            let up = parts
+                .next()
+                .and_then(|v| v.parse::<i32>().ok())
+                .unwrap_or(0)
+                > 0;
+            app.pointer_scroll(&surface, x, y, up);
+        }
+        // menu-press: the button stays down (a drag can follow with
+        // menu-motion, ended by menu-release); menu-click also releases.
+        _ => {
+            app.pointer_button(&surface, x, y, parse_button(parts.next().unwrap_or("left")));
+            if command == "menu-click" {
+                app.pointer_release();
+            }
+        }
     }
     json!({ "ok": true })
 }

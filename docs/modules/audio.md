@@ -183,5 +183,12 @@ PulseAudio (on PipeWire 1.6.8)`) — via **libpulse**, not raw `libpipewire`.
 - **Scrolling** reads `value120` (SCTK binds `wl_seat` up to v10; C binds v7 and gets
   `discrete`). Partial high-resolution movement is added up and one ±5 % step is taken per full
   120; `discrete` is the fallback for old seats. Direction as in C (up = louder).
+- **Device dropdown** (`src/audio/device_popup.rs`): constants, layout and hit areas ported 1:1
+  (the percent column counts as the card body, as in C). The popup returns `Command`s and
+  `App` sends them, so it never touches the pulse thread itself. Cards hold the device's index
+  and look it up in the latest snapshot on every paint. A drag remembers the last percent
+  sent, drawn instead of the server's figure until the release. Count changes resize through
+  `PopupHost::resize`, which recreates the menu surface (C's rule) and keeps the catchers.
+  The hand cursor shows over the cards (Rust-only, like the rest of the cursor shapes).
 - **Middle button** only reaches the volume box (the mixer); other buttons than left/right/middle
   are ignored, as in C.

@@ -38,7 +38,7 @@ use smithay_client_toolkit::{
 
 use crate::{
     audio::{Audio, AudioState},
-    bar::{BarSurface, popups::Popups},
+    bar::{BarSurface, popup_surface::PopupEnv, popups::Popups},
     hyprland::dispatch::Dispatcher,
     render::Renderer,
 };
@@ -199,6 +199,13 @@ impl App {
         self.popups.snapshot(path, &mut self.renderer)
     }
 
+    /// Where a device card's control is (the tests' `target device`).
+    pub(crate) fn device_target(&mut self, what: (&str, &str, f64)) -> Option<(f64, f64)> {
+        self.popups
+            .device
+            .target(what, &self.renderer.audio, &mut self.renderer.text)
+    }
+
     /// A new audio snapshot from the pulse thread. The bars are redrawn only
     /// if what they show changed (the C bar's `pulse_client_pump` rule).
     pub(crate) fn audio_update(&mut self, state: AudioState) {
@@ -207,6 +214,27 @@ impl App {
         if changed {
             self.mark_all_dirty();
         }
+        // An open device dropdown follows every change, shown on the bar or not.
+        let Self {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter,
+            test_mode,
+            popups,
+            renderer,
+            ..
+        } = self;
+        let env = PopupEnv {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter: viewporter.as_ref(),
+            test_mode: *test_mode,
+        };
+        popups
+            .device
+            .refresh(&env, &renderer.audio, &mut renderer.text);
     }
 
     /// The 5 s poll (the C bar's 5 s branch, in its order): sysmon figures and

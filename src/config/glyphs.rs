@@ -39,6 +39,8 @@ pub(crate) const ICON_VOLUME_HIGH: char = '\u{f057e}';
 pub(crate) const ICON_MIC: char = '\u{f036c}';
 /// `md-microphone_off`: the mic box when muted or at 0 %.
 pub(crate) const ICON_MIC_MUTED: char = '\u{f036d}';
+/// `md-headphones`: the output device dropdown's header.
+pub(crate) const ICON_HEADPHONES: char = '\u{f02cb}';
 /// The network box's "no default route" icon. The C bar calls it
 /// `md-help_network`, but the installed font names this code point
 /// `md-update`; kept as is for parity with the C bar (see

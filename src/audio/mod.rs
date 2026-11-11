@@ -17,6 +17,7 @@
 //! The main thread keeps the latest snapshot in the `Renderer` and draws from
 //! it; [`Audio`] is its handle for sending commands.
 
+pub(crate) mod device_popup;
 mod pulse;
 pub(crate) mod volume_style;
 
@@ -99,6 +100,25 @@ pub(crate) struct AudioState {
 }
 
 impl AudioState {
+    /// The sinks or the sources.
+    pub(crate) fn nodes(&self, kind: Kind) -> &[Node] {
+        match kind {
+            Kind::Sink => &self.sinks,
+            Kind::Source => &self.sources,
+        }
+    }
+
+    /// The sink or source with server index `index`.
+    pub(crate) fn node(&self, kind: Kind, index: u32) -> Option<&Node> {
+        self.nodes(kind).iter().find(|n| n.index == index)
+    }
+
+    /// Whether `node` is the default of its kind.
+    pub(crate) fn is_default(&self, kind: Kind, node: &Node) -> bool {
+        self.default_node(kind)
+            .is_some_and(|d| d.index == node.index)
+    }
+
     /// The default sink or source, if known.
     pub(crate) fn default_node(&self, kind: Kind) -> Option<&Node> {
         let (nodes, name) = match kind {
@@ -125,10 +145,6 @@ impl AudioState {
 /// A request for the pulse thread. Volume changes are worked out there, from
 /// its own up-to-date cache.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[expect(
-    variant_size_differences,
-    reason = "a few commands per click or scroll; a few bytes per message don't matter"
-)]
 pub(crate) enum Command {
     /// Step the default sink's or source's volume by `delta` % (clamped 0..=200).
     AdjustDefault {
@@ -139,6 +155,39 @@ pub(crate) enum Command {
     },
     /// Flip the default sink's or source's mute.
     ToggleDefaultMute(Kind),
+    /// Set one device's volume to `percent` (clamped 0..=200): the device
+    /// dropdown's meter.
+    SetVolume {
+        /// Sink or source.
+        kind: Kind,
+        /// The device's server index.
+        index: u32,
+        /// The new volume.
+        percent: u32,
+    },
+    /// Step one device's volume by `delta` %: scrolling on its card.
+    AdjustVolume {
+        /// Sink or source.
+        kind: Kind,
+        /// The device's server index.
+        index: u32,
+        /// The step.
+        delta: i32,
+    },
+    /// Flip one device's mute: its card's mute chip.
+    ToggleMute {
+        /// Sink or source.
+        kind: Kind,
+        /// The device's server index.
+        index: u32,
+    },
+    /// Make a device the default: a click on its card.
+    SetDefault {
+        /// Sink or source.
+        kind: Kind,
+        /// The device's stable name.
+        name: String,
+    },
 }
 
 /// The main thread's end: sends commands to the pulse thread.

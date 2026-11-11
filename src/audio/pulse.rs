@@ -39,7 +39,9 @@ use libpulse_binding::{
     volume::{ChannelVolumes, Volume},
 };
 
-use super::{AudioState, Command, Kind, Node, Stream, percent_to_raw, raw_to_percent, stepped};
+use super::{
+    AudioState, Command, Kind, MAX_VOLUME, Node, Stream, percent_to_raw, raw_to_percent, stepped,
+};
 
 /// The cache, shared between this thread's callbacks.
 type Shared = Rc<RefCell<Cache>>;
@@ -155,7 +157,12 @@ pub(super) fn run(
             break;
         }
         while let Ok(command) = commands.try_recv() {
-            run_command(&mut introspector, &cache.borrow().state, &command);
+            run_command(
+                &mut context,
+                &mut introspector,
+                &cache.borrow().state,
+                &command,
+            );
         }
         let snapshot = cache.borrow_mut().take_snapshot();
         if let Some(snapshot) = snapshot
@@ -313,32 +320,77 @@ fn on_server(cache: &Shared) -> impl FnMut(&ServerInfo<'_>) + 'static {
 
 /// Runs one command against the server. The results come back as
 /// subscription events, like any other change.
-fn run_command(introspector: &mut Introspector, state: &AudioState, command: &Command) {
-    match *command {
-        Command::AdjustDefault { kind, delta } => {
-            if let Some(node) = state.default_node(kind) {
-                let volume = volumes(node.channels, stepped(node.volume, delta));
-                started(match kind {
-                    Kind::Sink => introspector.set_sink_volume_by_index(node.index, &volume, None),
-                    Kind::Source => {
-                        introspector.set_source_volume_by_index(node.index, &volume, None)
-                    }
-                });
-            }
+fn run_command(
+    context: &mut Context,
+    introspector: &mut Introspector,
+    state: &AudioState,
+    command: &Command,
+) {
+    // Every command but `SetDefault` acts on one device: resolve it, and
+    // what to do with it, first.
+    let (kind, index, action) = match *command {
+        Command::SetDefault { kind, ref name } => {
+            started(match kind {
+                Kind::Sink => context.set_default_sink(name, |_success| {}),
+                Kind::Source => context.set_default_source(name, |_success| {}),
+            });
+            return;
         }
-        Command::ToggleDefaultMute(kind) => {
-            if let Some(node) = state.default_node(kind) {
-                started(match kind {
-                    Kind::Sink => {
-                        introspector.set_sink_mute_by_index(node.index, !node.muted, None)
-                    }
-                    Kind::Source => {
-                        introspector.set_source_mute_by_index(node.index, !node.muted, None)
-                    }
-                });
-            }
+        Command::AdjustDefault { kind, delta } => match state.default_node(kind) {
+            Some(node) => (
+                kind,
+                node.index,
+                Action::Volume(stepped(node.volume, delta)),
+            ),
+            None => return,
+        },
+        Command::ToggleDefaultMute(kind) => match state.default_node(kind) {
+            Some(node) => (kind, node.index, Action::Mute(!node.muted)),
+            None => return,
+        },
+        Command::SetVolume {
+            kind,
+            index,
+            percent,
+        } => (kind, index, Action::Volume(percent.min(MAX_VOLUME))),
+        Command::AdjustVolume { kind, index, delta } => match state.node(kind, index) {
+            Some(node) => (kind, index, Action::Volume(stepped(node.volume, delta))),
+            None => return,
+        },
+        Command::ToggleMute { kind, index } => match state.node(kind, index) {
+            Some(node) => (kind, index, Action::Mute(!node.muted)),
+            None => return,
+        },
+    };
+    // A device gone since the command was sent is skipped.
+    let Some(node) = state.node(kind, index) else {
+        return;
+    };
+    started(match (kind, action) {
+        (Kind::Sink, Action::Volume(percent)) => {
+            introspector.set_sink_volume_by_index(index, &volumes(node.channels, percent), None)
         }
-    }
+        (Kind::Source, Action::Volume(percent)) => {
+            introspector.set_source_volume_by_index(index, &volumes(node.channels, percent), None)
+        }
+        (Kind::Sink, Action::Mute(mute)) => introspector.set_sink_mute_by_index(index, mute, None),
+        (Kind::Source, Action::Mute(mute)) => {
+            introspector.set_source_mute_by_index(index, mute, None)
+        }
+    });
+}
+
+/// What to set on a device.
+#[derive(Clone, Copy, Debug)]
+#[expect(
+    variant_size_differences,
+    reason = "a short-lived local value, never stored or sent; 4 bytes don't matter"
+)]
+enum Action {
+    /// This volume, in %.
+    Volume(u32),
+    /// This mute state.
+    Mute(bool),
 }
 
 /// Lets a request run without waiting on it. libpulse returns a handle per

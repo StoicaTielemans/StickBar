@@ -10,6 +10,7 @@ use smithay_client_toolkit::{reexports::client::protocol::wl_surface::WlSurface,
 
 use super::{popup_host::PopupHost, popup_surface::PopupSurface};
 use crate::{
+    audio::device_popup::DevicePopup,
     modules::{
         clock::calendar::CalendarPopup, cpu::popup::CpuPopup, gpu::popup::GpuPopup,
         mem::popup::MemPopup, network::popup::NetworkPopup, powermenu::PowerMenu,
@@ -32,13 +33,16 @@ pub(crate) struct Popups {
     pub(crate) gpu: GpuPopup,
     /// The network dropdown.
     pub(crate) network: NetworkPopup,
+    /// The volume/mic device dropdown.
+    pub(crate) device: DevicePopup,
 }
 
 impl Popups {
     /// The open hosts of the dropdowns that have one (everything but the
     /// power menu, whose overlays are their own catchers).
-    fn hosts(&self) -> [Option<&PopupHost>; 5] {
+    fn hosts(&self) -> [Option<&PopupHost>; 6] {
         [
+            self.device.host(),
             self.calendar.host(),
             self.mem.host(),
             self.cpu.host(),
@@ -104,6 +108,12 @@ impl Popups {
             }
             return true;
         }
+        if let Some(popup) = self.device.host_mut().and_then(|h| h.surface_mut(surface)) {
+            if popup.configure(shm, width, height) {
+                self.device.paint(&renderer.audio, text);
+            }
+            return true;
+        }
         if let Some(popup) = self.network.host_mut().and_then(|h| h.surface_mut(surface)) {
             if popup.configure(shm, width, height) {
                 self.network.paint(&renderer.network, text);
@@ -131,6 +141,7 @@ impl Popups {
             self.cpu.host_mut(),
             self.gpu.host_mut(),
             self.network.host_mut(),
+            self.device.host_mut(),
         ];
         let popup = self.power.surface_mut(surface).or_else(|| {
             hosts
@@ -154,6 +165,7 @@ impl Popups {
             .or_else(|| self.gpu.menu())
             .or_else(|| self.mem.menu())
             .or_else(|| self.network.menu())
+            .or_else(|| self.device.menu())
             .or_else(|| self.calendar.menu())
     }
 
@@ -176,6 +188,8 @@ impl Popups {
             self.gpu.snapshot(path, sysmon, text)
         } else if self.mem.host().is_some() {
             self.mem.snapshot(path, sysmon, text)
+        } else if self.device.host().is_some() {
+            self.device.snapshot(path, &renderer.audio, text)
         } else if self.network.host().is_some() {
             self.network.snapshot(path, &renderer.network, text)
         } else {

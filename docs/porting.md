@@ -258,3 +258,7 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   tests pass, `test_redraw`'s PulseAudio no-op check now live (40 no-op events -> clock-only
   commits), SIGUSR1 blocked in all 4 threads. Release vs release: CPU 0.05 % vs 0.05 %,
   private 7.8 vs 8.3 MB, RSS 32.3 vs 35.0 MB, 4 threads vs 5.
+- 2026-11-11 · M9b · Device dropdown. `test_audio`'s device checks pass unchanged (meter
+  press/drag/scroll/mute on a null sink, mic list without monitors, card count); both
+  dropdowns match C (364x312 and 364x224 here, same picture); a sink added or removed while
+  open resizes it live (312 -> 400 -> 312 px). 43 unit tests.

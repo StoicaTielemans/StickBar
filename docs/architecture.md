@@ -30,7 +30,8 @@ src/
 │   ├── damage.rs           changed_rect(): the frame diff, with unit tests
 │   ├── popup_surface.rs    PopupSurface: an overlay menu or a top-layer catcher
 │   │                       (1x1 + viewporter), first-paint-after-configure
-│   ├── popup_host.rs       PopupHost: a menu under its box + a catcher per monitor
+│   ├── popup_host.rs       PopupHost: a menu under its box + a catcher per monitor;
+│   │                       resize() recreates the menu at a new size
 │   └── popups.rs           Popups: every dropdown kind; configure/menu routing
 ├── hyprland/
 │   ├── mod.rs              socket_path(), request()/request_json(): the request socket
@@ -45,7 +46,8 @@ src/
 ├── audio/
 │   ├── mod.rs              AudioState snapshot, Command, Audio (main-side handle)
 │   ├── pulse.rs            the pulse thread: libpulse mainloop + cache, channels
-│   └── volume_style.rs     level icon (and, from M9b, meter/slider helpers)
+│   ├── device_popup.rs     DevicePopup: sinks/sources, meter drag, mute, set default
+│   └── volume_style.rs     level icon, meter gradient, slider percent
 ├── network/mod.rs          Network: default route, rates, history; details via
 │                           /sys, resolv.conf and getifaddrs (nix)
 ├── util/history.rs         History2: the 120-sample ring behind every graph

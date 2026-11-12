@@ -55,6 +55,14 @@ src/
 │   ├── launcher.rs         EqState::apply: the eq-script thread, posix_spawn (nix)
 │   │                       with an empty signal mask, waitpid, exit -> channel
 │   └── curve.rs            range_db, freq_to_x, draw: the curve, pure cairo
+├── dbus/
+│   ├── mod.rs              the `dbus` thread: one async loop (zbus 5) over the merged
+│   │                       streams + commands; TrayEvent/Command channels
+│   ├── watcher.rs          StatusNotifierWatcher served by hand, or Host mode
+│   ├── sni.rs              Registry: items, GetAll (typed visitor), NewIcon, Activate
+│   ├── sni_icon.rs         IconPixmap -> premultiplied bytes, symbolic-mask recolour
+│   ├── icon_theme.rs       IconName -> PNG bytes (IconThemePath, hicolor, pixmaps)
+│   └── dbusmenu.rs         AboutToShow + GetLayout parsing, Event (NoReplyExpected)
 ├── network/mod.rs          Network: default route, rates, history; details via
 │                           /sys, resolv.conf and getifaddrs (nix)
 ├── util/history.rs         History2: the 120-sample ring behind every graph
@@ -64,6 +72,8 @@ src/
 │   ├── mem/                mod.rs (box), popup.rs (the memory dropdown)
 │   ├── network/            mod.rs (box), popup.rs (the network dropdown)
 │   ├── eq/                 mod.rs (sparkline + profile box), popup.rs (EQ dropdown)
+│   ├── tray/               mod.rs (Tray: items, icon surfaces, the icon row),
+│   │                       menu.rs (TrayMenu: the DBusMenu dropdown)
 │   ├── volume/mod.rs       the volume box
 │   ├── mic/mod.rs          the mic box
 │   ├── workspaces/mod.rs   Workspaces: occupied/focused from Hyprland, kanji pills

@@ -12,6 +12,7 @@
 mod audio;
 mod bar;
 mod config;
+mod dbus;
 mod eq;
 mod hyprland;
 mod modules;
@@ -188,6 +189,9 @@ fn start_sources(handle: &calloop::LoopHandle<'static, App>, app: &mut App) -> R
     // The DAC EQ: the state file's inotify watch, and the channel a finished
     // profile script reports on.
     eq::start(handle, &mut app.renderer_mut().eq);
+
+    // The system tray: the `dbus` thread, which pushes item changes into the loop.
+    app.dbus = dbus::start(handle);
 
     // CPU/GPU/memory figures, polled every 5 s (the first poll already ran).
     sysmon::timer::start(handle)?;

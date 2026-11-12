@@ -32,7 +32,7 @@
 | JSON | cJSON | **serde_json** | Hyprland IPC and the test-control replies |
 | Hyprland IPC | own socket code | own code over `std::os::unix::net::UnixStream` | Small, and it keeps the classic→Lua dispatch quirk under our control. No async crate |
 | SIGUSR1 | sigprocmask + signalfd | **calloop `signals`** source, created **first in `main`, before any thread starts** | Lesson from BUG.md "Power menu": NVML threads that didn't block SIGUSR1 killed the bar |
-| D-Bus (tray, MPRIS) | sd-bus | **zbus** (blocking API on its own thread → channel) | Pure Rust, no unsafe |
+| D-Bus (tray, MPRIS) | sd-bus | **zbus 5** (async, on its own `dbus` thread → channels) | Pure Rust, no unsafe. zbus 6 dropped the blocking API; one async loop on one thread is simpler than several blocking iterators anyway |
 | PulseAudio | libpulse threaded mainloop | **libpulse-binding** on its own thread → channel | Same threading model as the C bar |
 | PipeWire | pw_thread_loop | **pipewire** crate (pipewire-rs) on its own thread → channel | Same |
 | NVML | dlopen'd libnvidia-ml | **nvml-wrapper** | Loads the library at runtime, like now. Use the v2 memory call (BUG.md lesson) |
@@ -159,9 +159,12 @@ must pass.
   with `posix_spawn` and an empty signal mask (`Command` keeps the bar's blocked signals).
   **C's `test_eq` passes unchanged**, as does `test_popups` (EQ). The box and the dropdown are
   pixel-identical to C's in every state.
-- [ ] **M11: Tray** (`dbus/*`, `modules/tray/*` ~1.7k). zbus thread, become the
-  StatusNotifierWatcher or fall back to host registration, item registry, IconPixmap →
-  cairo, icon-theme fallback, DBusMenu context menu. Tests: `test_tray`.
+- [x] **M11: Tray** (`dbus/*`, `modules/tray/*` ~1.7k). The `dbus` thread (zbus 5, one async loop),
+  the Watcher served by hand or Host registration, the item registry, IconPixmap → cairo
+  (typed read, symbolic recolour), the PNG fallback, and the DBusMenu dropdown, opened when its
+  entries arrive. `target trayicon|traymenu`, `tray_entries`. **C's `test_tray` passes unchanged**
+  in Host mode and, under `dbus-run-session`, in Watcher mode. Icons and menus are
+  pixel-identical to C's, real apps included.
 - [ ] **M12: Media** (`mpris/`, `modules/media/*` ~1.7k). Player table on the shared zbus
   connection, controls, position, duplicate hiding, the centered box, and the dropdown with
   timeline seek and recreate-on-resize. Read BUG.md "Media". Tests: `test_media`,
@@ -283,3 +286,12 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   `test_nvml_vs_smi` (driver 620's `nvidia-smi` prints a fractional temperature that the test
   `int()`s). Both fail the same way against the C bar. A real card click against the DAC is
   left for the user.
+- 2026-11-12 · M11 · Tray. C's `test_tray` passes in both modes; 17 tests pass (53 unit tests;
+  the 5 failing are 3 unported modules plus `test_sysmon_data`/`test_nvml_vs_smi`, as at M10).
+  Icon row, fake and real menus (Discord, Steam, CurseForge) byte-identical to C. A quit app's icon
+  goes in 0.10 s in both modes (a C bar in Host mode never drops it: BUG.md). `test_calendar`
+  caught a generic-`Value` read of a 256x256 pixmap (+6.1 MB): fixed with a typed visitor, which
+  also cut debug RSS from 77.1 to 59.8 MB. zbus's executor runs on the `dbus` thread (one thread
+  saved). Release vs release: CPU 0.12 % vs 0.12 % (a busy minute), private 28.1 vs 28.4 MB, PSS
+  35.4 vs 35.6 MB, RSS 56.1 vs 58.1 MB, 7 threads vs 5 (`dbus`, plus zbus runtime's `async-io` and
+  idle `blocking-1`). Release binary 3.1 MB (zbus adds 1.5 MB).

@@ -16,7 +16,8 @@
 //! click <output> <x> <y> <left|right|middle>
 //!                        -> a click on that monitor's bar, bar-local px
 //! menu                   -> {"ok":true,"open":bool,"width","height","catchers",
-//!                            "power_last_action","device_cards","mixer_rows","eq_cards"}
+//!                            "power_last_action","device_cards","mixer_rows","eq_cards",
+//!                            "tray_entries" (only while a tray menu is open)}
 //! menu-click <x> <y> [button] / menu-motion <x> <y>
 //!                        -> a click / move on the open menu, menu-local px
 //! menu-press <x> <y> [button] / menu-release / menu-scroll <x> <y> <+1|-1>
@@ -28,6 +29,7 @@
 //! target device <meter|mute|body> <fraction> <description...>
 //! target mixer <slider|mute> <fraction> <stream name...>
 //! target eq <profile>
+//! target traymenu <label...> / target trayicon <output> <title...>
 //!                        -> {"ok":true,"x","y"}: a point on the power menu, a
 //!                           device or mixer card, or an EQ profile card
 //! refresh <mem|cpu|cpu-reset|gpu|poll>
@@ -63,8 +65,10 @@ use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::
 use crate::{
     audio::{AudioState, Kind, Node},
     bar::{BarSurface, popup_surface::PopupSurface},
+    dbus::Toggle,
     eq::EqState,
     network::Network,
+    render::{Action, ClickTarget},
     sysmon::Sysmon,
     wayland::{App, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Output},
 };
@@ -223,12 +227,32 @@ fn menu(app: &App) -> Value {
         .mixer
         .row_count()
         .map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX));
+    // While a tray menu is open: every entry as shown, separators included.
+    let tray_entries = app.popups().tray.entries().map(|entries| {
+        entries
+            .iter()
+            .map(|e| {
+                json!({
+                    "label": e.label,
+                    "separator": e.separator,
+                    "enabled": e.enabled,
+                    "toggle": match e.toggle.map(|t| t.kind) {
+                        Some(Toggle::Checkmark) => "checkmark",
+                        Some(Toggle::Radio) => "radio",
+                        None => "",
+                    },
+                    "toggled": e.toggle.is_some_and(|t| t.on),
+                    "submenu": e.submenu,
+                })
+            })
+            .collect::<Vec<_>>()
+    });
     let eq_cards = app
         .popups()
         .eq
         .card_count()
         .map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX));
-    match app.popups().latest_menu().and_then(PopupSurface::menu_size) {
+    let mut reply = match app.popups().latest_menu().and_then(PopupSurface::menu_size) {
         Some((width, height)) => json!({
             "ok": true, "open": true, "width": width, "height": height,
             "catchers": catchers, "power_last_action": last, "device_cards": device_cards,
@@ -238,7 +262,12 @@ fn menu(app: &App) -> Value {
             "ok": true, "open": false, "catchers": catchers, "power_last_action": last,
             "device_cards": device_cards, "mixer_rows": mixer_rows, "eq_cards": eq_cards,
         }),
+    };
+    // Only present while a tray menu is open, as in C.
+    if let (Some(entries), Some(object)) = (tray_entries, reply.as_object_mut()) {
+        let _previous = object.insert("tray_entries".to_owned(), Value::from(entries));
     }
+    reply
 }
 
 /// `refresh <what>`: what an open dropdown or the 5 s timer would do, now.
@@ -443,6 +472,8 @@ fn target(app: &mut App, args: &str) -> Value {
     let found = match args.split_once(' ') {
         Some(("power", part)) => app.popups().power.target(part.trim()),
         Some(("eq", profile)) => app.popups().eq.target(profile.trim()),
+        Some(("traymenu", label)) => app.popups().tray.target(label.trim()),
+        Some(("trayicon", rest)) => tray_icon_target(app, rest),
         Some(("device", rest)) => {
             let mut parts = rest.splitn(3, ' ');
             match (
@@ -475,6 +506,22 @@ fn target(app: &mut App, args: &str) -> Value {
         Some((x, y)) => json!({ "ok": true, "x": x, "y": y }),
         None => error("target not found"),
     }
+}
+
+/// `target trayicon <output> <title...>`: the middle of the icon of the tray
+/// item called `title` on that monitor's bar, bar-surface px.
+fn tray_icon_target(app: &mut App, args: &str) -> Option<(f64, f64)> {
+    let (name, title) = args.trim().split_once(' ')?;
+    let targets: Vec<ClickTarget> = find_output(app, name)?.bar.as_ref()?.targets().to_vec();
+    let tray = &app.renderer_mut().tray;
+    targets.iter().find_map(|t| {
+        let Action::TrayIcon(id) = t.action else {
+            return None;
+        };
+        tray.item(id)
+            .is_some_and(|i| i.title == title.trim())
+            .then(|| (t.rect.x + t.rect.w / 2.0, t.rect.y + t.rect.h / 2.0))
+    })
 }
 
 /// `menu-click <x> <y> [button]` / `menu-motion <x> <y>`, menu-local px.

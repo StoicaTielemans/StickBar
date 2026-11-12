@@ -25,7 +25,9 @@
 use smithay_client_toolkit::{
     reexports::client::{
         Connection, QueueHandle,
-        protocol::{wl_pointer::WlPointer, wl_seat::WlSeat, wl_surface::WlSurface},
+        protocol::{
+            wl_output::WlOutput, wl_pointer::WlPointer, wl_seat::WlSeat, wl_surface::WlSurface,
+        },
     },
     reexports::protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::{
         Shape, WpCursorShapeDeviceV1,
@@ -41,6 +43,7 @@ use crate::{
     audio::{Command, Kind, VOLUME_STEP},
     bar::popup_surface::PopupEnv,
     config::{COLORS, Color},
+    dbus::{self, MenuEntry},
     modules::powermenu::{PowerAction, PowerClick},
     render::{Action, BoxRect},
 };
@@ -51,6 +54,21 @@ pub(crate) const BTN_LEFT: u32 = 0x110;
 pub(crate) const BTN_RIGHT: u32 = 0x111;
 /// Middle button (wheel click).
 pub(crate) const BTN_MIDDLE: u32 = 0x112;
+
+/// A tray menu asked of the `dbus` thread: it opens when the answer comes
+/// back, under the icon that was clicked. Waiting there instead of here keeps
+/// a slow app from ever stalling the bar (C fetched it in the click handler).
+#[derive(Debug)]
+pub(crate) struct PendingMenu {
+    /// Its request number: an answer to an older click is dropped.
+    request: u64,
+    /// Which tray item.
+    item: u64,
+    /// The monitor whose bar was clicked.
+    output: WlOutput,
+    /// The icon's rect on that bar.
+    trigger: BoxRect,
+}
 
 /// The mouse, plus what's needed to set its cursor shape.
 pub(crate) struct Mouse {
@@ -151,11 +169,9 @@ impl App {
         let bar = self.outputs.get(position).and_then(|o| o.bar.as_ref());
         let target = bar
             .and_then(|bar| bar.targets().iter().find(|t| t.rect.contains(x, y)))
-            .map(|t| t.action);
-        if let Some(action) = target {
-            if button == BTN_LEFT {
-                self.run(action);
-            }
+            .map(|t| (t.action, t.rect));
+        if let Some((action, rect)) = target {
+            self.run(action, button, (position, rect));
             return;
         }
         // The module whose box was clicked, if any.
@@ -241,6 +257,21 @@ impl App {
             }
             if host.is_catcher(surface) {
                 self.popups.device.close();
+                return true;
+            }
+        }
+
+        // A tray menu: any button on an enabled entry sends its click event
+        // and closes the menu (as in C); its catcher closes it.
+        if let Some(host) = self.popups.tray.host() {
+            if host.is_menu(surface) {
+                if let Some((item, entry)) = self.popups.tray.press((x, y)) {
+                    self.dbus.send(dbus::Command::MenuClick { item, entry });
+                }
+                return true;
+            }
+            if host.is_catcher(surface) {
+                self.popups.tray.close();
                 return true;
             }
         }
@@ -347,10 +378,93 @@ impl App {
     }
 
     /// Does what a click target does.
-    fn run(&mut self, action: Action) {
+    fn run(&mut self, action: Action, button: u32, (position, rect): (usize, BoxRect)) {
         match action {
-            Action::FocusWorkspace(id) => self.dispatcher.focus_workspace(id),
+            // Pills only take the left button.
+            Action::FocusWorkspace(id) => {
+                if button == BTN_LEFT {
+                    self.dispatcher.focus_workspace(id);
+                }
+            }
+            Action::TrayIcon(id) => self.tray_click(id, button, (position, rect)),
         }
+    }
+
+    /// A click on tray icon `id` (at `rect` on the bar at `position`). If the
+    /// item has a menu, **any** button asks for it; `Activate` only happens
+    /// for a menu-less item, and only on the left button. That's the
+    /// reference bar's rule, easy to get backwards (docs/modules/tray.md).
+    fn tray_click(&mut self, id: u64, button: u32, (position, rect): (usize, BoxRect)) {
+        let Some(item) = self.renderer.tray.item(id) else {
+            return;
+        };
+        if item.has_menu {
+            let Some(output) = self.outputs.get(position).map(|o| o.wl_output().clone()) else {
+                return;
+            };
+            // At most one tray menu: the old one goes now, the new one opens
+            // when its entries arrive.
+            self.popups.tray.close();
+            self.tray_requests += 1;
+            let request = self.tray_requests;
+            self.tray_pending = Some(PendingMenu {
+                request,
+                item: id,
+                output,
+                trigger: rect,
+            });
+            self.dbus
+                .send(dbus::Command::FetchMenu { request, item: id });
+        } else if button == BTN_LEFT {
+            self.dbus.send(dbus::Command::Activate { item: id });
+        }
+    }
+
+    /// The `dbus` thread answered menu request `request`: opens it under its
+    /// icon, unless a newer click has replaced it or it came back empty.
+    pub(crate) fn open_tray_menu(&mut self, request: u64, entries: Vec<MenuEntry>) {
+        let Some(pending) = self.tray_pending.take_if(|p| p.request == request) else {
+            return;
+        };
+        let Some(position) = self
+            .outputs
+            .iter()
+            .position(|o| o.wl_output() == &pending.output)
+        else {
+            return; // that monitor is gone
+        };
+        let Some(output_width) = self.outputs.get(position).map(|o| self.output_size(o).0) else {
+            return;
+        };
+        let Self {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter,
+            test_mode,
+            outputs,
+            popups,
+            renderer,
+            ..
+        } = self;
+        let Some(title) = renderer.tray.item(pending.item).map(|i| i.title.clone()) else {
+            return; // the item went away meanwhile
+        };
+        let env = PopupEnv {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter: viewporter.as_ref(),
+            test_mode: *test_mode,
+        };
+        popups.tray.open(
+            &env,
+            (&pending.output, output_width, pending.trigger),
+            outputs.iter().map(Output::wl_output),
+            (pending.item, &title, entries),
+            &renderer.tray,
+            &mut renderer.text,
+        );
     }
 
     /// The pointer moved to (x, y) on `surface`: hover highlights.
@@ -390,6 +504,12 @@ impl App {
             self.popups
                 .eq
                 .motion((x, y), &self.renderer.eq, &mut self.renderer.text);
+            return;
+        }
+        if self.popups.tray.host().is_some_and(|h| h.is_menu(surface)) {
+            self.popups
+                .tray
+                .motion((x, y), &self.renderer.tray, &mut self.renderer.text);
             return;
         }
         if self
@@ -434,6 +554,14 @@ impl App {
         // The mixer's chips and sliders react to a click.
         if self.popups.mixer.host().is_some_and(|h| h.is_menu(surface)) {
             return if self.popups.mixer.over_control(x, y) {
+                Shape::Pointer
+            } else {
+                Shape::Default
+            };
+        }
+        // An enabled tray menu entry reacts to a click.
+        if self.popups.tray.host().is_some_and(|h| h.is_menu(surface)) {
+            return if self.popups.tray.over_clickable((x, y)) {
                 Shape::Pointer
             } else {
                 Shape::Default

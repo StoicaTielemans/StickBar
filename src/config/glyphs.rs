@@ -69,6 +69,14 @@ pub(crate) const ICON_LOGOUT: char = '\u{f0343}';
 pub(crate) const ICON_RESTART: char = '\u{f0453}';
 /// `md-power`, the power menu's Shutdown card and its header icon.
 pub(crate) const ICON_POWER: char = '\u{f0425}';
+/// `md-checkbox_marked`: a ticked checkbox entry in a tray menu.
+pub(crate) const ICON_CHECKBOX_ON: char = '\u{f0132}';
+/// `md-checkbox_blank_outline`: an unticked checkbox entry in a tray menu.
+pub(crate) const ICON_CHECKBOX_OFF: char = '\u{f0131}';
+/// `md-radiobox_marked`: the chosen radio entry in a tray menu.
+pub(crate) const ICON_RADIO_ON: char = '\u{f043e}';
+/// `md-radiobox_blank`: an unchosen radio entry in a tray menu.
+pub(crate) const ICON_RADIO_OFF: char = '\u{f043d}';
 /// `md-equalizer`, the EQ dropdown's header icon.
 pub(crate) const ICON_EQUALIZER: char = '\u{f0ea2}';
 

@@ -48,6 +48,15 @@ pangocairo = "0.22"
 rustix = { version = "1", features = ["time", "param", "fs"] }
 # JSON for the test-control channel's replies (and Hyprland IPC from M5).
 serde_json = "1"
+# D-Bus for the tray (and MPRIS from M12), on its own `dbus` thread. Pinned to 5.x:
+# 6.x dropped the blocking API and changed the runtime layer. No default
+# features: async-io is the only runtime needed; the proxy/interface macros
+# aren't used (the Watcher is served by hand, docs/modules/tray.md).
+zbus = { version = "5.19", default-features = false, features = ["async-io"] }
+# Already in the tree through zbus: merging the D-Bus thread's streams, and the
+# channel the main thread sends tray commands on.
+async-channel = "2"
+futures-lite = "2"
 # Wayland toolkit: compositor, shm pools, outputs, layer-shell. API changes between
 # releases, so it stays pinned to one minor version.
 smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop"] }

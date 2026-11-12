@@ -25,7 +25,8 @@ Limitations explained in a module's own section aren't repeated here.
   left-anchored ones aren't defended against overflowing the right edge, which no
   real caller today is close enough to hit.
 - **Fixed-array caps** -- documented caps, not dynamic growth, comfortably above real
-  use; past one, entries are silently dropped: tray items (`MAX_TRAY_ITEMS`), device
+  use; past one, entries are silently dropped: tray items (`MAX_TRAY_ITEMS`; no cap and
+  no 32-entry menu cap in the Rust port), device
   popup rows (`MAX_DEVICE_ROWS`, 32), mixer streams (`MAX_PULSE_STREAMS`, 32), media
   players (`MAX_MPRIS_PLAYERS`, 16), DNS servers (`MAX_DNS_SERVERS`, 8, above the 3
   glibc's resolver honors), PipeWire nodes and links (`MAX_PW_NODES`/`MAX_PW_LINKS`,
@@ -60,7 +61,9 @@ Limitations explained in a module's own section aren't repeated here.
   synchronous `sd_bus_call_method()`s with sd-bus's default 25s timeout,
   inside the single-threaded event loop. Never seen with a real app; found
   while writing `tests/lib/fake_tray.py`, whose first (blocking) version hung
-  exactly this way. Fix would be async calls or a short timeout.
+  exactly this way. Fix would be async calls or a short timeout. **Fixed in the
+  Rust port:** every D-Bus call happens on its own `dbus` thread with a 3 s
+  timeout, and the menu opens when its entries arrive (`docs/modules/tray.md`).
 - **Tray: no tooltip support** (the SNI `ToolTip` property is never fetched), **and
   no scroll-wheel `Scroll()` support** (only the volume/mic modules act on
   `axis_discrete`).

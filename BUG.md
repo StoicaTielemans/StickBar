@@ -14,6 +14,22 @@ limitations, as opposed to bugs, are in `docs/limitations.md`.
 
 ## Fixed
 
+### Tray
+
+- **A quit app's icon stayed in a Host-mode bar forever** (C bar). As the Watcher, the C bar
+  removed an item whose owner disconnected but never emitted `StatusNotifierItemUnregistered`,
+  and in Host mode it only listened for that signal. So a second C bar (or any other host of
+  the C bar's Watcher) kept the icon. Seen in the port's checks: with the C bar as the Watcher, a
+  test C bar still showed a quit fake app's icon 6 s later; the Rust bar dropped it after 0.10 s.
+  The Rust port follows `NameOwnerChanged` in both modes and emits `…Unregistered` as the
+  Watcher.
+- **Big tray icons cost megabytes and left popups resident** (Rust port, before it shipped).
+  `GetAll` was read into `HashMap<String, OwnedValue>`, where an `ay` is one `Value` per byte;
+  CurseForge's 256x256 `IconPixmap` blew up to several MB, and freeing it raised glibc's mmap
+  threshold. `test_calendar` caught it: opening the calendar grew RSS by 6.1 MB, not 3.8. With
+  glibc's threshold pinned (`MALLOC_MMAP_THRESHOLD_`) or no tray items it was back to 3.8,
+  which pointed at it. Now read with a typed visitor (`docs/modules/tray.md`).
+
 ### EQ
 
 - **`applying` could stay on screen after a failed profile switch** (C bar). If the script

@@ -39,6 +39,7 @@ use smithay_client_toolkit::{
 use crate::{
     audio::{Audio, AudioState},
     bar::{BarSurface, popup_surface::PopupEnv, popups::Popups},
+    dbus::{Dbus, TrayEvent},
     hyprland::dispatch::Dispatcher,
     render::Renderer,
 };
@@ -81,6 +82,12 @@ pub(crate) struct App {
     dispatcher: Dispatcher,
     /// Sends volume/mute commands to the pulse thread (set in `start_sources`).
     pub(crate) audio: Audio,
+    /// Sends tray commands to the `dbus` thread (set in `start_sources`).
+    pub(crate) dbus: Dbus,
+    /// The tray menu asked for and not answered yet (it opens on the answer).
+    tray_pending: Option<pointer::PendingMenu>,
+    /// The last tray menu request's number.
+    tray_requests: u64,
     /// Set when Hyprland's event socket hangs up; `main.rs` decides whether
     /// to reconnect (once) and clears it.
     pub(crate) hyprland_events_lost: bool,
@@ -127,6 +134,9 @@ impl App {
             test_mode,
             dispatcher: Dispatcher::new(),
             audio: Audio::default(),
+            dbus: Dbus::default(),
+            tray_pending: None,
+            tray_requests: 0,
             hyprland_events_lost: false,
             exit: false,
         })
@@ -263,6 +273,32 @@ impl App {
         network.poll();
         self.popups.network.refresh_if_open(network, text);
         self.mark_all_dirty();
+    }
+
+    /// News from the `dbus` thread: a menu answer opens the menu waiting for
+    /// it; an item change redraws the bars (and the open menu, whose header
+    /// shows the item's icon).
+    pub(crate) fn tray_event(&mut self, event: TrayEvent) {
+        if let TrayEvent::Menu { request, entries } = event {
+            self.open_tray_menu(request, entries);
+            return;
+        }
+        let removed = if let TrayEvent::Removed { id } = &event {
+            Some(*id)
+        } else {
+            None
+        };
+        if !self.renderer.tray.apply(event) {
+            return;
+        }
+        self.mark_all_dirty();
+        if removed.is_some() && self.popups.tray.item() == removed {
+            // Its app is gone: the menu's entries can't do anything any more.
+            self.popups.tray.close();
+        } else {
+            let renderer = &mut self.renderer;
+            self.popups.tray.paint(&renderer.tray, &mut renderer.text);
+        }
     }
 
     /// Something was written in the EQ's state directory: re-read the state

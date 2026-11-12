@@ -3,8 +3,8 @@
 //! The bar has three regions, as in the C bar: left-region modules laid out
 //! left to right from x = 0, right-region ones right to left from the right
 //! edge, and the media box centered between. So far: the Arch logo, the
-//! workspace pills, CPU, GPU and memory on the left; the clock, network, EQ,
-//! volume and mic on the right.
+//! workspace pills, CPU, GPU and memory on the left; the tray, clock,
+//! network, EQ, volume and mic on the right.
 
 pub(crate) mod braille_graph;
 pub(crate) mod meter_bar;
@@ -19,7 +19,11 @@ use crate::{
     config::{BAR, COLORS},
     eq::EqState,
     modules::{
-        clock::Clock, cpu, eq, gpu, mem, mic, network, powermenu::arch_logo, volume,
+        clock::Clock,
+        cpu, eq, gpu, mem, mic, network,
+        powermenu::arch_logo,
+        tray::{self, Tray},
+        volume,
         workspaces::Workspaces,
     },
     network::Network,
@@ -78,11 +82,13 @@ pub(crate) struct ModuleBox {
 pub(crate) enum Action {
     /// Focus Hyprland workspace `id` (a workspace pill, left button).
     FocusWorkspace(i32),
+    /// Tray item `id` was clicked: its menu (any button) or `Activate` (left).
+    TrayIcon(u64),
 }
 
 /// A clickable spot inside a module's box. A box like `workspaces` holds
 /// several (one per pill), each doing something different; the gaps between
-/// them do nothing. Tray icons will work the same way.
+/// them do nothing. Tray icons work the same way.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ClickTarget {
     /// Where it is, in bar-surface px.
@@ -119,6 +125,8 @@ pub(crate) struct Renderer {
     pub(crate) audio: AudioState,
     /// The DAC EQ's state file, and the profile switch in progress.
     pub(crate) eq: EqState,
+    /// The system tray's items (from the `dbus` thread).
+    pub(crate) tray: Tray,
 }
 
 impl Renderer {
@@ -141,6 +149,7 @@ impl Renderer {
             },
             audio: AudioState::default(),
             eq: EqState::new(),
+            tray: Tray::default(),
         })
     }
 
@@ -220,8 +229,8 @@ impl Renderer {
         Ok(layout)
     }
 
-    /// The right region, laid out from the right edge leftwards: the clock,
-    /// network, EQ, volume and mic, as in the C bar. The EQ (a StickBar-only
+    /// The right region, laid out from the right edge leftwards: the tray,
+    /// clock, network, EQ, volume and mic, as in the C bar. The EQ (a StickBar-only
     /// module) sits between network and volume, keeping the audio together.
     fn render_right(
         &mut self,
@@ -230,9 +239,24 @@ impl Renderer {
         height: f64,
         layout: &mut BarLayout,
     ) -> Result<(), cairo::Error> {
+        // The tray takes no space at all when empty.
+        let (tray_box, icons) = tray::render(cr, &self.tray, width, (0.0, height))?;
+        let clock_right = match tray_box {
+            Some(rect) => {
+                layout.boxes.push(ModuleBox {
+                    name: "tray",
+                    rect,
+                    // Only the icons are clickable (as targets), not the gaps.
+                    clickable: false,
+                });
+                rect.x - BAR.item_spacing
+            }
+            None => width,
+        };
+        layout.targets.extend(icons);
         let clock = self
             .clock
-            .render(cr, &mut self.text, width, (0.0, height))?;
+            .render(cr, &mut self.text, clock_right, (0.0, height))?;
         layout.boxes.push(ModuleBox {
             name: "clock",
             rect: clock,

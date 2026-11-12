@@ -153,3 +153,44 @@ clear that way.
   overrides button entirely. Both live test items here (EasyEffects, Steam) have
   menus, so left/right click look identical in manual testing; the `Activate()`
   path exists but isn't exercised without a menu-less item.
+
+## In the Rust port
+
+- **Files:** `src/dbus/` (`mod.rs` the thread, `watcher.rs`, `sni.rs`, `sni_icon.rs`,
+  `icon_theme.rs`, `dbusmenu.rs`) and `src/modules/tray/` (`mod.rs` the icon row, `menu.rs` the
+  dropdown). The icon row, the menu, the hover and the disabled entry are pixel-identical to C's,
+  real apps' menus included (Discord, Steam, CurseForge).
+- **zbus 5, pinned:** zbus 6 dropped the blocking API and reworked its runtime. No default
+  features, just `async-io`.
+- **One `dbus` thread owns the connection.** It runs one async loop over the merged streams
+  (Watcher method calls, `NameOwnerChanged`, every item's `NewIcon`, the Watcher's signals in Host
+  mode) and the main thread's commands, one at a time. The main loop gets `TrayEvent`s on a
+  calloop channel and never waits for an app. Calls time out after 3 s. zbus's executor is
+  ticked by this thread too (`internal_executor(false)`), which saves zbus's own thread; its
+  runtime still starts `async-io` and `blocking-1`, both blocking SIGUSR1.
+- **The menu opens when its entries arrive.** A click sends `FetchMenu` and remembers the icon;
+  the answer opens the dropdown, a newer click makes an older answer stale, and an empty menu
+  opens nothing. This removes C's "an unresponsive app freezes the bar" limitation.
+- **The Watcher is served by hand** from a method-call stream on `/StatusNotifierWatcher`
+  (register item/host, `Properties.Get/GetAll`, `Introspect`, `Ping`, `UnknownMethod`), not with
+  zbus's `#[interface]` macro. zbus 5 only starts its object server when something is served
+  through it, so nothing answers twice. `RegisterStatusNotifierItem` is answered *before* the
+  item is read, so a client blocking on the reply can't deadlock with the bar.
+- **Rule: never read big D-Bus values as a generic `zvariant::Value`.** Inside a `Value`, an
+  `ay` is one `Value` per byte: CurseForge's 256x256 `IconPixmap` (262 KB) became several MB on
+  every add, freeing it raised glibc's adaptive mmap threshold, and the calendar's temporary
+  full-size image then stayed resident (`test_calendar`: +6.1 MB instead of +3.8 MB). `GetAll` is
+  read by a small serde visitor (`ItemProps` in `sni.rs`): `IconPixmap` typed, the text
+  properties normally, everything else skipped. That also cut the debug bar's RSS by 17 MB.
+- **Stream back-pressure:** a full zbus stream makes zbus's reader wait, which also holds up
+  replies, so the queues are 256 deep. The worst case is a timed-out call on the `dbus` thread.
+- **Items that go away:** `NameOwnerChanged` is followed in *both* modes (C did it only as the
+  Watcher, and its Watcher never emitted `StatusNotifierItemUnregistered`, so a C bar in Host mode
+  kept a quit app's icon forever). As the Watcher, the Rust bar emits `…Unregistered`.
+- **The has-menu rule and the hand cursor:** each icon is a `ClickTarget` with
+  `Action::TrayIcon(id)`, so the hand comes for free. `App::run` now gets the button
+  (workspace pills stay left-only).
+- **No fixed caps:** items and menu entries are `Vec`s (C: 32 each).
+- **Testing Watcher mode:** the user's running bar owns the Watcher names, so a test bar is in
+  Host mode. `dbus-run-session -- python3 tests/test_tray.py` gives it a private bus, where it
+  becomes the Watcher. It passes against both bars.

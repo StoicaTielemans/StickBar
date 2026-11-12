@@ -16,7 +16,7 @@
 //! click <output> <x> <y> <left|right|middle>
 //!                        -> a click on that monitor's bar, bar-local px
 //! menu                   -> {"ok":true,"open":bool,"width","height","catchers",
-//!                            "power_last_action","device_cards","mixer_rows"}
+//!                            "power_last_action","device_cards","mixer_rows","eq_cards"}
 //! menu-click <x> <y> [button] / menu-motion <x> <y>
 //!                        -> a click / move on the open menu, menu-local px
 //! menu-press <x> <y> [button] / menu-release / menu-scroll <x> <y> <+1|-1>
@@ -27,14 +27,15 @@
 //! target power <logout|restart|shutdown|corner|header>
 //! target device <meter|mute|body> <fraction> <description...>
 //! target mixer <slider|mute> <fraction> <stream name...>
-//!                        -> {"ok":true,"x","y"}: a point on the power menu or
-//!                           a device card
+//! target eq <profile>
+//!                        -> {"ok":true,"x","y"}: a point on the power menu, a
+//!                           device or mixer card, or an EQ profile card
 //! refresh <mem|cpu|cpu-reset|gpu|poll>
 //!                        -> run a dropdown's details refresh (cpu-reset: start
 //!                           a fresh process window first), or a full 5 s poll
-//! dump <mem|cpu|gpu|net|audio>
+//! dump <mem|cpu|gpu|net|audio|eq>
 //!                        -> every figure the bar holds (test_sysmon_data,
-//!                           test_network_data, test_audio)
+//!                           test_network_data, test_audio, test_eq)
 //! cursor <output> <x> <y> / menu-cursor <x> <y>
 //!                        -> {"ok":true,"shape":"pointer"|"default"}: the cursor
 //!                           the bar would show there (Rust only)
@@ -62,6 +63,7 @@ use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::
 use crate::{
     audio::{AudioState, Kind, Node},
     bar::{BarSurface, popup_surface::PopupSurface},
+    eq::EqState,
     network::Network,
     sysmon::Sysmon,
     wayland::{App, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Output},
@@ -221,15 +223,20 @@ fn menu(app: &App) -> Value {
         .mixer
         .row_count()
         .map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX));
+    let eq_cards = app
+        .popups()
+        .eq
+        .card_count()
+        .map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX));
     match app.popups().latest_menu().and_then(PopupSurface::menu_size) {
         Some((width, height)) => json!({
             "ok": true, "open": true, "width": width, "height": height,
             "catchers": catchers, "power_last_action": last, "device_cards": device_cards,
-            "mixer_rows": mixer_rows,
+            "mixer_rows": mixer_rows, "eq_cards": eq_cards,
         }),
         None => json!({
             "ok": true, "open": false, "catchers": catchers, "power_last_action": last,
-            "device_cards": device_cards, "mixer_rows": mixer_rows,
+            "device_cards": device_cards, "mixer_rows": mixer_rows, "eq_cards": eq_cards,
         }),
     }
 }
@@ -266,6 +273,7 @@ fn dump(app: &mut App, section: &str) -> Value {
         "gpu" => dump_gpu(&renderer.sysmon),
         "net" => dump_net(&renderer.network),
         "audio" => dump_audio(&renderer.audio),
+        "eq" => dump_eq(&renderer.eq),
         _ => error("unknown dump section"),
     }
 }
@@ -393,6 +401,21 @@ fn dump_audio(audio: &AudioState) -> Value {
     })
 }
 
+/// `dump eq` (read by `test_eq`). `pending` is "" when nothing is, as in C.
+fn dump_eq(eq: &EqState) -> Value {
+    let snap = &eq.snap;
+    json!({
+        "ok": true,
+        "available": snap.available,
+        "profile": snap.profile,
+        "gain": snap.gain,
+        "preamp": snap.preamp,
+        "enabled": snap.enabled,
+        "pending": eq.pending.as_deref().unwrap_or_default(),
+        "curve_points": snap.curve.len(),
+    })
+}
+
 /// `dump net` (read by `test_network_data`).
 fn dump_net(n: &Network) -> Value {
     json!({
@@ -419,6 +442,7 @@ fn dump_net(n: &Network) -> Value {
 fn target(app: &mut App, args: &str) -> Value {
     let found = match args.split_once(' ') {
         Some(("power", part)) => app.popups().power.target(part.trim()),
+        Some(("eq", profile)) => app.popups().eq.target(profile.trim()),
         Some(("device", rest)) => {
             let mut parts = rest.splitn(3, ' ');
             match (

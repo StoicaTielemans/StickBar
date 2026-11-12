@@ -37,10 +37,10 @@
 | PipeWire | pw_thread_loop | **pipewire** crate (pipewire-rs) on its own thread → channel | Same |
 | NVML | dlopen'd libnvidia-ml | **nvml-wrapper** | Loads the library at runtime, like now. Use the v2 memory call (BUG.md lesson) |
 | Timers / clock | timerfd + localtime | calloop `Timer` + **chrono** (`Local`) | |
-| inotify (EQ) | raw inotify | **inotify** crate as a calloop source | |
+| inotify (EQ) | raw inotify | **rustix** `fs::inotify` as a calloop `Generic` source | rustix is already a dependency; its inotify API is safe, so no extra crate |
 | getifaddrs (network) | libc | **nix** (`net` feature) | Safe wrapper |
 | FFT (visualizer) | own `spectrum.c` | **rustfft** | |
-| Child processes | fork/execv + mask reset | `std::process::Command` | std already resets the signal mask in the child, which the C bar does by hand in `eq_state.c` |
+| Child processes | fork/execv + mask reset | **nix `posix_spawn`** with an empty signal mask (the EQ script) | `std::process::Command` does **not** reset the mask (only SIGPIPE's handler), so its child keeps SIGINT/SIGTERM/SIGUSR1 blocked; `pre_exec` would need `unsafe`. `spawn_systemctl` still uses `Command` (BUG.md, Open) |
 
 Add each crate only in the milestone that first needs it.
 
@@ -151,10 +151,14 @@ must pass.
   sink/source cache, scroll steps, device dropdown, mixer, and `target device|mixer`. No
   commits for no-op events. Tests: `test_audio`, `test_redraw` (pulse part), `test_popups`
   (volume/mixer/mic).
-- [ ] **M10: EQ** (`eq/*`, `modules/eq/*` ~800). state.json, inotify, script launcher, curve,
-  dropdown. **Never point a test at the real DAC script.** Fix the two open EQ bugs from
-  BUG.md as part of the port (a pending-state timer tick, and ignoring clicks while a profile
-  is applying). Tests: `test_eq`, `test_popups` (EQ).
+- [x] **M10: EQ** (`eq/*`, `modules/eq/*` ~800). state.json (serde_json), inotify (rustix) on
+  the directory, the script launcher, the curve, the box and the dropdown, `dump eq` /
+  `target eq` / `eq_cards`. **Never point a test at the real DAC script.** Both open EQ bugs
+  fixed by following the script process instead of a timer: "applying" ends on the state write
+  or the script's exit, and profile clicks are ignored while it runs. The script is started
+  with `posix_spawn` and an empty signal mask (`Command` keeps the bar's blocked signals).
+  **C's `test_eq` passes unchanged**, as does `test_popups` (EQ). The box and the dropdown are
+  pixel-identical to C's in every state.
 - [ ] **M11: Tray** (`dbus/*`, `modules/tray/*` ~1.7k). zbus thread, become the
   StatusNotifierWatcher or fall back to host registration, item registry, IconPixmap →
   cairo, icon-theme fallback, DBusMenu context menu. Tests: `test_tray`.
@@ -267,3 +271,15 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   ported dropdown (10). The mixer matches C's (364x116 with one app). All 15 tests pass.
   Release vs release: CPU 0.05 % vs 0.07 %, private 7.9 vs 8.3 MB, PSS 14.1 vs 16.0 MB, RSS
   32.3 vs 35.2 MB, 4 threads vs 5.
+- 2026-11-12 · M10 · EQ. C's `test_eq` and `test_popups` pass unchanged; 16 tests pass (47 unit
+  tests). The box and dropdown are byte-identical to C's in 4 states (no state, active, off,
+  custom) plus hovered and applying. Both BUG.md EQ bugs are fixed and checked with a failing fake
+  script: "applying" clears when it exits, and a second click starts nothing. The script's
+  `SigBlk` is 0. Release vs release: CPU 0.03 % vs 0.03 %, private 27.6 vs 28.0 MB, PSS 33.0 vs
+  33.1 MB, RSS 53.9 vs 56.2 MB, 4 threads vs 5. Release binary 1.6 MB. Commits 39 vs 47/min, damaged pixels
+  550k vs 532k/min. Memory is up for both bars since M9c, probably because NVML now loads (the
+  driver works again after a reboot); not measured. Failing for reasons outside the bar:
+  `test_sysmon_data` (a game and Java use more memory than its 400 MB process) and
+  `test_nvml_vs_smi` (driver 620's `nvidia-smi` prints a fractional temperature that the test
+  `int()`s). Both fail the same way against the C bar. A real card click against the DAC is
+  left for the user.

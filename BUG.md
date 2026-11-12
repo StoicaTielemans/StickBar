@@ -6,19 +6,32 @@ limitations, as opposed to bugs, are in `docs/limitations.md`.
 
 ## Open
 
-- **EQ: `applying` can stay on screen after a failed profile switch.** If the script
-  exits without writing state (e.g. the DAC is unplugged), `eq_state_pending_profile()`
-  only clears the pending name when something asks for it after the 15 s
-  `PENDING_TIMEOUT_SEC`, and nothing redraws the open dropdown at that moment. The card
-  and yellow pill stay until the next redraw, such as moving the pointer over the popup.
-  A timer tick while pending, like `media_popup_tick()`, would fix it.
-- **EQ: clicking a profile while one is applying starts a second script.**
-  `eq_popup_handle_click()` and `eq_state_apply_profile()` don't check for a pending
-  apply, so two `blackpearl-eq.py` processes can run at once and steal each other's
-  replies on the DAC's hidraw node (see "Why a state file" in `docs/modules/eq.md`). Ignoring
-  clicks while something is pending would fix it.
+- **Power menu (Rust port): `systemctl` starts with SIGINT, SIGTERM and SIGUSR1 blocked.**
+  `spawn_systemctl()` in `src/wayland/pointer.rs` uses `std::process::Command`, which doesn't
+  reset the signal mask the bar blocks for its signal source (found while porting the EQ, see
+  below). Low impact, since `systemctl reboot`/`poweroff` is short-lived, but the same fix as
+  the EQ launcher (nix `posix_spawn` with an empty mask) applies.
 
 ## Fixed
+
+### EQ
+
+- **`applying` could stay on screen after a failed profile switch** (C bar). If the script
+  exited without writing state (e.g. the DAC unplugged), the pending name was only cleared
+  when something asked for it after the 15 s `PENDING_TIMEOUT_SEC`, and nothing redrew the
+  open dropdown then: the card and yellow pill stayed until the next redraw. Fixed in the
+  Rust port by following the script process: its thread reports the exit, which ends
+  "applying" at once. Checked with a fake that exits 1 after 2 s without writing state:
+  cleared after 2.06 s.
+- **Clicking a profile while one was applying started a second script** (C bar). Nothing
+  checked for a pending apply, so two `blackpearl-eq.py` processes could run at once and
+  steal each other's replies on the DAC's hidraw node. The Rust port ignores profile clicks
+  while a script runs or a switch is pending. Checked: a second click during a 2 s fake run
+  added nothing to its log.
+- **The script started with the bar's blocked signals** (Rust port, before it shipped).
+  `docs/porting.md` assumed `std::process::Command` resets the signal mask in the child; it
+  doesn't. Found by having a fake script write its `/proc/self/status`: `SigBlk` was
+  `0x4202` (SIGINT, SIGUSR1, SIGTERM). Now `posix_spawn` with an empty mask: `SigBlk: 0`.
 
 ### Wayland and buffers
 

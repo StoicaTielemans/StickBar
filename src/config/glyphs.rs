@@ -69,6 +69,8 @@ pub(crate) const ICON_LOGOUT: char = '\u{f0343}';
 pub(crate) const ICON_RESTART: char = '\u{f0453}';
 /// `md-power`, the power menu's Shutdown card and its header icon.
 pub(crate) const ICON_POWER: char = '\u{f0425}';
+/// `md-equalizer`, the EQ dropdown's header icon.
+pub(crate) const ICON_EQUALIZER: char = '\u{f0ea2}';
 
 /// Workspace numerals 1-10 as kanji (一 二 三 四 五 六 七 八 九 十), matching the
 /// reference bar. These are CJK characters, not Nerd Font icons, so pango

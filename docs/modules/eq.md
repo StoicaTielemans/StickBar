@@ -76,3 +76,31 @@ this module never opens the DAC's HID device.
   same and also sets `BLACKPEARL_EQ_SCRIPT` to `tests/lib/fake_eq_script.py`,
   so a dropdown click runs the fake instead. A click has never been verified
   end to end against the real script and DAC.
+
+## In the Rust port
+
+- **Files:** `src/eq/mod.rs` (`EqState`: the snapshot, pending/running, the inotify watch),
+  `src/eq/launcher.rs` (`EqState::apply`), `src/eq/curve.rs` (pure cairo),
+  `src/modules/eq/mod.rs` (the box), `src/modules/eq/popup.rs` (`EqPopup`). Layout constants,
+  colours and text are C's, and the box and dropdown are pixel-identical to C's (no state,
+  active, off, custom, hovered, applying).
+- **inotify through rustix's `fs::inotify`** (no separate crate), as a calloop `Generic` source
+  on the directory, same mask and `state.json` name filter as C. `App::eq_file_changed`
+  redraws only when the file parsed.
+- **"applying" follows the script process, not a timeout.** It starts on the click and ends on
+  the state write or when the script exits, whichever comes first. A script that fails without
+  writing state (DAC unplugged) clears it the moment it exits; C kept it for up to 15 s, and
+  didn't repaint when its timeout ran out. A script that hangs keeps showing "applying", which
+  is true. While one runs, profile clicks do nothing (two scripts at once steal each other's
+  DAC replies), the cards show no hover or `apply` tag, and the cursor stays an arrow over them.
+- **Launching:** an `eq-script` thread runs the script and `waitpid`s it, which reaps it (C
+  double-forked), then sends the exit to the main loop on a calloop channel.
+  `App::eq_script_exited` clears pending and reads the state again, in case the exit was handled
+  before the inotify event.
+- **Rule: a child of the bar must get an empty signal mask.** The bar blocks SIGINT, SIGTERM and
+  SIGUSR1 in every thread for its signal source, and a blocked mask survives exec.
+  `std::process::Command` does **not** reset it (only SIGPIPE's handler): a script started that
+  way had `SigBlk: 0x4202`, so SIGTERM and Ctrl-C couldn't stop it. `Command::pre_exec` would need
+  `unsafe`, so the launcher uses nix's safe `posix_spawn` with `set_sigmask(empty)`, SIGPIPE back
+  to default, the bar's environment, and `/dev/null` on fds 0-2. stdin matters: in test mode
+  it's the test-control channel.

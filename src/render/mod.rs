@@ -3,7 +3,8 @@
 //! The bar has three regions, as in the C bar: left-region modules laid out
 //! left to right from x = 0, right-region ones right to left from the right
 //! edge, and the media box centered between. So far: the Arch logo, the
-//! workspace pills, CPU, GPU and memory on the left; the clock and network on the right.
+//! workspace pills, CPU, GPU and memory on the left; the clock, network, EQ,
+//! volume and mic on the right.
 
 pub(crate) mod braille_graph;
 pub(crate) mod meter_bar;
@@ -16,8 +17,9 @@ pub(crate) mod text;
 use crate::{
     audio::AudioState,
     config::{BAR, COLORS},
+    eq::EqState,
     modules::{
-        clock::Clock, cpu, gpu, mem, mic, network, powermenu::arch_logo, volume,
+        clock::Clock, cpu, eq, gpu, mem, mic, network, powermenu::arch_logo, volume,
         workspaces::Workspaces,
     },
     network::Network,
@@ -115,6 +117,8 @@ pub(crate) struct Renderer {
     pub(crate) network: Network,
     /// The latest audio snapshot from the pulse thread (empty until the first).
     pub(crate) audio: AudioState,
+    /// The DAC EQ's state file, and the profile switch in progress.
+    pub(crate) eq: EqState,
 }
 
 impl Renderer {
@@ -136,6 +140,7 @@ impl Renderer {
                 network
             },
             audio: AudioState::default(),
+            eq: EqState::new(),
         })
     }
 
@@ -211,8 +216,20 @@ impl Renderer {
             clickable: true,
         });
 
-        // Right region, laid out from the right edge leftwards: the clock,
-        // network, (EQ from M10,) volume and mic, as in the C bar.
+        self.render_right(cr, width, height, &mut layout)?;
+        Ok(layout)
+    }
+
+    /// The right region, laid out from the right edge leftwards: the clock,
+    /// network, EQ, volume and mic, as in the C bar. The EQ (a StickBar-only
+    /// module) sits between network and volume, keeping the audio together.
+    fn render_right(
+        &mut self,
+        cr: &cairo::Context,
+        width: f64,
+        height: f64,
+        layout: &mut BarLayout,
+    ) -> Result<(), cairo::Error> {
         let clock = self
             .clock
             .render(cr, &mut self.text, width, (0.0, height))?;
@@ -235,11 +252,24 @@ impl Renderer {
             // Right click opens its dropdown.
             clickable: true,
         });
+        let eq_box = eq::render(
+            cr,
+            &mut self.text,
+            &self.eq,
+            network_box.x - BAR.item_spacing,
+            (0.0, height),
+        )?;
+        layout.boxes.push(ModuleBox {
+            name: "eq",
+            rect: eq_box,
+            // Right click opens its dropdown.
+            clickable: true,
+        });
         let volume_box = volume::render(
             cr,
             &mut self.text,
             &self.audio,
-            network_box.x - BAR.item_spacing,
+            eq_box.x - BAR.item_spacing,
             (0.0, height),
         )?;
         layout.boxes.push(ModuleBox {
@@ -261,7 +291,7 @@ impl Renderer {
             // Left mutes, scrolling steps.
             clickable: true,
         });
-        Ok(layout)
+        Ok(())
     }
 
     /// Repaints only the clock, over its previous box `old`, on a frame that

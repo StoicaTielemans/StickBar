@@ -265,6 +265,28 @@ impl App {
         self.mark_all_dirty();
     }
 
+    /// Something was written in the EQ's state directory: re-read the state
+    /// file, and redraw only if it parsed.
+    pub(crate) fn eq_file_changed(&mut self) {
+        if self.renderer.eq.load() {
+            self.eq_state_changed();
+        }
+    }
+
+    /// A profile script finished (successfully or not): "applying" ends.
+    pub(crate) fn eq_script_exited(&mut self) {
+        self.renderer.eq.script_exited();
+        self.eq_state_changed();
+    }
+
+    /// What the EQ shows changed: repaint its dropdown, if open, and the bars
+    /// (bars whose pixels didn't change skip the commit anyway).
+    pub(crate) fn eq_state_changed(&mut self) {
+        let renderer = &mut self.renderer;
+        self.popups.eq.paint(&renderer.eq, &mut renderer.text);
+        self.mark_all_dirty();
+    }
+
     /// The renderer, for the tests' `dump`/`refresh` commands.
     pub(crate) const fn renderer_mut(&mut self) -> &mut Renderer {
         &mut self.renderer

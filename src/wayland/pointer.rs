@@ -177,6 +177,9 @@ impl App {
             // A right click on the network box opens its dropdown (reopens it
             // if open). It's independent of the sysmon three.
             ("network", BTN_RIGHT) => self.open_network_popup(position, rect),
+            // A right click on the EQ box opens its dropdown (reopens it if
+            // open). Left does nothing, at the user's request.
+            ("eq", BTN_RIGHT) => self.open_eq_popup(position, rect),
             // Right-click on the clock toggles the year calendar. Left does
             // nothing: the clock has no obvious primary action (docs/popups.md).
             ("clock", BTN_RIGHT) => self.toggle_calendar(position, rect),
@@ -238,6 +241,24 @@ impl App {
             }
             if host.is_catcher(surface) {
                 self.popups.device.close();
+                return true;
+            }
+        }
+
+        // The EQ dropdown: any button on a profile card applies it (as in C),
+        // unless a switch is already under way; its catcher closes it.
+        if let Some(host) = self.popups.eq.host() {
+            if host.is_menu(surface) {
+                if let Some(name) = self.popups.eq.press((x, y), &self.renderer.eq) {
+                    self.renderer.eq.apply(name);
+                    // The card and pill turn to "applying" now, and the bar's
+                    // box to "NAME..."; the new curve comes with the state write.
+                    self.eq_state_changed();
+                }
+                return true;
+            }
+            if host.is_catcher(surface) {
+                self.popups.eq.close();
                 return true;
             }
         }
@@ -365,6 +386,12 @@ impl App {
         {
             return;
         }
+        if self.popups.eq.host().is_some_and(|h| h.is_menu(surface)) {
+            self.popups
+                .eq
+                .motion((x, y), &self.renderer.eq, &mut self.renderer.text);
+            return;
+        }
         if self
             .popups
             .calendar
@@ -407,6 +434,14 @@ impl App {
         // The mixer's chips and sliders react to a click.
         if self.popups.mixer.host().is_some_and(|h| h.is_menu(surface)) {
             return if self.popups.mixer.over_control(x, y) {
+                Shape::Pointer
+            } else {
+                Shape::Default
+            };
+        }
+        // A profile card reacts to a click, unless a switch is under way.
+        if self.popups.eq.host().is_some_and(|h| h.is_menu(surface)) {
+            return if self.popups.eq.over_clickable((x, y), &self.renderer.eq) {
                 Shape::Pointer
             } else {
                 Shape::Default
@@ -644,6 +679,43 @@ impl App {
             trigger,
             outputs.iter().map(Output::wl_output),
             &mut renderer.network,
+            &mut renderer.text,
+        );
+    }
+
+    /// Opens the EQ dropdown under the box `trigger` on the monitor at
+    /// `position` in `outputs`.
+    fn open_eq_popup(&mut self, position: usize, trigger: BoxRect) {
+        let Some(output_width) = self.outputs.get(position).map(|o| self.output_size(o).0) else {
+            return;
+        };
+        let Self {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter,
+            test_mode,
+            outputs,
+            popups,
+            renderer,
+            ..
+        } = self;
+        let Some(output) = outputs.get(position) else {
+            return;
+        };
+        let env = PopupEnv {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter: viewporter.as_ref(),
+            test_mode: *test_mode,
+        };
+        popups.eq.open(
+            &env,
+            (output.wl_output(), output_width),
+            trigger,
+            outputs.iter().map(Output::wl_output),
+            &renderer.eq,
             &mut renderer.text,
         );
     }

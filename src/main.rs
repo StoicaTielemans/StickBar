@@ -12,6 +12,7 @@
 mod audio;
 mod bar;
 mod config;
+mod eq;
 mod hyprland;
 mod modules;
 mod network;
@@ -183,6 +184,10 @@ fn start_sources(handle: &calloop::LoopHandle<'static, App>, app: &mut App) -> R
 
     // Volume and mic: the pulse thread, which pushes snapshots into the loop.
     app.audio = audio::start(handle);
+
+    // The DAC EQ: the state file's inotify watch, and the channel a finished
+    // profile script reports on.
+    eq::start(handle, &mut app.renderer_mut().eq);
 
     // CPU/GPU/memory figures, polled every 5 s (the first poll already ran).
     sysmon::timer::start(handle)?;

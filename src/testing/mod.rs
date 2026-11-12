@@ -37,7 +37,9 @@
 //! refresh <mem|cpu|cpu-reset|gpu|poll>
 //!                        -> run a dropdown's details refresh (cpu-reset: start
 //!                           a fresh process window first), or a full 5 s poll
-//! dump <mem|cpu|gpu|net|audio|eq|media>
+//! dump <mem|cpu|gpu|net|audio|eq|media|visualizer>
+//! vis-tone <slot> <channel> <hz>
+//!                        -> synthetic audio for a visualizer slot (synth mode)
 //!                        -> every figure the bar holds (test_sysmon_data,
 //!                           test_network_data, test_audio, test_eq)
 //! cursor <output> <x> <y> / menu-cursor <x> <y>
@@ -69,10 +71,14 @@ use crate::{
     bar::{BarSurface, popup_surface::PopupSurface},
     dbus::Toggle,
     eq::EqState,
-    modules::{media::Media, privacy::popup::title},
+    modules::{
+        media::{Media, graphs, popup::graph_panel as media_graph_panel},
+        privacy::popup::title,
+    },
     network::Network,
     render::{Action, ClickTarget},
     sysmon::Sysmon,
+    visualizer::{MAX_SOURCES, spectrum::BANDS},
     wayland::{App, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Output},
 };
 
@@ -181,7 +187,9 @@ fn dispatch(app: &mut App, line: &str) -> Value {
         "cursor" if !rest.is_empty() => cursor(app, rest),
         "target" if !rest.is_empty() => target(app, rest),
         "refresh" if !rest.is_empty() => refresh(app, rest),
+        "dump" if rest == "visualizer" => dump_visualizer(app),
         "dump" if !rest.is_empty() => dump(app, rest),
+        "vis-tone" if !rest.is_empty() => vis_tone(app, rest),
         "menu-cursor" if !rest.is_empty() => menu_cursor(app, rest),
         "snapshot" if !rest.is_empty() => match app.snapshot(rest) {
             Ok(()) => json!({ "ok": true }),
@@ -325,6 +333,62 @@ fn dump(app: &mut App, section: &str) -> Value {
         "media" => dump_media(&renderer.media),
         _ => error("unknown dump section"),
     }
+}
+
+/// `dump visualizer` (read by `test_visualizer`): whether graphs are shown,
+/// each graph-carrying card's slot, geometry (popup-local px) and levels,
+/// and every slot's levels (a closed dropdown must leave them all at 0).
+fn dump_visualizer(app: &App) -> Value {
+    let media = &app.renderer().media;
+    let vis = &media.visualizer;
+    let none = [[0.0_f32; BANDS]; 2];
+    let levels = |slot: usize| {
+        let l = vis.levels(slot).unwrap_or(&none);
+        let [left, right] = l;
+        (left.to_vec(), right.to_vec())
+    };
+    let graphs: Vec<Value> = app
+        .popups()
+        .media
+        .test_graphs(media)
+        .into_iter()
+        .map(|(name, slot, y)| {
+            let (panel_x, panel_w) = media_graph_panel();
+            let (graph_x, top_y, bottom_y, half_h, rows) =
+                graphs::test_geometry(panel_x, y, panel_w);
+            let (left, right) = levels(slot);
+            json!({
+                "app": name, "slot": slot, "target": 0,
+                "panel_x": panel_x, "panel_y": y, "panel_w": panel_w, "panel_h": graphs::row_h(),
+                "graph_x": graph_x, "top_y": top_y, "bottom_y": bottom_y, "half_h": half_h,
+                "rows": rows, "levels_l": left, "levels_r": right,
+            })
+        })
+        .collect();
+    let slots: Vec<Value> = (0..MAX_SOURCES)
+        .map(|slot| {
+            let (left, right) = levels(slot);
+            json!({ "levels_l": left, "levels_r": right })
+        })
+        .collect();
+    json!({ "ok": true, "available": vis.available(), "graphs": graphs, "slots": slots })
+}
+
+/// `vis-tone <slot> <channel 0=L 1=R> <hz>`: synthetic audio for one
+/// visualizer slot (only heard in `STICKBAR_TEST_VISUALIZER_SYNTH` mode).
+fn vis_tone(app: &mut App, args: &str) -> Value {
+    let mut parts = args.split_whitespace();
+    let slot = parts.next().and_then(|v| v.parse::<usize>().ok());
+    let channel = parts.next().and_then(|v| v.parse::<usize>().ok());
+    let hz = parts.next().and_then(|v| v.parse::<f32>().ok());
+    let (Some(slot), Some(channel), Some(hz)) = (slot, channel, hz) else {
+        return error("usage: vis-tone <slot> <channel> <hz>");
+    };
+    app.renderer_mut()
+        .media
+        .visualizer
+        .set_tone(slot, channel, hz);
+    json!({ "ok": true })
 }
 
 /// `dump mem` (read by `test_sysmon_data`).

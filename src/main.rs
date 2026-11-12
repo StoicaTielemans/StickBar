@@ -23,6 +23,7 @@ mod render;
 mod sysmon;
 mod testing;
 mod util;
+mod visualizer;
 mod wayland;
 
 use std::process::ExitCode;
@@ -128,6 +129,9 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // Kept for timers started later (the visualizer's).
+    app.loop_handle = Some(event_loop.handle());
+
     // The module event sources: timers, Hyprland, the test channel.
     if let Err(err) = start_sources(&event_loop.handle(), &mut app) {
         eprintln!("stickBar: {err}");
@@ -163,6 +167,7 @@ fn main() -> ExitCode {
                 );
             }
         }
+        app.sync_visualizer();
         app.flush_dirty(&qh);
     }
 }

@@ -41,7 +41,7 @@ use smithay_client_toolkit::{
 use super::{App, Output};
 use crate::{
     audio::{Command, Kind, VOLUME_STEP},
-    bar::popup_surface::PopupEnv,
+    bar::{popup_surface::PopupEnv, strip_surface::StripEnv},
     config::{COLORS, Color},
     dbus::{self, MenuEntry, TrayCommand},
     modules::powermenu::{PowerAction, PowerClick},
@@ -942,6 +942,8 @@ impl App {
             compositor,
             layer_shell,
             viewporter,
+            subcompositor,
+            shm,
             test_mode,
             outputs,
             popups,
@@ -958,8 +960,14 @@ impl App {
             viewporter: viewporter.as_ref(),
             test_mode: *test_mode,
         };
+        let strips = subcompositor.as_ref().map(|subcompositor| StripEnv {
+            qh,
+            compositor,
+            subcompositor,
+            shm,
+        });
         popups.media.open(
-            &env,
+            (&env, strips.as_ref()),
             (output.wl_output(), trigger),
             outputs.iter().map(Output::wl_output),
             &renderer.media,

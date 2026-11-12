@@ -17,13 +17,20 @@
 
 use std::fs::File;
 
-use smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput;
+use smithay_client_toolkit::reexports::client::{
+    QueueHandle,
+    protocol::{wl_output::WlOutput, wl_surface::WlSurface},
+};
 
-use super::{Media, display_title};
+use super::{
+    Media, display_title,
+    graphs::{self, Graphs, VIS_ROW_GAP},
+};
 use crate::{
     bar::{
         popup_host::PopupHost,
         popup_surface::{PopupEnv, PopupSurface, render_image},
+        strip_surface::StripEnv,
     },
     config::{
         COLORS, Color, FONT,
@@ -38,6 +45,8 @@ use crate::{
         text::TextCache,
         whole_px,
     },
+    visualizer::MAX_SOURCES,
+    wayland::App,
 };
 
 // Layout, local to this popup (CLAUDE.md "Conventions").
@@ -122,6 +131,11 @@ impl Button {
     }
 }
 
+/// A graph panel's (x, width) in the popup (the tests' `dump visualizer`).
+pub(crate) const fn graph_panel() -> (f64, f64) {
+    (INNER_X, INNER_W)
+}
+
 /// The card column's content left edge.
 const INNER_X: f64 = OUTER_MARGIN + CARD_PAD;
 /// The card's content width.
@@ -138,6 +152,9 @@ struct Card {
     h: f64,
     /// The artist/album line is shown.
     has_artist: bool,
+    /// The spectrum graph panel's top, for the first cards while the
+    /// visualizer is available.
+    vis_y: Option<f64>,
     /// The timeline row's top.
     timeline_y: f64,
     /// The chips' top.
@@ -161,6 +178,9 @@ struct Content {
 
 /// An open dropdown.
 struct Open {
+    /// The cards' spectrum graphs. Declared before `host`, so their strip
+    /// subsurfaces are destroyed before the surface they sit on.
+    graphs: Graphs,
     /// Its surfaces.
     host: PopupHost,
     /// What it shows, kept apart from `host` so a paint can borrow both.
@@ -179,7 +199,7 @@ impl MediaPopup {
     /// open one. Nothing opens without players.
     pub(crate) fn open<'o>(
         &mut self,
-        env: &PopupEnv<'_>,
+        (env, strips): (&PopupEnv<'_>, Option<&StripEnv<'_>>),
         (output, trigger): (&WlOutput, BoxRect),
         all_outputs: impl Iterator<Item = &'o WlOutput>,
         media: &Media,
@@ -198,6 +218,7 @@ impl MediaPopup {
             all_outputs,
         );
         self.open = Some(Open {
+            graphs: Graphs::default(),
             host,
             content: Content {
                 cards,
@@ -207,13 +228,19 @@ impl MediaPopup {
                 meter_w: timeline_meter_w(text),
             },
         });
+        self.update_graphs(strips, media);
         self.paint(media, text);
     }
 
     /// The players changed: re-lays out, recreates the surface if the height
     /// changed (resizing a layer surface in place made Hyprland unmap it on
     /// shrink, as with the mixer), closes it when no player is left.
-    pub(crate) fn refresh(&mut self, env: &PopupEnv<'_>, media: &Media, text: &mut TextCache) {
+    pub(crate) fn refresh(
+        &mut self,
+        (env, strips): (&PopupEnv<'_>, Option<&StripEnv<'_>>),
+        media: &Media,
+        text: &mut TextCache,
+    ) {
         let Some(open) = self.open.as_mut() else {
             return;
         };
@@ -237,7 +264,81 @@ impl MediaPopup {
             open.host.resize(env, (whole_px(size.0), whole_px(size.1)));
         }
         content.size = size;
+        self.update_graphs(strips, media);
         self.paint(media, text);
+    }
+
+    /// Places and draws the graphs for the current layout (on the current
+    /// menu surface: a resize made a new one). Runs before the paint whose
+    /// commit applies the strips' positions.
+    fn update_graphs(&mut self, strips: Option<&StripEnv<'_>>, media: &Media) {
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        let parent = open.host.menu().wl_surface().clone();
+        let rows: Vec<Option<f64>> = open
+            .content
+            .cards
+            .iter()
+            .take(MAX_SOURCES)
+            .map(|c| c.vis_y)
+            .collect();
+        open.graphs
+            .update(strips, &parent, (INNER_X, INNER_W), &rows, media);
+    }
+
+    /// (shown, ready) graph masks for the visualizer's pump ((0, 0) closed).
+    pub(crate) fn graph_masks(&self) -> (u32, u32) {
+        self.open.as_ref().map_or((0, 0), |o| o.graphs.masks())
+    }
+
+    /// Redraws the graphs of the slots in `changed` (a visualizer frame).
+    pub(crate) fn draw_graphs(&mut self, changed: u32, qh: &QueueHandle<App>, media: &Media) {
+        if let Some(open) = self.open.as_mut() {
+            open.graphs.draw_changed(changed, qh, media);
+        }
+    }
+
+    /// A frame callback, if `surface` is one of the graphs' strips. Returns
+    /// whether it was.
+    pub(crate) fn strip_frame_done(&mut self, surface: &WlSurface, qh: &QueueHandle<App>) -> bool {
+        self.open
+            .as_mut()
+            .is_some_and(|o| o.graphs.frame_done(surface, qh))
+    }
+
+    /// Which slots should capture now: a graph on screen whose player is
+    /// playing (and, in tests, is one of their fakes). All off when closed.
+    pub(crate) fn slot_wants(&self, media: &Media) -> [bool; MAX_SOURCES] {
+        let mut wants = [false; MAX_SOURCES];
+        let Some(open) = self.open.as_ref() else {
+            return wants;
+        };
+        for ((slot, want), card) in wants.iter_mut().enumerate().zip(&open.content.cards) {
+            *want = card.vis_y.is_some()
+                && open.graphs.shown(slot)
+                && media
+                    .player(card.player)
+                    .is_some_and(|p| p.is_playing() && media.visualizer.capture_allowed(&p.app));
+        }
+        wants
+    }
+
+    /// Each graph-carrying card's (app, slot, panel top), for the tests'
+    /// `dump visualizer`.
+    pub(crate) fn test_graphs<'m>(&self, media: &'m Media) -> Vec<(&'m str, usize, f64)> {
+        let Some(open) = self.open.as_ref() else {
+            return Vec::new();
+        };
+        open.content
+            .cards
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, card)| {
+                let app = media.player(card.player)?.app.as_str();
+                card.vis_y.map(|y| (app, slot, y))
+            })
+            .collect()
     }
 
     /// Closes the dropdown (no-op if closed).
@@ -272,8 +373,14 @@ impl MediaPopup {
 
     /// Paints the open dropdown.
     pub(crate) fn paint(&mut self, media: &Media, text: &mut TextCache) {
-        if let Some(Open { host, content }) = self.open.as_mut() {
-            host.menu_mut().paint(|cr| draw(cr, text, media, content));
+        if let Some(Open {
+            host,
+            content,
+            graphs,
+        }) = self.open.as_mut()
+        {
+            host.menu_mut()
+                .paint(|cr| draw(cr, text, media, (content, graphs)));
         }
     }
 
@@ -360,8 +467,10 @@ impl MediaPopup {
     ) -> Result<(), String> {
         let open = self.open.as_ref().ok_or("no open menu to snapshot")?;
         let (width, height) = open.host.menu().menu_size().ok_or("not a menu")?;
-        let image = render_image(width, height, |cr| draw(cr, text, media, &open.content))
-            .map_err(|e| e.to_string())?;
+        let image = render_image(width, height, |cr| {
+            draw(cr, text, media, (&open.content, &open.graphs))
+        })
+        .map_err(|e| e.to_string())?;
         let mut file = File::create(path).map_err(|e| e.to_string())?;
         image.write_to_png(&mut file).map_err(|e| e.to_string())
     }
@@ -429,6 +538,13 @@ fn layout(media: &Media) -> (Vec<Card>, (f64, f64)) {
         if has_artist {
             h += ARTIST_H;
         }
+        // The graph row (every card in reach of a slot gets it, playing or
+        // not, so play/pause never changes the height).
+        let vis_y =
+            (media.visualizer.available() && i < MAX_SOURCES).then_some(y + h + VIS_ROW_GAP);
+        if vis_y.is_some() {
+            h += VIS_ROW_GAP + graphs::row_h();
+        }
         let timeline_y = y + h + TIMELINE_GAP;
         h += TIMELINE_GAP + TIMELINE_ROW_H + CONTROLS_GAP;
         let buttons_y = y + h;
@@ -438,6 +554,7 @@ fn layout(media: &Media) -> (Vec<Card>, (f64, f64)) {
             y,
             h,
             has_artist,
+            vis_y,
             timeline_y,
             buttons_y,
         });
@@ -486,7 +603,7 @@ fn draw(
     cr: &cairo::Context,
     text: &mut TextCache,
     media: &Media,
-    content: &Content,
+    (content, graphs): (&Content, &Graphs),
 ) -> Result<(), cairo::Error> {
     popup_chrome::draw_frame(cr, content.size.0, content.size.1, ACCENT)?;
     draw_header(cr, text, media, content.cards.len())?;
@@ -501,6 +618,10 @@ fn draw(
                 active == Some(player.id),
                 content,
             )?;
+        }
+        // The graph under its strip: hidden on screen, but in snapshots.
+        if let Some(vis_y) = card.vis_y {
+            graphs.paint_under(cr, i, vis_y, media)?;
         }
     }
     Ok(())

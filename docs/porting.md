@@ -174,7 +174,8 @@ must pass.
   (pipewire-rs 0.10), the node/link graph, mic/webcam/screen-share detection, the box and the
   dropdown. **C's `test_privacy` passes unchanged**; pixel-identical to C's (one known order
   difference inside a card). Playback-stream and Client tracking moves to M14, its only user.
-- [ ] **M14: Visualizer** (`visualizer/*`, `bar/strip_surface.c` ~860). The desync
+- [ ] **M14: Visualizer** (M14a done: analysis, the strips and the graphs, synthetic mode;
+  M14b next: the real capture streams) (`visualizer/*`, `bar/strip_surface.c` ~860). The desync
   subsurface, up to 4 capture streams only while the dropdown is open, FFT bands, and
   synth mode for tests. Tests: `test_visualizer`.
 - [ ] **M15: Switch day.** Full `tests/run_all.py` green, `perf_compare --against main`
@@ -312,3 +313,8 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   the order of several streams in one card. 20 null-sink add/removes: 0 commits, under 10 ms CPU.
   Release vs release: CPU 0.05 % vs 0.05 %, private 28.8 vs 28.0 MB (PipeWire itself 0.2 MB),
   PSS 37.2 vs 34.3 MB, RSS 58.5 vs 56.2 MB, 8 threads vs 5. Release binary 3.3 MB.
+- 2026-11-12 · M14a · Visualizer, analysis and drawing. C's `test_visualizer` passes unchanged
+  (19 strip frames as a graph falls; C commits 37 for the same fall, more than one per tick).
+  With the same steady synthetic tones the dropdown, graphs included, is byte-identical to C's.
+  20 of 22 tests pass (the two environment ones fail as before). 64 unit tests. Outside synth
+  mode the visualizer stays unavailable until M14b, so the daily path is unchanged.

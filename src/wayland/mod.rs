@@ -34,11 +34,12 @@ use smithay_client_toolkit::{
         wlr_layer::{LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure},
     },
     shm::{Shm, ShmHandler},
+    subcompositor::SubcompositorState,
 };
 
 use crate::{
     audio::{Audio, AudioState},
-    bar::{BarSurface, popup_surface::PopupEnv, popups::Popups},
+    bar::{BarSurface, popup_surface::PopupEnv, popups::Popups, strip_surface::StripEnv},
     dbus::{Command, Dbus, TrayEvent},
     hyprland::dispatch::Dispatcher,
     mpris::{MediaCommand, MediaEvent},
@@ -60,6 +61,13 @@ pub(crate) struct App {
     layer_shell: LayerShell,
     /// `wp_viewporter`, if offered: lets click-catchers use a 1x1 buffer.
     viewporter: Option<WpViewporter>,
+    /// `wl_subcompositor`, if offered: the media graphs' strips (without it
+    /// the dropdown has no graph rows).
+    subcompositor: Option<SubcompositorState>,
+    /// The event loop, for timers started later (the visualizer's).
+    pub(crate) loop_handle: Option<calloop::LoopHandle<'static, Self>>,
+    /// The visualizer's 15 fps timer, while it runs.
+    visualizer_timer: Option<calloop::RegistrationToken>,
     /// Tracks seats (input devices) and reports them to `pointer.rs`.
     seat_state: SeatState,
     /// The mouse, once the seat reports one.
@@ -117,7 +125,11 @@ impl App {
         let shm = Shm::bind(globals, qh).map_err(|_e| missing("wl_shm"))?;
         let layer_shell =
             LayerShell::bind(globals, qh).map_err(|_e| missing("zwlr_layer_shell_v1"))?;
-        let renderer = Renderer::new().map_err(|err| format!("couldn't set up drawing: {err}"))?;
+        let mut renderer =
+            Renderer::new().map_err(|err| format!("couldn't set up drawing: {err}"))?;
+        let subcompositor =
+            SubcompositorState::bind(compositor.wl_compositor().clone(), globals, qh).ok();
+        renderer.media.visualizer = crate::visualizer::Visualizer::new(subcompositor.is_some());
         Ok(Self {
             registry_state: RegistryState::new(globals),
             compositor,
@@ -125,6 +137,9 @@ impl App {
             output_state: OutputState::new(globals, qh),
             layer_shell,
             viewporter: viewporter::bind(globals, qh),
+            subcompositor,
+            loop_handle: None,
+            visualizer_timer: None,
             seat_state: SeatState::new(globals, qh),
             pointer: None,
             cursor_shapes: CursorShapeManager::bind(globals, qh).ok(),
@@ -322,6 +337,8 @@ impl App {
                     compositor,
                     layer_shell,
                     viewporter,
+                    subcompositor,
+                    shm,
                     test_mode,
                     popups,
                     renderer,
@@ -334,9 +351,15 @@ impl App {
                     viewporter: viewporter.as_ref(),
                     test_mode: *test_mode,
                 };
+                let strips = subcompositor.as_ref().map(|subcompositor| StripEnv {
+                    qh,
+                    compositor,
+                    subcompositor,
+                    shm,
+                });
                 popups
                     .media
-                    .refresh(&env, &renderer.media, &mut renderer.text);
+                    .refresh((&env, strips.as_ref()), &renderer.media, &mut renderer.text);
             }
             MediaEvent::Positions(positions) => {
                 for (id, position_us) in positions {
@@ -346,6 +369,68 @@ impl App {
                 self.popups.media.paint(&renderer.media, &mut renderer.text);
             }
         }
+    }
+
+    /// Turns the visualizer's slots on and off to match the media dropdown
+    /// (open, the card's graph shown, its player playing). Called once per
+    /// loop pass, like C's `media_popup_sync_visualizer`: cheap, and only a
+    /// real change does anything.
+    pub(crate) fn sync_visualizer(&mut self) {
+        let wants = self.popups.media.slot_wants(&self.renderer.media);
+        let mut start = false;
+        for (slot, want) in wants.into_iter().enumerate() {
+            start |= self.renderer.media.visualizer.set_active(slot, want);
+        }
+        if start {
+            self.start_visualizer_timer();
+        }
+    }
+
+    /// Starts the 15 fps animation timer, if it isn't running. It stops
+    /// itself once nothing is capturing and every level has settled, so a
+    /// closed dropdown costs nothing.
+    fn start_visualizer_timer(&mut self) {
+        if self.visualizer_timer.is_some() {
+            return;
+        }
+        let Some(handle) = self.loop_handle.as_ref() else {
+            return;
+        };
+        let frame = std::time::Duration::from_secs(1) / crate::visualizer::FPS;
+        let inserted = handle.insert_source(
+            calloop::timer::Timer::from_duration(frame),
+            move |_deadline, (), app| {
+                if app.visualizer_frame() {
+                    calloop::timer::TimeoutAction::ToDuration(frame)
+                } else {
+                    calloop::timer::TimeoutAction::Drop
+                }
+            },
+        );
+        match inserted {
+            Ok(token) => self.visualizer_timer = Some(token),
+            Err(err) => eprintln!(
+                "stickBar: couldn't start the visualizer timer: {}",
+                err.error
+            ),
+        }
+    }
+
+    /// One visualizer frame: advance the levels, redraw the graphs whose dots
+    /// moved. Returns whether the timer keeps running.
+    fn visualizer_frame(&mut self) -> bool {
+        let (shown, ready) = self.popups.media.graph_masks();
+        let (changed, busy) = self.renderer.media.visualizer.pump(ready, shown);
+        if changed != 0 {
+            self.popups
+                .media
+                .draw_graphs(changed, &self.qh, &self.renderer.media);
+        }
+        if !busy {
+            // The timer drops itself (TimeoutAction::Drop) on this return.
+            self.visualizer_timer = None;
+        }
+        busy
     }
 
     /// Who's recording what changed (the `pipewire` thread only sends real
@@ -421,7 +506,10 @@ impl CompositorHandler for App {
             .find(|bar| bar.wl_surface() == surface);
         if let Some(bar) = bar {
             bar.frame_done(qh, renderer);
+            return;
         }
+        // Otherwise it may be one of the media graphs' strips.
+        let _was_strip = self.popups.media.strip_frame_done(surface, qh);
     }
 
     // The rest are required by the trait but irrelevant to the bar: it draws at

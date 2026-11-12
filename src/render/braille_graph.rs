@@ -117,9 +117,104 @@ pub(crate) fn draw(
     cr.restore()
 }
 
+// --- The sprite path, for graphs redrawn every frame (the media dropdown's
+// spectrum, 15 fps). `draw` fills one antialiased circle per lit dot: fine
+// for the network graph's 5 s repaint, thousands per frame for an animated
+// one. Instead every dot is rendered once, lit, into an image, and a frame
+// copies just the lit part of each column out of it: whole-pixel rectangles,
+// since dot centres sit on half pixels 3 px apart, so a column is exactly
+// the 3 px band around its centre. Same geometry and colours as `draw`.
+
+/// Dot rows per column, for a graph `cells_h` cells tall.
+pub(crate) const fn rows(cells_h: u32) -> u32 {
+    cells_h * DOTS_Y
+}
+
+/// An image of a `cells_w` x `cells_h` graph with every dot lit, coloured by
+/// row like [`draw`]; `grow_up` picks which edge is row 0.
+pub(crate) fn render_lit(
+    (cells_w, cells_h): (u32, u32),
+    grow_up: bool,
+    gradient: &[Color; 3],
+) -> Result<cairo::ImageSurface, cairo::Error> {
+    let w = crate::render::whole_px(width(cells_w).ceil()).max(1);
+    let h = crate::render::whole_px(height(cells_h).ceil()).max(1);
+    let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h)?;
+    let cr = cairo::Context::new(&surface)?;
+    let (columns, rows) = (cells_w * DOTS_X, cells_h * DOTS_Y);
+    for row in 0..rows {
+        let from_base = dot_offset(row, DOTS_Y, cell_h());
+        let cy = if grow_up {
+            f64::from(h) - from_base
+        } else {
+            from_base
+        };
+        let t = if rows > 1 {
+            f64::from(row) / f64::from(rows - 1)
+        } else {
+            0.0
+        };
+        gradient3(gradient, t).set_source(&cr);
+        for col in 0..columns {
+            cr.new_sub_path();
+            cr.arc(
+                dot_offset(col, DOTS_X, cell_w()),
+                cy,
+                DOT_RADIUS,
+                0.0,
+                std::f64::consts::TAU,
+            );
+        }
+        // One fill per row: a row shares its colour.
+        cr.fill()?;
+    }
+    drop(cr);
+    surface.flush();
+    Ok(surface)
+}
+
+/// A rectangle in whole pixels: (x, y, w, h).
+pub(crate) type PixelRect = (i32, i32, i32, i32);
+
+/// Where dot rows `rows.0..rows.1` of column `col` are, graph-local whole
+/// pixels: copying exactly this out of a [`render_lit`] image (or a panel
+/// with one composited onto it) lights those dots and nothing else.
+pub(crate) fn column_rect(
+    cells_h: u32,
+    col: u32,
+    (row_from, row_to): (u32, u32),
+    grow_up: bool,
+) -> PixelRect {
+    let graph_h = height(cells_h);
+    let cx = dot_offset(col, DOTS_X, cell_w());
+    // Each dot's centre +- half the pitch: the band covers whole dots and
+    // none of the next, and every edge lands on a whole pixel.
+    let near = dot_offset(row_from, DOTS_Y, cell_h()) - DOT_PITCH / 2.0;
+    let far = dot_offset(row_to.saturating_sub(1), DOTS_Y, cell_h()) + DOT_PITCH / 2.0;
+    let px = |v: f64| crate::render::whole_px(v.round());
+    (
+        px(cx - DOT_PITCH / 2.0),
+        px(if grow_up { graph_h - far } else { near }),
+        px(DOT_PITCH),
+        px(far - near),
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{cells_for_width, span_label, width};
+    use super::{cells_for_width, column_rect, span_label, width};
+
+    #[test]
+    fn column_rects() {
+        // Column 0, the bottom dot row of a 4-cell graph growing up: dot
+        // centre (2.5, 56 - 2.5) +- 1.5.
+        assert_eq!(column_rect(4, 0, (0, 1), true), (1, 52, 3, 3));
+        // Column 3 (second cell's 2nd column), rows 0..4 hanging down: one
+        // whole cell's dots, 12 px.
+        assert_eq!(column_rect(4, 3, (0, 4), false), (12, 1, 3, 12));
+        // Rows 0..16 cross the cell gaps: 4 cells' worth minus the end gaps.
+        assert_eq!(column_rect(4, 0, (0, 16), true), (1, 1, 3, 54));
+    }
 
     #[test]
     fn geometry() {

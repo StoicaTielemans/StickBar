@@ -7,6 +7,7 @@
 //! A left click is `PlayPause` on that player; a right click opens the dropdown
 //! of every player (`popup.rs`).
 
+pub(crate) mod graphs;
 pub(crate) mod popup;
 
 use std::collections::HashMap;
@@ -22,6 +23,7 @@ use crate::{
         module_box::{self, Anchor},
         text::TextCache,
     },
+    visualizer::Visualizer,
 };
 
 /// The track text's widest, as the reference's `Math.min(implicitWidth, 300)`.
@@ -35,6 +37,8 @@ pub(crate) struct Media {
     /// Positions (µs) by player id: polled only while the dropdown is open,
     /// since players don't push them.
     positions: HashMap<u64, i64>,
+    /// The dropdown's spectrum graphs' audio and levels.
+    pub(crate) visualizer: Visualizer,
 }
 
 impl Media {

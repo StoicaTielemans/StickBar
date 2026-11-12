@@ -42,6 +42,9 @@ nvml-wrapper = "0.13"
 # on its own `pipewire` thread; the bindings are generated with bindgen at build
 # time (needs libclang and the PipeWire headers).
 pipewire = "0.10"
+# The media visualizer's FFT: rustfft's real-input wrapper (the half-size
+# complex FFT + untangle pass the C bar hand-wrote in spectrum.c).
+realfft = "3"
 # Safe bindings to pango + pangocairo: every piece of text is shaped by pango (the
 # toy cairo text API can't do Nerd Font icons or kanji; see clippy.toml).
 pango = "0.22"

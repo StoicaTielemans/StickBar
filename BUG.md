@@ -133,6 +133,14 @@ limitations, as opposed to bugs, are in `docs/limitations.md`.
   stale* (an earlier track). Fixed by `is_shadowed()`.
 - **Spotify's timeline never appeared.** The spec says `mpris:length` is int64, but
   Spotify sends uint64 (confirmed with `busctl`), so its length stayed 0.
+- **One player's status or track showed on every player's card** (C bar). Every MPRIS player
+  lives at the same object path, and `mpris_client.c` subscribed to each one's
+  `PropertiesChanged` with its well-known bus name as the match's sender. sd-bus can't check a
+  well-known sender locally, so every subscription received every player's signal. Found while
+  porting: with two fake players on a private bus, one PlayPause made the C bar show both as
+  Playing while the other really stayed Paused (`busctl` confirmed it). With real players, a
+  track change on one would overwrite the other's title. The Rust port matches signals by the
+  sender's unique name (`docs/modules/media.md`).
 - **Long titles covered neighbouring boxes.** A long title on a narrow output drew over
   (and stole clicks from) its neighbours, until the box was clamped between the side
   regions.

@@ -16,6 +16,7 @@ mod dbus;
 mod eq;
 mod hyprland;
 mod modules;
+mod mpris;
 mod network;
 mod render;
 mod sysmon;

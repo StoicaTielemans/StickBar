@@ -69,6 +69,15 @@ pub(crate) const ICON_LOGOUT: char = '\u{f0343}';
 pub(crate) const ICON_RESTART: char = '\u{f0453}';
 /// `md-power`, the power menu's Shutdown card and its header icon.
 pub(crate) const ICON_POWER: char = '\u{f0425}';
+/// `md-play`: the media box while paused or stopped, the play chip, and the
+/// media dropdown's header icon.
+pub(crate) const ICON_MEDIA_PLAY: char = '\u{f040a}';
+/// `md-pause`: the media box and play chip while playing.
+pub(crate) const ICON_MEDIA_PAUSE: char = '\u{f03e4}';
+/// `md-skip_previous`: the media dropdown's previous chip.
+pub(crate) const ICON_MEDIA_PREV: char = '\u{f04ae}';
+/// `md-skip_next`: the media dropdown's next chip.
+pub(crate) const ICON_MEDIA_NEXT: char = '\u{f04ad}';
 /// `md-checkbox_marked`: a ticked checkbox entry in a tray menu.
 pub(crate) const ICON_CHECKBOX_ON: char = '\u{f0132}';
 /// `md-checkbox_blank_outline`: an unticked checkbox entry in a tray menu.

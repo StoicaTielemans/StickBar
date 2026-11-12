@@ -165,10 +165,11 @@ must pass.
   entries arrive. `target trayicon|traymenu`, `tray_entries`. **C's `test_tray` passes unchanged**
   in Host mode and, under `dbus-run-session`, in Watcher mode. Icons and menus are
   pixel-identical to C's, real apps included.
-- [ ] **M12: Media** (`mpris/`, `modules/media/*` ~1.7k). Player table on the shared zbus
-  connection, controls, position, duplicate hiding, the centered box, and the dropdown with
-  timeline seek and recreate-on-resize. Read BUG.md "Media". Tests: `test_media`,
-  `test_popups` (media).
+- [x] **M12: Media** (`mpris/`, `modules/media/*` ~1.7k). Players on the `dbus` thread (shared
+  connection, `PropertiesChanged` matched by owner), controls, asynchronous position polls, the
+  duplicate hiding, the centred clamped box, and the dropdown with timeline seek and
+  recreate-on-resize (no graph rows: M14). `dump media`, `target media`, `media_cards`. **C's
+  `test_media` passes unchanged**, as does `test_popups` (media). Pixel-identical to C.
 - [ ] **M13: Privacy** (`pipewire/`, `modules/privacy/*` ~920). The PipeWire thread, the
   node/link/client graph, and mic/webcam/screen-share detection. Tests: `test_privacy`.
 - [ ] **M14: Visualizer** (`visualizer/*`, `bar/strip_surface.c` ~860). The desync
@@ -295,3 +296,10 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   saved). Release vs release: CPU 0.12 % vs 0.12 % (a busy minute), private 28.1 vs 28.4 MB, PSS
   35.4 vs 35.6 MB, RSS 56.1 vs 58.1 MB, 7 threads vs 5 (`dbus`, plus zbus runtime's `async-io` and
   idle `blocking-1`). Release binary 3.1 MB (zbus adds 1.5 MB).
+- 2026-11-12 · M12 · Media. C's `test_media` passes unchanged; 18 tests pass (58 unit tests; the
+  4 failing are the 2 unported modules plus `test_sysmon_data`/`test_nvml_vs_smi`, as before). Box
+  and dropdown byte-identical to C's with one and two fake players, except where C is wrong: it
+  applied one player's `PropertiesChanged` to every player (BUG.md "Media"), which the Rust bar
+  doesn't. No `Position` polls with the dropdown closed. Release vs release: CPU 0.02 % vs 0.03 %,
+  private 28.1 vs 28.0 MB, PSS 36.9 vs 35.3 MB, RSS 56.2 vs 56.2 MB, 7 threads vs 5. Release
+  binary 3.2 MB.

@@ -9,10 +9,10 @@ use zbus::{
     Connection, Message,
     export::serde::de,
     message::Flags,
-    zvariant::{OwnedValue, Signature, Type, Value, as_value},
+    zvariant::{OwnedValue, Signature, Type, as_value},
 };
 
-use super::{Command, Icon, TrayEvent, dbusmenu, icon_theme, sni_icon, unwrap_variant};
+use super::{Icon, TrayCommand, TrayEvent, dbusmenu, icon_theme, sni_icon, text_of};
 use sni_icon::Pixmap;
 
 /// Every item's interface.
@@ -203,9 +203,9 @@ impl Registry {
     }
 
     /// Runs a command from the main thread.
-    pub(crate) async fn command(&mut self, command: Command) {
+    pub(crate) async fn command(&mut self, command: TrayCommand) {
         match command {
-            Command::FetchMenu { request, item } => {
+            TrayCommand::FetchMenu { request, item } => {
                 let entries = match self.items.iter().find(|i| i.id == item) {
                     Some(i) if i.has_menu() => {
                         dbusmenu::fetch(&self.conn, &i.bus_name, &i.menu_path)
@@ -223,7 +223,7 @@ impl Registry {
                 // Answered even when empty, so the main thread stops waiting.
                 self.send(TrayEvent::Menu { request, entries });
             }
-            Command::MenuClick { item, entry } => {
+            TrayCommand::MenuClick { item, entry } => {
                 if let Some(i) = self.items.iter().find(|i| i.id == item)
                     && let Err(err) =
                         dbusmenu::click(&self.conn, &i.bus_name, &i.menu_path, entry).await
@@ -231,7 +231,7 @@ impl Registry {
                     eprintln!("stickBar: tray: sending a menu click failed ({err})");
                 }
             }
-            Command::Activate { item } => {
+            TrayCommand::Activate { item } => {
                 if let Some(i) = self.items.iter().find(|i| i.id == item)
                     && let Err(err) = self.activate(&i.bus_name, &i.path).await
                 {
@@ -280,18 +280,6 @@ impl Registry {
             )
             .await?;
         reply.body().deserialize()
-    }
-}
-
-/// A string or object-path property as text ("" for anything else).
-fn text_of(value: &Value<'_>) -> String {
-    let value = unwrap_variant(value);
-    if let Value::Str(s) = value {
-        s.as_str().to_owned()
-    } else if let Value::ObjectPath(p) = value {
-        p.as_str().to_owned()
-    } else {
-        String::new()
     }
 }
 

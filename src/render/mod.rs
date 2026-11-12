@@ -4,7 +4,7 @@
 //! left to right from x = 0, right-region ones right to left from the right
 //! edge, and the media box centered between. So far: the Arch logo, the
 //! workspace pills, CPU, GPU and memory on the left; the tray, clock,
-//! network, EQ, volume and mic on the right.
+//! network, EQ, volume and mic on the right; the media box in the centre.
 
 pub(crate) mod braille_graph;
 pub(crate) mod meter_bar;
@@ -20,7 +20,9 @@ use crate::{
     eq::EqState,
     modules::{
         clock::Clock,
-        cpu, eq, gpu, mem, mic, network,
+        cpu, eq, gpu,
+        media::{self, Media},
+        mem, mic, network,
         powermenu::arch_logo,
         tray::{self, Tray},
         volume,
@@ -127,6 +129,8 @@ pub(crate) struct Renderer {
     pub(crate) eq: EqState,
     /// The system tray's items (from the `dbus` thread).
     pub(crate) tray: Tray,
+    /// The media players (from the `dbus` thread).
+    pub(crate) media: Media,
 }
 
 impl Renderer {
@@ -150,6 +154,7 @@ impl Renderer {
             audio: AudioState::default(),
             eq: EqState::new(),
             tray: Tray::default(),
+            media: Media::default(),
         })
     }
 
@@ -224,21 +229,43 @@ impl Renderer {
             // Right click opens its dropdown.
             clickable: true,
         });
+        let left_end = mem.x + mem.w + BAR.item_spacing;
 
-        self.render_right(cr, width, height, &mut layout)?;
+        let right_start = self.render_right(cr, width, height, &mut layout)?;
+
+        // The centre: the media box, drawn last so it knows where both side
+        // regions ended and is clamped between them.
+        let media_box = media::render(
+            cr,
+            &mut self.text,
+            &self.media,
+            width,
+            (left_end, right_start),
+            (0.0, height),
+        )?;
+        if let Some(rect) = media_box {
+            layout.boxes.push(ModuleBox {
+                name: "media",
+                rect,
+                // Left plays/pauses, right opens its dropdown.
+                clickable: true,
+            });
+        }
         Ok(layout)
     }
 
     /// The right region, laid out from the right edge leftwards: the tray,
     /// clock, network, EQ, volume and mic, as in the C bar. The EQ (a StickBar-only
     /// module) sits between network and volume, keeping the audio together.
+    /// Returns where the region starts, its gap included (the media box's
+    /// right limit).
     fn render_right(
         &mut self,
         cr: &cairo::Context,
         width: f64,
         height: f64,
         layout: &mut BarLayout,
-    ) -> Result<(), cairo::Error> {
+    ) -> Result<f64, cairo::Error> {
         // The tray takes no space at all when empty.
         let (tray_box, icons) = tray::render(cr, &self.tray, width, (0.0, height))?;
         let clock_right = match tray_box {
@@ -315,7 +342,7 @@ impl Renderer {
             // Left mutes, scrolling steps.
             clickable: true,
         });
-        Ok(())
+        Ok(mic_box.x - BAR.item_spacing)
     }
 
     /// Repaints only the clock, over its previous box `old`, on a frame that

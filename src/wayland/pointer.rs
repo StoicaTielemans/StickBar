@@ -43,8 +43,9 @@ use crate::{
     audio::{Command, Kind, VOLUME_STEP},
     bar::popup_surface::PopupEnv,
     config::{COLORS, Color},
-    dbus::{self, MenuEntry},
+    dbus::{self, MenuEntry, TrayCommand},
     modules::powermenu::{PowerAction, PowerClick},
+    mpris::MediaCommand,
     render::{Action, BoxRect},
 };
 
@@ -196,6 +197,15 @@ impl App {
             // A right click on the EQ box opens its dropdown (reopens it if
             // open). Left does nothing, at the user's request.
             ("eq", BTN_RIGHT) => self.open_eq_popup(position, rect),
+            // The media box: left plays/pauses the player it shows, right
+            // opens the dropdown of every player (reopens it if open).
+            ("media", BTN_LEFT) => {
+                if let Some(player) = self.renderer.media.active().map(|p| p.id) {
+                    self.dbus
+                        .send(dbus::Command::Media(MediaCommand::PlayPause { player }));
+                }
+            }
+            ("media", BTN_RIGHT) => self.open_media_popup(position, rect),
             // Right-click on the clock toggles the year calendar. Left does
             // nothing: the clock has no obvious primary action (docs/popups.md).
             ("clock", BTN_RIGHT) => self.toggle_calendar(position, rect),
@@ -261,12 +271,39 @@ impl App {
             }
         }
 
+        // The media dropdown: any button on a chip or a seekable timeline
+        // sends its command (as in C), and it stays open; its catcher closes it.
+        if let Some(host) = self.popups.media.host() {
+            if host.is_menu(surface) {
+                if let Some(command) = self.popups.media.press((x, y), &self.renderer.media) {
+                    if let MediaCommand::Seek {
+                        player,
+                        position_us,
+                    } = command
+                    {
+                        // Shown at once; the next poll corrects it if the
+                        // player clamped or ignored the seek.
+                        self.renderer.media.set_position(player, position_us);
+                        let renderer = &mut self.renderer;
+                        self.popups.media.paint(&renderer.media, &mut renderer.text);
+                    }
+                    self.dbus.send(dbus::Command::Media(command));
+                }
+                return true;
+            }
+            if host.is_catcher(surface) {
+                self.popups.media.close();
+                return true;
+            }
+        }
+
         // A tray menu: any button on an enabled entry sends its click event
         // and closes the menu (as in C); its catcher closes it.
         if let Some(host) = self.popups.tray.host() {
             if host.is_menu(surface) {
                 if let Some((item, entry)) = self.popups.tray.press((x, y)) {
-                    self.dbus.send(dbus::Command::MenuClick { item, entry });
+                    self.dbus
+                        .send(dbus::Command::Tray(TrayCommand::MenuClick { item, entry }));
                 }
                 return true;
             }
@@ -413,10 +450,13 @@ impl App {
                 output,
                 trigger: rect,
             });
-            self.dbus
-                .send(dbus::Command::FetchMenu { request, item: id });
+            self.dbus.send(dbus::Command::Tray(TrayCommand::FetchMenu {
+                request,
+                item: id,
+            }));
         } else if button == BTN_LEFT {
-            self.dbus.send(dbus::Command::Activate { item: id });
+            self.dbus
+                .send(dbus::Command::Tray(TrayCommand::Activate { item: id }));
         }
     }
 
@@ -512,6 +552,12 @@ impl App {
                 .motion((x, y), &self.renderer.tray, &mut self.renderer.text);
             return;
         }
+        if self.popups.media.host().is_some_and(|h| h.is_menu(surface)) {
+            self.popups
+                .media
+                .motion((x, y), &self.renderer.media, &mut self.renderer.text);
+            return;
+        }
         if self
             .popups
             .calendar
@@ -554,6 +600,18 @@ impl App {
         // The mixer's chips and sliders react to a click.
         if self.popups.mixer.host().is_some_and(|h| h.is_menu(surface)) {
             return if self.popups.mixer.over_control(x, y) {
+                Shape::Pointer
+            } else {
+                Shape::Default
+            };
+        }
+        // An enabled media chip, or a seekable timeline, reacts to a click.
+        if self.popups.media.host().is_some_and(|h| h.is_menu(surface)) {
+            return if self
+                .popups
+                .media
+                .over_clickable((x, y), &self.renderer.media)
+            {
                 Shape::Pointer
             } else {
                 Shape::Default
@@ -809,6 +867,44 @@ impl App {
             &mut renderer.network,
             &mut renderer.text,
         );
+    }
+
+    /// Opens the media dropdown under the box `trigger` on the monitor at
+    /// `position` in `outputs`, and asks for the players' positions (the
+    /// answer repaints it: the first frame shows the last known ones).
+    fn open_media_popup(&mut self, position: usize, trigger: BoxRect) {
+        let Self {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter,
+            test_mode,
+            outputs,
+            popups,
+            renderer,
+            ..
+        } = self;
+        let Some(output) = outputs.get(position) else {
+            return;
+        };
+        let env = PopupEnv {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter: viewporter.as_ref(),
+            test_mode: *test_mode,
+        };
+        popups.media.open(
+            &env,
+            (output.wl_output(), trigger),
+            outputs.iter().map(Output::wl_output),
+            &renderer.media,
+            &mut renderer.text,
+        );
+        if self.popups.media.is_open() {
+            self.dbus
+                .send(dbus::Command::Media(MediaCommand::PollPositions));
+        }
     }
 
     /// Opens the EQ dropdown under the box `trigger` on the monitor at

@@ -1,12 +1,13 @@
-//! The D-Bus session bus, for the system tray (the C bar's `dbus/`; MPRIS
-//! joins in M12). `docs/modules/tray.md` has the protocol details.
+//! The D-Bus session bus, for the system tray and the media players (the C
+//! bar's `dbus/`, with `mpris/` running on the same thread and connection).
+//! `docs/modules/tray.md` and `docs/modules/media.md` have the protocol details.
 //!
 //! **One `dbus` thread owns the connection.** The C bar drove sd-bus from its
 //! main loop with blocking calls, so a tray app that didn't answer could
 //! freeze the whole bar for sd-bus's 25 s timeout (`docs/limitations.md`).
 //! Here every D-Bus call happens on this thread: the main loop only gets
-//! [`TrayEvent`]s on a calloop channel and sends [`Command`]s back, and never
-//! waits for an app.
+//! [`TrayEvent`]s and `MediaEvent`s on calloop channels and sends
+//! [`Command`]s back, and never waits for an app.
 //!
 //! Inside, the thread runs one async loop (zbus's own `block_on`) over the
 //! merged message streams it cares about plus the command channel, handling
@@ -31,7 +32,10 @@ use zbus::{Connection, MatchRule, MessageStream, message::Type};
 pub(crate) use dbusmenu::{MenuEntry, Toggle, ToggleState};
 pub(crate) use sni_icon::Argb;
 
-use crate::wayland::App;
+use crate::{
+    mpris::{self, MediaCommand, MediaEvent},
+    wayland::App,
+};
 
 /// How long a call may take before it's given up on. Long enough for any app
 /// that's alive (they answer in milliseconds); short enough that one hung app
@@ -84,9 +88,18 @@ pub(crate) enum TrayEvent {
     },
 }
 
-/// What the main thread asks for.
+/// What the main thread asks of the `dbus` thread.
 #[derive(Debug)]
 pub(crate) enum Command {
+    /// Something for the tray.
+    Tray(TrayCommand),
+    /// Something for a media player.
+    Media(MediaCommand),
+}
+
+/// What the main thread asks of the tray.
+#[derive(Debug)]
+pub(crate) enum TrayCommand {
     /// Fetch item `item`'s menu; answered with [`TrayEvent::Menu`].
     FetchMenu {
         /// Echoed back, so a stale answer can be told apart.
@@ -121,26 +134,34 @@ impl Dbus {
         if let Some(commands) = &self.commands
             && commands.try_send(command).is_err()
         {
-            eprintln!("stickBar: tray: the D-Bus thread is gone");
+            eprintln!("stickBar: the D-Bus thread is gone");
         }
     }
 }
 
 /// Starts the `dbus` thread. Events arrive through the main loop at
-/// `App::tray_event`. If the thread can't start, says so once: the tray
-/// stays empty and the bar runs on (C's "degrade gracefully").
+/// `App::tray_event` and `App::media_event`. If the thread can't start, says
+/// so once: the tray and the media box stay empty and the bar runs on (C's
+/// "degrade gracefully").
 pub(crate) fn start(handle: &LoopHandle<'static, App>) -> Dbus {
     let (events, event_source) = channel::channel::<TrayEvent>();
-    let inserted = handle.insert_source(event_source, |event, (), app| {
-        if let channel::Event::Msg(event) = event {
-            app.tray_event(event);
-        }
-    });
-    if let Err(err) = inserted {
-        eprintln!(
-            "stickBar: tray: couldn't watch the D-Bus channel ({}) -- tray disabled",
-            err.error
-        );
+    let (media_events, media_source) = channel::channel::<MediaEvent>();
+    let tray_inserted = handle
+        .insert_source(event_source, |event, (), app| {
+            if let channel::Event::Msg(event) = event {
+                app.tray_event(event);
+            }
+        })
+        .map_err(|err| err.error);
+    let media_inserted = handle
+        .insert_source(media_source, |event, (), app| {
+            if let channel::Event::Msg(event) = event {
+                app.media_event(event);
+            }
+        })
+        .map_err(|err| err.error);
+    if let Err(err) = tray_inserted.and(media_inserted) {
+        eprintln!("stickBar: couldn't watch the D-Bus channels ({err}) -- tray and media disabled");
         return Dbus::default();
     }
     let (commands, command_queue) = async_channel::unbounded();
@@ -149,14 +170,16 @@ pub(crate) fn start(handle: &LoopHandle<'static, App>) -> Dbus {
     // passes it on to the `async-io` reactor thread zbus's runtime starts).
     let started = std::thread::Builder::new()
         .name("dbus".to_owned())
-        .spawn(move || zbus::block_on(run(events, command_queue)));
+        .spawn(move || zbus::block_on(run((events, media_events), command_queue)));
     match started {
         // Detached: it lives as long as the bar.
         Ok(_detached) => Dbus {
             commands: Some(commands),
         },
         Err(err) => {
-            eprintln!("stickBar: tray: couldn't start the D-Bus thread ({err}) -- tray disabled");
+            eprintln!(
+                "stickBar: couldn't start the D-Bus thread ({err}) -- tray and media disabled"
+            );
             Dbus::default()
         }
     }
@@ -164,11 +187,25 @@ pub(crate) fn start(handle: &LoopHandle<'static, App>) -> Dbus {
 
 /// The value inside any number of variant wrappers (property values and
 /// menu children arrive wrapped).
-fn unwrap_variant<'a>(value: &'a zbus::zvariant::Value<'a>) -> &'a zbus::zvariant::Value<'a> {
+pub(crate) fn unwrap_variant<'a>(
+    value: &'a zbus::zvariant::Value<'a>,
+) -> &'a zbus::zvariant::Value<'a> {
     if let zbus::zvariant::Value::Value(inner) = value {
         unwrap_variant(inner)
     } else {
         value
+    }
+}
+
+/// A string or object-path value as text ("" for anything else).
+pub(crate) fn text_of(value: &zbus::zvariant::Value<'_>) -> String {
+    let value = unwrap_variant(value);
+    if let zbus::zvariant::Value::Str(s) = value {
+        s.as_str().to_owned()
+    } else if let zbus::zvariant::Value::ObjectPath(p) = value {
+        p.as_str().to_owned()
+    } else {
+        String::new()
     }
 }
 
@@ -182,17 +219,22 @@ enum Input {
     OwnerChanged(zbus::Result<zbus::Message>),
     /// An item's `NewIcon`.
     NewIcon(zbus::Result<zbus::Message>),
+    /// A media player's `PropertiesChanged`.
+    PlayerChanged(zbus::Result<zbus::Message>),
     /// A command from the main thread.
     Command(Command),
 }
 
 /// The thread's body: connect, become the Watcher or a Host, then handle
 /// whatever arrives until the bar exits.
-async fn run(events: channel::Sender<TrayEvent>, commands: async_channel::Receiver<Command>) {
+async fn run(
+    events: (channel::Sender<TrayEvent>, channel::Sender<MediaEvent>),
+    commands: async_channel::Receiver<Command>,
+) {
     let conn = match connect().await {
         Ok(conn) => conn,
         Err(err) => {
-            eprintln!("stickBar: tray: no D-Bus session bus ({err}) -- tray stays empty");
+            eprintln!("stickBar: no D-Bus session bus ({err}) -- tray and media stay empty");
             return;
         }
     };
@@ -200,7 +242,9 @@ async fn run(events: channel::Sender<TrayEvent>, commands: async_channel::Receiv
     // on this thread too, interleaved with the tray's loop.
     match futures_lite::future::or(serve(&conn, events, commands), drive(&conn)).await {
         Ok(()) => {}
-        Err(err) => eprintln!("stickBar: tray: D-Bus setup failed ({err}) -- tray stays empty"),
+        Err(err) => {
+            eprintln!("stickBar: D-Bus setup failed ({err}) -- tray and media stay empty");
+        }
     }
 }
 
@@ -227,10 +271,11 @@ async fn stream(conn: &Connection, rule: MatchRule<'static>) -> zbus::Result<Mes
     MessageStream::for_match_rule(rule, conn, Some(QUEUE_LEN)).await
 }
 
-/// Subscribes, picks the mode, loads the items there already, then loops.
+/// Subscribes, picks the tray's mode, loads the items and players there
+/// already, then loops.
 async fn serve(
     conn: &Connection,
-    events: channel::Sender<TrayEvent>,
+    (events, media_events): (channel::Sender<TrayEvent>, channel::Sender<MediaEvent>),
     commands: async_channel::Receiver<Command>,
 ) -> zbus::Result<()> {
     // Subscribed before anything is registered, so nothing is missed.
@@ -254,6 +299,18 @@ async fn serve(
     )
     .await?;
 
+    // Every player lives at the same path; the sender says which one.
+    let player_changes = stream(
+        conn,
+        MatchRule::builder()
+            .msg_type(Type::Signal)
+            .interface("org.freedesktop.DBus.Properties")?
+            .member("PropertiesChanged")?
+            .path(mpris::OBJECT_PATH)?
+            .build(),
+    )
+    .await?;
+
     let mut tray = sni::Registry::new(conn.clone(), events);
     let (is_watcher, watcher_input) = match watcher::start(conn).await? {
         watcher::Mode::Watcher(calls) => (true, calls.map(Input::WatcherCall).boxed()),
@@ -268,12 +325,15 @@ async fn serve(
         // to follow (the commands still work, for nothing).
         watcher::Mode::None => (false, futures_lite::stream::pending::<Input>().boxed()),
     };
+    let mut players = mpris::Players::new(conn.clone(), media_events);
+    players.start().await;
 
     // Pinned: the command channel's stream can't move once polled.
     let mut inputs = std::pin::pin!(
         watcher_input
             .race(owner_changes.map(Input::OwnerChanged))
             .race(new_icons.map(Input::NewIcon))
+            .race(player_changes.map(Input::PlayerChanged))
             .race(commands.map(Input::Command))
     );
     while let Some(input) = inputs.next().await {
@@ -283,9 +343,12 @@ async fn serve(
             Input::OwnerChanged(Ok(msg)) => {
                 // (name, old owner, new owner): an empty new owner means the
                 // name's owner disconnected.
-                if let Ok((name, _old, new)) = msg.body().deserialize::<(String, String, String)>()
-                    && new.is_empty()
-                {
+                let Ok((name, _old, new)) = msg.body().deserialize::<(String, String, String)>()
+                else {
+                    continue;
+                };
+                players.owner_changed(&name, &new).await;
+                if new.is_empty() {
                     let removed = tray.remove_owner(&name);
                     if is_watcher {
                         for entry in removed {
@@ -295,12 +358,15 @@ async fn serve(
                 }
             }
             Input::NewIcon(Ok(msg)) => tray.new_icon(&msg).await,
-            Input::Command(command) => tray.command(command).await,
+            Input::PlayerChanged(Ok(msg)) => players.properties_changed(&msg).await,
+            Input::Command(Command::Tray(command)) => tray.command(command).await,
+            Input::Command(Command::Media(command)) => players.command(command).await,
             Input::WatcherCall(Err(err))
             | Input::WatcherSignal(Err(err))
             | Input::OwnerChanged(Err(err))
-            | Input::NewIcon(Err(err)) => {
-                eprintln!("stickBar: tray: a bad D-Bus message ({err})");
+            | Input::NewIcon(Err(err))
+            | Input::PlayerChanged(Err(err)) => {
+                eprintln!("stickBar: a bad D-Bus message ({err})");
             }
         }
     }

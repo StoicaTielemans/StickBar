@@ -149,6 +149,35 @@ userdata pointer, `in_use`-gated iteration, `_count()`/`_get(index)` accessors).
   client-side mute-state bookkeeping like the reference's own `_mutedVolumes`, judged
   not essential for v1).
 
+## In the Rust port
+
+- **Files:** `src/mpris/mod.rs` (the players, on the `dbus` thread), `src/modules/media/mod.rs`
+  (`Media` and the centred box), `src/modules/media/popup.rs` (`MediaPopup`). The box and the
+  dropdown are pixel-identical to C's with one and two players: open, chip hovered, timeline
+  hovered. The visualizer is M14, so the cards have the C bar's no-graph layout, the same one
+  every test bar uses (`STICKBAR_TEST_NO_VISUALIZER=1`).
+- **MPRIS shares the tray's `dbus` thread and connection** (`docs/modules/tray.md`): one more
+  stream (`PropertiesChanged` on `/org/mpris/MediaPlayer2`), the `NameOwnerChanged` stream the
+  tray already had, a second calloop channel (`MediaEvent`, to `App::media_event`), and
+  `Command::Media`. The main loop never waits for a player.
+- **The main thread gets the visible players' `PlayerInfo`s, and only when that list
+  changed.** That's C's "dirty only if something shown changed", for free: a browser's
+  `PropertiesChanged` storms (volume, rate) cost no redraw.
+- **Rule: match a player's signals by the sender's unique name.** Every player shares one
+  object path, and C subscribed per player with the well-known name as the match's sender,
+  which sd-bus can't check locally. So every subscription got every player's
+  `PropertiesChanged`, and one player's status or track showed on all of them (BUG.md "Media").
+  Here each player keeps its owner's unique name, and a signal applies to the players that
+  connection owns.
+- **Position is polled asynchronously:** `App::clock_tick` sends `PollPositions` while the
+  dropdown is open (once a second, plus once on open), and the answer repaints. No `Position`
+  is read while it's closed (checked with `dbus-monitor`: 5 reads in an 11 s window with it open
+  for 4 s). C read the positions synchronously before the first frame; here the first frame
+  shows the last known position for the few ms until the answer.
+- **Seeking:** the target position is set on the main side at once (C's optimistic jump), and
+  the thread keeps it as its "last polled" position for a relative `Seek`.
+- **No fixed caps:** players and cards are `Vec`s (C: 16).
+
 ## Spectrum visualizer
 
 No reference equivalent -- added per user request ("an audio wave thingy in the

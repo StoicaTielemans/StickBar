@@ -39,8 +39,9 @@ use smithay_client_toolkit::{
 use crate::{
     audio::{Audio, AudioState},
     bar::{BarSurface, popup_surface::PopupEnv, popups::Popups},
-    dbus::{Dbus, TrayEvent},
+    dbus::{Command, Dbus, TrayEvent},
     hyprland::dispatch::Dispatcher,
+    mpris::{MediaCommand, MediaEvent},
     render::Renderer,
 };
 
@@ -168,6 +169,11 @@ impl App {
         self.popups
             .cpu
             .tick(&mut renderer.sysmon, &mut renderer.text);
+        // Players don't push their position: while the media dropdown shows
+        // it, it's read once a second (the answer repaints).
+        if self.popups.media.is_open() {
+            self.dbus.send(Command::Media(MediaCommand::PollPositions));
+        }
     }
 
     /// Re-reads the workspaces from Hyprland; every bar redraws only if what
@@ -301,6 +307,46 @@ impl App {
         }
     }
 
+    /// News from the `dbus` thread about the media players. A new player list
+    /// means something shown changed (the thread only sends it then): the
+    /// bars redraw and an open dropdown re-lays out. Polled positions only
+    /// repaint the dropdown.
+    pub(crate) fn media_event(&mut self, event: MediaEvent) {
+        match event {
+            MediaEvent::Players(players) => {
+                self.renderer.media.set_players(players);
+                self.mark_all_dirty();
+                let Self {
+                    qh,
+                    compositor,
+                    layer_shell,
+                    viewporter,
+                    test_mode,
+                    popups,
+                    renderer,
+                    ..
+                } = self;
+                let env = PopupEnv {
+                    qh,
+                    compositor,
+                    layer_shell,
+                    viewporter: viewporter.as_ref(),
+                    test_mode: *test_mode,
+                };
+                popups
+                    .media
+                    .refresh(&env, &renderer.media, &mut renderer.text);
+            }
+            MediaEvent::Positions(positions) => {
+                for (id, position_us) in positions {
+                    self.renderer.media.set_position(id, position_us);
+                }
+                let renderer = &mut self.renderer;
+                self.popups.media.paint(&renderer.media, &mut renderer.text);
+            }
+        }
+    }
+
     /// Something was written in the EQ's state directory: re-read the state
     /// file, and redraw only if it parsed.
     pub(crate) fn eq_file_changed(&mut self) {
@@ -321,6 +367,11 @@ impl App {
         let renderer = &mut self.renderer;
         self.popups.eq.paint(&renderer.eq, &mut renderer.text);
         self.mark_all_dirty();
+    }
+
+    /// The renderer, read-only (the tests' `target` commands).
+    pub(crate) const fn renderer(&self) -> &Renderer {
+        &self.renderer
     }
 
     /// The renderer, for the tests' `dump`/`refresh` commands.

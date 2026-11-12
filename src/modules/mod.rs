@@ -5,6 +5,7 @@ pub(crate) mod clock;
 pub(crate) mod cpu;
 pub(crate) mod eq;
 pub(crate) mod gpu;
+pub(crate) mod media;
 pub(crate) mod mem;
 pub(crate) mod mic;
 pub(crate) mod network;

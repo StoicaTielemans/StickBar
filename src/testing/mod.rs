@@ -17,7 +17,7 @@
 //!                        -> a click on that monitor's bar, bar-local px
 //! menu                   -> {"ok":true,"open":bool,"width","height","catchers",
 //!                            "power_last_action","device_cards","mixer_rows","eq_cards",
-//!                            "tray_entries" (only while a tray menu is open)}
+//!                            "media_cards","tray_entries" (only while a tray menu is open)}
 //! menu-click <x> <y> [button] / menu-motion <x> <y>
 //!                        -> a click / move on the open menu, menu-local px
 //! menu-press <x> <y> [button] / menu-release / menu-scroll <x> <y> <+1|-1>
@@ -30,12 +30,13 @@
 //! target mixer <slider|mute> <fraction> <stream name...>
 //! target eq <profile>
 //! target traymenu <label...> / target trayicon <output> <title...>
+//! target media <prev|next|play|timeline:FRACTION> <app name...>
 //!                        -> {"ok":true,"x","y"}: a point on the power menu, a
 //!                           device or mixer card, or an EQ profile card
 //! refresh <mem|cpu|cpu-reset|gpu|poll>
 //!                        -> run a dropdown's details refresh (cpu-reset: start
 //!                           a fresh process window first), or a full 5 s poll
-//! dump <mem|cpu|gpu|net|audio|eq>
+//! dump <mem|cpu|gpu|net|audio|eq|media>
 //!                        -> every figure the bar holds (test_sysmon_data,
 //!                           test_network_data, test_audio, test_eq)
 //! cursor <output> <x> <y> / menu-cursor <x> <y>
@@ -67,6 +68,7 @@ use crate::{
     bar::{BarSurface, popup_surface::PopupSurface},
     dbus::Toggle,
     eq::EqState,
+    modules::media::Media,
     network::Network,
     render::{Action, ClickTarget},
     sysmon::Sysmon,
@@ -247,6 +249,11 @@ fn menu(app: &App) -> Value {
             })
             .collect::<Vec<_>>()
     });
+    let media_cards = app
+        .popups()
+        .media
+        .card_count()
+        .map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX));
     let eq_cards = app
         .popups()
         .eq
@@ -256,11 +263,12 @@ fn menu(app: &App) -> Value {
         Some((width, height)) => json!({
             "ok": true, "open": true, "width": width, "height": height,
             "catchers": catchers, "power_last_action": last, "device_cards": device_cards,
-            "mixer_rows": mixer_rows, "eq_cards": eq_cards,
+            "mixer_rows": mixer_rows, "eq_cards": eq_cards, "media_cards": media_cards,
         }),
         None => json!({
             "ok": true, "open": false, "catchers": catchers, "power_last_action": last,
             "device_cards": device_cards, "mixer_rows": mixer_rows, "eq_cards": eq_cards,
+            "media_cards": media_cards,
         }),
     };
     // Only present while a tray menu is open, as in C.
@@ -303,6 +311,7 @@ fn dump(app: &mut App, section: &str) -> Value {
         "net" => dump_net(&renderer.network),
         "audio" => dump_audio(&renderer.audio),
         "eq" => dump_eq(&renderer.eq),
+        "media" => dump_media(&renderer.media),
         _ => error("unknown dump section"),
     }
 }
@@ -430,6 +439,21 @@ fn dump_audio(audio: &AudioState) -> Value {
     })
 }
 
+/// `dump media` (read by `test_media`): the visible players.
+fn dump_media(media: &Media) -> Value {
+    let players: Vec<Value> = media
+        .players
+        .iter()
+        .map(|p| {
+            json!({
+                "app": p.app, "title": p.title, "artist": p.artist, "album": p.album,
+                "status": p.status, "length_us": p.length_us,
+            })
+        })
+        .collect();
+    json!({ "ok": true, "players": players })
+}
+
 /// `dump eq` (read by `test_eq`). `pending` is "" when nothing is, as in C.
 fn dump_eq(eq: &EqState) -> Value {
     let snap = &eq.snap;
@@ -473,6 +497,11 @@ fn target(app: &mut App, args: &str) -> Value {
         Some(("power", part)) => app.popups().power.target(part.trim()),
         Some(("eq", profile)) => app.popups().eq.target(profile.trim()),
         Some(("traymenu", label)) => app.popups().tray.target(label.trim()),
+        Some(("media", rest)) => rest.trim().split_once(' ').and_then(|(what, name)| {
+            app.popups()
+                .media
+                .target((name.trim(), what), &app.renderer().media)
+        }),
         Some(("trayicon", rest)) => tray_icon_target(app, rest),
         Some(("device", rest)) => {
             let mut parts = rest.splitn(3, ' ');

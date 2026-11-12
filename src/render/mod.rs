@@ -3,7 +3,7 @@
 //! The bar has three regions, as in the C bar: left-region modules laid out
 //! left to right from x = 0, right-region ones right to left from the right
 //! edge, and the media box centered between. So far: the Arch logo, the
-//! workspace pills, CPU, GPU and memory on the left; the tray, clock,
+//! workspace pills, CPU, GPU, memory and privacy on the left; the tray, clock,
 //! network, EQ, volume and mic on the right; the media box in the centre.
 
 pub(crate) mod braille_graph;
@@ -24,11 +24,13 @@ use crate::{
         media::{self, Media},
         mem, mic, network,
         powermenu::arch_logo,
+        privacy,
         tray::{self, Tray},
         volume,
         workspaces::Workspaces,
     },
     network::Network,
+    pipewire::PrivacyState,
     sysmon::Sysmon,
 };
 use text::TextCache;
@@ -131,6 +133,8 @@ pub(crate) struct Renderer {
     pub(crate) tray: Tray,
     /// The media players (from the `dbus` thread).
     pub(crate) media: Media,
+    /// Who's recording what (from the `pipewire` thread).
+    pub(crate) privacy: PrivacyState,
 }
 
 impl Renderer {
@@ -155,6 +159,7 @@ impl Renderer {
             eq: EqState::new(),
             tray: Tray::default(),
             media: Media::default(),
+            privacy: PrivacyState::default(),
         })
     }
 
@@ -229,7 +234,20 @@ impl Renderer {
             // Right click opens its dropdown.
             clickable: true,
         });
-        let left_end = mem.x + mem.w + BAR.item_spacing;
+        let mut left_end = mem.x + mem.w + BAR.item_spacing;
+
+        // Only while something records; otherwise it takes no space.
+        let privacy_box =
+            privacy::render(cr, &mut self.text, &self.privacy, left_end, (0.0, height))?;
+        if let Some(rect) = privacy_box {
+            layout.boxes.push(ModuleBox {
+                name: "privacy",
+                rect,
+                // Right click lists who's recording.
+                clickable: true,
+            });
+            left_end = rect.x + rect.w + BAR.item_spacing;
+        }
 
         let right_start = self.render_right(cr, width, height, &mut layout)?;
 

@@ -18,6 +18,7 @@ mod hyprland;
 mod modules;
 mod mpris;
 mod network;
+mod pipewire;
 mod render;
 mod sysmon;
 mod testing;
@@ -190,6 +191,10 @@ fn start_sources(handle: &calloop::LoopHandle<'static, App>, app: &mut App) -> R
     // The DAC EQ: the state file's inotify watch, and the channel a finished
     // profile script reports on.
     eq::start(handle, &mut app.renderer_mut().eq);
+
+    // The privacy indicator: the `pipewire` thread, which pushes who's
+    // recording what into the loop.
+    pipewire::start(handle);
 
     // The system tray: the `dbus` thread, which pushes item changes into the loop.
     app.dbus = dbus::start(handle);

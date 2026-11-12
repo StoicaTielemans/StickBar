@@ -17,7 +17,8 @@
 //!                        -> a click on that monitor's bar, bar-local px
 //! menu                   -> {"ok":true,"open":bool,"width","height","catchers",
 //!                            "power_last_action","device_cards","mixer_rows","eq_cards",
-//!                            "media_cards","tray_entries" (only while a tray menu is open)}
+//!                            "media_cards","tray_entries"/"privacy_entries" (only while
+//!                            that dropdown is open)}
 //! menu-click <x> <y> [button] / menu-motion <x> <y>
 //!                        -> a click / move on the open menu, menu-local px
 //! menu-press <x> <y> [button] / menu-release / menu-scroll <x> <y> <+1|-1>
@@ -68,7 +69,7 @@ use crate::{
     bar::{BarSurface, popup_surface::PopupSurface},
     dbus::Toggle,
     eq::EqState,
-    modules::media::Media,
+    modules::{media::Media, privacy::popup::title},
     network::Network,
     render::{Action, ClickTarget},
     sysmon::Sysmon,
@@ -274,6 +275,16 @@ fn menu(app: &App) -> Value {
     // Only present while a tray menu is open, as in C.
     if let (Some(entries), Some(object)) = (tray_entries, reply.as_object_mut()) {
         let _previous = object.insert("tray_entries".to_owned(), Value::from(entries));
+    }
+    // Likewise while the privacy dropdown is open: its streams as shown.
+    let privacy_entries = app.popups().privacy.entries().map(|entries| {
+        entries
+            .iter()
+            .map(|(category, name)| json!({ "name": name, "category": title(*category) }))
+            .collect::<Vec<_>>()
+    });
+    if let (Some(entries), Some(object)) = (privacy_entries, reply.as_object_mut()) {
+        let _previous = object.insert("privacy_entries".to_owned(), Value::from(entries));
     }
     reply
 }

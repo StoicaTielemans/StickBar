@@ -206,6 +206,8 @@ impl App {
                 }
             }
             ("media", BTN_RIGHT) => self.open_media_popup(position, rect),
+            // A right click on the privacy box lists who's recording.
+            ("privacy", BTN_RIGHT) => self.open_privacy_popup(position, rect),
             // Right-click on the clock toggles the year calendar. Left does
             // nothing: the clock has no obvious primary action (docs/popups.md).
             ("clock", BTN_RIGHT) => self.toggle_calendar(position, rect),
@@ -224,10 +226,71 @@ impl App {
         }
     }
 
+    /// A press on one of the dropdowns with nothing clickable inside (CPU,
+    /// GPU, memory, network, privacy): absorbed on the menu, closing on a
+    /// catcher. Returns whether `surface` belonged to one.
+    fn read_only_dropdown_button(&mut self, surface: &WlSurface) -> bool {
+        // The CPU, GPU and memory dropdowns have nothing clickable inside: a
+        // click on one is absorbed; its catcher closes it.
+        if let Some(is_menu) = self.popups.sysmon_surface(surface) {
+            if !is_menu {
+                self.popups.close_sysmon();
+            }
+            return true;
+        }
+
+        // The privacy dropdown: nothing clickable inside; its catcher closes it.
+        if let Some(host) = self.popups.privacy.host() {
+            if host.is_menu(surface) {
+                return true;
+            }
+            if host.is_catcher(surface) {
+                self.popups.privacy.close();
+                return true;
+            }
+        }
+
+        // The network dropdown.
+        if let Some(host) = self.popups.network.host() {
+            if host.is_menu(surface) {
+                return true;
+            }
+            if host.is_catcher(surface) {
+                self.popups.network.close();
+                return true;
+            }
+        }
+        false
+    }
+
+    /// A press at (x, y) on the media dropdown: a chip or a seekable timeline
+    /// sends its command (any button, as in C), and the dropdown stays open.
+    fn media_press(&mut self, x: f64, y: f64) {
+        let Some(command) = self.popups.media.press((x, y), &self.renderer.media) else {
+            return;
+        };
+        if let MediaCommand::Seek {
+            player,
+            position_us,
+        } = command
+        {
+            // Shown at once; the next poll corrects it if the player clamped
+            // or ignored the seek.
+            self.renderer.media.set_position(player, position_us);
+            let renderer = &mut self.renderer;
+            self.popups.media.paint(&renderer.media, &mut renderer.text);
+        }
+        self.dbus.send(dbus::Command::Media(command));
+    }
+
     /// A press on one of the dropdowns below the power menu: the calendar,
     /// the sysmon three, the device dropdown or the network one. Returns
     /// whether `surface` belonged to one (the press is then used up).
     fn dropdown_button(&mut self, surface: &WlSurface, x: f64, y: f64, button: u32) -> bool {
+        if self.read_only_dropdown_button(surface) {
+            return true;
+        }
+
         // The calendar's own menu absorbs the click; its catcher closes it.
         if let Some(host) = self.popups.calendar.host() {
             if host.is_menu(surface) {
@@ -240,15 +303,6 @@ impl App {
                 self.popups.calendar.close();
                 return true;
             }
-        }
-
-        // The CPU, GPU and memory dropdowns have nothing clickable inside: a
-        // click on one is absorbed; its catcher closes it.
-        if let Some(is_menu) = self.popups.sysmon_surface(surface) {
-            if !is_menu {
-                self.popups.close_sysmon();
-            }
-            return true;
         }
 
         // The device dropdown: its cards take left presses (meter, mute,
@@ -275,20 +329,7 @@ impl App {
         // sends its command (as in C), and it stays open; its catcher closes it.
         if let Some(host) = self.popups.media.host() {
             if host.is_menu(surface) {
-                if let Some(command) = self.popups.media.press((x, y), &self.renderer.media) {
-                    if let MediaCommand::Seek {
-                        player,
-                        position_us,
-                    } = command
-                    {
-                        // Shown at once; the next poll corrects it if the
-                        // player clamped or ignored the seek.
-                        self.renderer.media.set_position(player, position_us);
-                        let renderer = &mut self.renderer;
-                        self.popups.media.paint(&renderer.media, &mut renderer.text);
-                    }
-                    self.dbus.send(dbus::Command::Media(command));
-                }
+                self.media_press(x, y);
                 return true;
             }
             if host.is_catcher(surface) {
@@ -331,16 +372,6 @@ impl App {
             }
         }
 
-        // The network dropdown, likewise: nothing clickable inside.
-        if let Some(host) = self.popups.network.host() {
-            if host.is_menu(surface) {
-                return true;
-            }
-            if host.is_catcher(surface) {
-                self.popups.network.close();
-                return true;
-            }
-        }
         false
     }
 
@@ -865,6 +896,39 @@ impl App {
             trigger,
             outputs.iter().map(Output::wl_output),
             &mut renderer.network,
+            &mut renderer.text,
+        );
+    }
+
+    /// Opens the privacy dropdown under the box `trigger` on the monitor at
+    /// `position` in `outputs`, with the streams as they are now.
+    fn open_privacy_popup(&mut self, position: usize, trigger: BoxRect) {
+        let Self {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter,
+            test_mode,
+            outputs,
+            popups,
+            renderer,
+            ..
+        } = self;
+        let Some(output) = outputs.get(position) else {
+            return;
+        };
+        let env = PopupEnv {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter: viewporter.as_ref(),
+            test_mode: *test_mode,
+        };
+        popups.privacy.open(
+            &env,
+            (output.wl_output(), trigger),
+            outputs.iter().map(Output::wl_output),
+            &renderer.privacy,
             &mut renderer.text,
         );
     }

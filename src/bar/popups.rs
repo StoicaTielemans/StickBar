@@ -14,7 +14,8 @@ use crate::{
     modules::{
         clock::calendar::CalendarPopup, cpu::popup::CpuPopup, eq::popup::EqPopup,
         gpu::popup::GpuPopup, media::popup::MediaPopup, mem::popup::MemPopup,
-        network::popup::NetworkPopup, powermenu::PowerMenu, tray::menu::TrayMenu,
+        network::popup::NetworkPopup, powermenu::PowerMenu, privacy::popup::PrivacyPopup,
+        tray::menu::TrayMenu,
     },
     render::Renderer,
 };
@@ -44,13 +45,16 @@ pub(crate) struct Popups {
     pub(crate) tray: TrayMenu,
     /// The media dropdown.
     pub(crate) media: MediaPopup,
+    /// The privacy dropdown.
+    pub(crate) privacy: PrivacyPopup,
 }
 
 impl Popups {
     /// The open hosts of the dropdowns that have one (everything but the
     /// power menu, whose overlays are their own catchers).
-    fn hosts(&self) -> [Option<&PopupHost>; 10] {
+    fn hosts(&self) -> [Option<&PopupHost>; 11] {
         [
+            self.privacy.host(),
             self.media.host(),
             self.tray.host(),
             self.eq.host(),
@@ -139,6 +143,12 @@ impl Popups {
             }
             return true;
         }
+        if let Some(popup) = self.privacy.host_mut().and_then(|h| h.surface_mut(surface)) {
+            if popup.configure(shm, width, height) {
+                self.privacy.paint(text);
+            }
+            return true;
+        }
         if let Some(popup) = self.media.host_mut().and_then(|h| h.surface_mut(surface)) {
             if popup.configure(shm, width, height) {
                 self.media.paint(&renderer.media, text);
@@ -183,6 +193,7 @@ impl Popups {
             self.eq.host_mut(),
             self.tray.host_mut(),
             self.media.host_mut(),
+            self.privacy.host_mut(),
         ];
         let popup = self.power.surface_mut(surface).or_else(|| {
             hosts
@@ -209,6 +220,7 @@ impl Popups {
             .or_else(|| self.eq.menu())
             .or_else(|| self.tray.menu())
             .or_else(|| self.media.menu())
+            .or_else(|| self.privacy.menu())
             .or_else(|| self.device.menu())
             .or_else(|| self.mixer.menu())
             .or_else(|| self.calendar.menu())
@@ -239,6 +251,8 @@ impl Popups {
             self.device.snapshot(path, &renderer.audio, text)
         } else if self.network.host().is_some() {
             self.network.snapshot(path, &renderer.network, text)
+        } else if self.privacy.host().is_some() {
+            self.privacy.snapshot(path, text)
         } else if self.media.host().is_some() {
             self.media.snapshot(path, &renderer.media, text)
         } else if self.tray.host().is_some() {

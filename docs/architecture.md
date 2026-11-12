@@ -65,6 +65,10 @@ src/
 │   └── dbusmenu.rs         AboutToShow + GetLayout parsing, Event (NoReplyExpected)
 ├── mpris/mod.rs            Players (on the dbus thread): discovery, PropertiesChanged by
 │                           owner, is_shadowed, controls, Position polls on request
+├── pipewire/
+│   ├── mod.rs              the `pipewire` thread: registry + node info listeners,
+│   │                       PrivacyState to the main loop only when it changed
+│   └── graph.rs            nodes/links, privacy classification (pure, unit-tested)
 ├── network/mod.rs          Network: default route, rates, history; details via
 │                           /sys, resolv.conf and getifaddrs (nix)
 ├── util/history.rs         History2: the 120-sample ring behind every graph
@@ -75,6 +79,7 @@ src/
 │   ├── network/            mod.rs (box), popup.rs (the network dropdown)
 │   ├── eq/                 mod.rs (sparkline + profile box), popup.rs (EQ dropdown)
 │   ├── media/              mod.rs (Media + the centred box), popup.rs (MediaPopup)
+│   ├── privacy/            mod.rs (the box), popup.rs (PrivacyPopup)
 │   ├── tray/               mod.rs (Tray: items, icon surfaces, the icon row),
 │   │                       menu.rs (TrayMenu: the DBusMenu dropdown)
 │   ├── volume/mod.rs       the volume box

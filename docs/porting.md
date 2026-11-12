@@ -170,8 +170,10 @@ must pass.
   duplicate hiding, the centred clamped box, and the dropdown with timeline seek and
   recreate-on-resize (no graph rows: M14). `dump media`, `target media`, `media_cards`. **C's
   `test_media` passes unchanged**, as does `test_popups` (media). Pixel-identical to C.
-- [ ] **M13: Privacy** (`pipewire/`, `modules/privacy/*` ~920). The PipeWire thread, the
-  node/link/client graph, and mic/webcam/screen-share detection. Tests: `test_privacy`.
+- [x] **M13: Privacy** (`pipewire/`, `modules/privacy/*` ~920). The `pipewire` thread
+  (pipewire-rs 0.10), the node/link graph, mic/webcam/screen-share detection, the box and the
+  dropdown. **C's `test_privacy` passes unchanged**; pixel-identical to C's (one known order
+  difference inside a card). Playback-stream and Client tracking moves to M14, its only user.
 - [ ] **M14: Visualizer** (`visualizer/*`, `bar/strip_surface.c` ~860). The desync
   subsurface, up to 4 capture streams only while the dropdown is open, FFT bands, and
   synth mode for tests. Tests: `test_visualizer`.
@@ -303,3 +305,10 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   doesn't. No `Position` polls with the dropdown closed. Release vs release: CPU 0.02 % vs 0.03 %,
   private 28.1 vs 28.0 MB, PSS 36.9 vs 35.3 MB, RSS 56.2 vs 56.2 MB, 7 threads vs 5. Release
   binary 3.2 MB.
+- 2026-11-12 · M13 · Privacy. C's `test_privacy` passes (a real Discord mic stream was
+  running too, and was listed correctly); 19 tests pass (60 unit tests; failing: `test_visualizer`
+  (M14), `test_sysmon_data`/`test_nvml_vs_smi` as before; `test_clock_alignment` failed once
+  under load, average above 3, then passed 3/3). Box and dropdown pixel-identical to C's except
+  the order of several streams in one card. 20 null-sink add/removes: 0 commits, under 10 ms CPU.
+  Release vs release: CPU 0.05 % vs 0.05 %, private 28.8 vs 28.0 MB (PipeWire itself 0.2 MB),
+  PSS 37.2 vs 34.3 MB, RSS 58.5 vs 56.2 MB, 8 threads vs 5. Release binary 3.3 MB.

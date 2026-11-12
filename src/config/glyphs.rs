@@ -69,6 +69,12 @@ pub(crate) const ICON_LOGOUT: char = '\u{f0343}';
 pub(crate) const ICON_RESTART: char = '\u{f0453}';
 /// `md-power`, the power menu's Shutdown card and its header icon.
 pub(crate) const ICON_POWER: char = '\u{f0425}';
+/// `md-webcam`: the privacy box and dropdown while a camera is read.
+pub(crate) const ICON_WEBCAM: char = '\u{f05a0}';
+/// `md-monitor_share`: the privacy box and dropdown while the screen is captured.
+pub(crate) const ICON_SCREENSHARE: char = '\u{f1483}';
+/// `md-shield`: the privacy dropdown's header icon.
+pub(crate) const ICON_PRIVACY: char = '\u{f0498}';
 /// `md-play`: the media box while paused or stopped, the play chip, and the
 /// media dropdown's header icon.
 pub(crate) const ICON_MEDIA_PLAY: char = '\u{f040a}';

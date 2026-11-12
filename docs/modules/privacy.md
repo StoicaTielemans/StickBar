@@ -101,3 +101,27 @@ and `modules/privacy/privacy.c` + `privacy_info_popup.c` are the bar-facing half
   260-480px (past that it's clipped), since the snapshot can't change size
   while it's shown. `tests/test_privacy.py` drives it with a real `parecord` on
   a throwaway null sink's monitor, so no real mic is opened.
+
+## In the Rust port
+
+- **Files:** `src/pipewire/mod.rs` (the `pipewire` thread: registry and node listeners),
+  `src/pipewire/graph.rs` (the nodes and links, and the classification, with unit tests and no
+  PipeWire types), `src/modules/privacy/mod.rs` (the box), `src/modules/privacy/popup.rs`
+  (`PrivacyPopup`). pipewire-rs 0.10 (bindgen at build time: needs libclang and the PipeWire
+  headers).
+- **A `pipewire` thread owns the connection** (the C bar's `pw_thread_loop`). Its graph is an
+  `Rc<RefCell<..>>`: pipewire-rs gives every event its own `'static` closure on that one loop,
+  so a `RefCell` is all the sharing needs. Node listeners hold a `Weak`.
+- **The thread sends who's recording what, and only when it changed** (C's cached pump):
+  measured, 20 null-sink add/removes cost the bar 0 commits and under 10 ms of CPU (C: 10 ms
+  after its fix). The bars redraw only when one of the three kinds turns on or off;
+  `App::privacy_update` keeps the list for the dropdown, which snapshots it at open.
+- **Order within a card:** PipeWire node id (roughly creation order). C used its node table's
+  slot order, so with several streams in one card the two bars can list them differently;
+  everything else is pixel-identical.
+- **Not ported yet:** tracking playback streams and Client objects to match a player's pid to
+  its stream. Only the visualizer (M14) uses it.
+- **No fixed caps:** nodes, links and entries are `HashMap`s, `BTreeMap`s and `Vec`s (C: 256 /
+  256 / 32).
+- The webcam / screen-share split is ported unchanged and is as unverified as in C (no camera,
+  no portal session on the development machine).

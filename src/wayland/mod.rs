@@ -42,6 +42,7 @@ use crate::{
     dbus::{Command, Dbus, TrayEvent},
     hyprland::dispatch::Dispatcher,
     mpris::{MediaCommand, MediaEvent},
+    pipewire::{Category, PrivacyState},
     render::Renderer,
 };
 
@@ -344,6 +345,21 @@ impl App {
                 let renderer = &mut self.renderer;
                 self.popups.media.paint(&renderer.media, &mut renderer.text);
             }
+        }
+    }
+
+    /// Who's recording what changed (the `pipewire` thread only sends real
+    /// changes). The bars redraw only if one of the three kinds turned on or
+    /// off: a second app joining the mic changes the dropdown's list, not
+    /// the box. An open dropdown keeps the snapshot it opened with.
+    pub(crate) fn privacy_update(&mut self, state: PrivacyState) {
+        let kinds = |s: &PrivacyState| {
+            [Category::Mic, Category::Webcam, Category::ScreenShare].map(|c| s.has(c))
+        };
+        let changed = kinds(&state) != kinds(&self.renderer.privacy);
+        self.renderer.privacy = state;
+        if changed {
+            self.mark_all_dirty();
         }
     }
 

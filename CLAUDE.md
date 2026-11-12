@@ -4,14 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-**This is the `rust-rewrite` branch**: the bar is being ported from C to Rust, one
-module at a time. The C bar lives on `main` (checked out in the sibling folder
-`../StickBar`) until the port is finished; then `main` is copied to `c-legacy` and
-this branch is merged into `main`. Everything in `docs/` and `BUG.md` still describes
-the **C implementation**: it's the spec and the list of hard-won lessons to carry
-over, so read the C source on `main` alongside it when porting a module.
+**The Rust bar is the bar.** It was ported from C one module at a time (the record,
+milestones M0–M15 and every measurement, is [`docs/porting.md`](docs/porting.md)). The C
+bar is kept on the `c-legacy` branch; until switch day's merge it's still on `main`,
+checked out in the sibling folder `../StickBar`, and the Rust bar is on `rust-rewrite`
+(this folder) through a daily-use trial.
 
-Originally a from-scratch C implementation of a Wayland status bar for Hyprland, built directly
+`docs/` and `BUG.md` were written for the C implementation and stay as the spec and the
+history of hard-won lessons; each module doc ends with an **"In the Rust port"** section
+describing the Rust code. Where the two disagree, the Rust code and those sections are
+the truth.
+
+A from-scratch Wayland status bar for Hyprland (originally in C), built directly
 against `wl_compositor`/`wl_shm`/`zwlr_layer_shell_v1` and drawn with cairo/pangocairo
 — no GTK, no other toolkit. It's modeled visually and behaviorally on the user's
 existing Quickshell/QML bar at `~/Dotfiles/quickshell/.config/quickshell/` (colors,
@@ -36,11 +40,13 @@ then the release build.
 ```sh
 ./build.sh && python3 tests/run_all.py                # ~2 min, extra bars flash briefly
 python3 tests/perf_compare.py --bin target/release/stickBar \
-    --against ../StickBar/build-release/stickBar       # Rust port vs. the C bar (release builds)
+    --against <C bar's build-release/stickBar>         # vs. the C bar (c-legacy), release builds
 python3 tests/perf_compare.py --against HEAD~1         # vs. any earlier ref (C or Rust)
 ```
 
-Until a module is ported, its tests fail; the test list is the porting checklist.
+Two tests depend on this machine, not the code: `test_sysmon_data` fails while other
+apps hold more memory than its 400 MB child, and `test_nvml_vs_smi` mis-parses driver
+620's fractional temperature. Both fail the same way against the C bar.
 
 Run the bar and watch stderr for Wayland protocol errors or Hyprland IPC failures.
 
@@ -59,7 +65,7 @@ Read the file for what you're touching before changing it.
 
 | Read | When | Covers |
 |---|---|---|
-| [`docs/porting.md`](docs/porting.md) | Starting or continuing any porting work | Milestone order, crate choices, per-module checklist, progress |
+| [`docs/porting.md`](docs/porting.md) | Choosing a crate, or wondering why the Rust bar does something differently from C | The port's milestones, crate choices with reasons, every measurement |
 | [`docs/architecture.md`](docs/architecture.md) | Finding your way around, or changing how redraws work | File layout, `AppContext`/`Output`, redraw path, measured performance; `main.c`, `bar/bar_surface.c`, `render/` |
 | [`docs/testing.md`](docs/testing.md) | Testing or verifying anything | Test-control channel, cross-reference commands, screenshots, multi-monitor gotcha; `testing/`, `tests/` |
 | [`tests/README.md`](tests/README.md) | Adding a test, or finding what guards something | What each test checks and what bug it catches |
@@ -161,8 +167,8 @@ silently drift.
 
 ## Scope / roadmap
 
-Port order, crate choices and progress: [`docs/porting.md`](docs/porting.md). Every module keeps
+Crate choices and the port's history: [`docs/porting.md`](docs/porting.md). Every module has
 the C bar's shape: a `src/modules/<name>/` directory and a render function taking the
-cairo context, x and the box's top and height, returning the next x. If it needs live
-data, its fd joins the single main event loop, just like every fd in the C bar's
-`main.c` epoll loop.
+cairo context, x and the box's top and height, returning where its box landed. If it needs
+live data, it joins the single calloop event loop in `main.rs`: an fd source, a timer, or a
+channel from its worker thread.

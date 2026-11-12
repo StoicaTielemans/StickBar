@@ -183,6 +183,17 @@ must pass.
   table recorded, the Rust release build run as the daily bar for about a week. Then:
   `git branch c-legacy main`, merge `rust-rewrite` into `main` (a merge, not a squash),
   push all three branches, and point Hyprland's exec line at `target/release/stickBar`.
+  - [x] **Part 1, 2026-11-13: the trial started.** Suite and perf recorded (log below), README
+    and CLAUDE.md describe the Rust bar, and Hyprland's `bar` setting
+    (`~/Dotfiles/hypr/.config/hypr/modules/settings.lua`) points at
+    `StickBar-rust/target/release/stickBar`, which replaced the running C bar.
+  - [ ] **Part 2, after the trial**, in order:
+    1. `git branch c-legacy main`;
+    2. in the `main` checkout (`../StickBar`): `git merge --no-ff rust-rewrite`, then
+       `./build.sh` there;
+    3. point `settings.lua`'s `bar` at `StickBar/target/release/stickBar` and restart the bar;
+    4. the user pushes `main`, `c-legacy` and `rust-rewrite`;
+    5. optionally remove the `StickBar-rust` worktree (`git worktree remove`).
 
 ## Rust-only additions
 
@@ -328,3 +339,14 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   about 4; at M13's commit both read 0.05 %). The M13 build measures 0.12 % too under the same
   conditions, so M14 adds nothing. All of it is the main thread (two 10 ms ticks in 20 s). To
   look into before switch day.
+- 2026-11-13 · M15 part 1 · The trial started. The idle-CPU item from M14b is closed. Side by
+  side for 60 s (two rounds) the bars use the same CPU (0.033 / 0.050 % each). Most of the old
+  difference was tick-level noise on a loaded machine; the real finding was zbus's `blocking-1`
+  thread waking every 500 ms forever (`blocking` 1.7 never retires a lone idle thread). It was
+  spawned once, to connect the socket, so the `dbus` thread now opens the session-bus socket
+  itself (`unix:path=` addresses; any other address falls back to zbus). One thread fewer, and
+  wakeups 366–438/min against C's 483–791. `run_all.py` twice: 20/22, then 21/22. Only
+  `test_nvml_vs_smi` failed both times (driver 620 output), and `test_sysmon_data` once (memory
+  held by other apps); both fail against the C bar too. Release vs release, 60 s: CPU 0.05 vs
+  0.03 % (3 vs 2 ticks), private 28.8 vs 28.0 MB, PSS 38.2 vs 34.8 MB, RSS 59.2 vs 56.3 MB, 7
+  threads vs 5, commits and damage identical. Release binary 4.4 MB.

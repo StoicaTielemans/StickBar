@@ -258,12 +258,59 @@ async fn drive(conn: &Connection) -> zbus::Result<()> {
 
 /// The session bus, with the short call timeout, and zbus's executor run by
 /// this thread (see [`drive`]) instead of a thread of zbus's own.
+///
+/// **The socket is opened here, not by zbus**, when the address is a plain
+/// `unix:path=`: zbus connects through its `blocking` thread pool, and that
+/// pool's one idle thread then never exits, waking every 500 ms for the rest
+/// of the run (`blocking` 1.7 only retires idle threads above its 500-thread
+/// limit). A local `connect()` is instant, and this thread may block anyway.
+/// Any other address (abstract sockets, tcp, ...) goes through zbus as usual.
 async fn connect() -> zbus::Result<Connection> {
-    zbus::connection::Builder::session()?
+    let builder = match session_socket() {
+        Some(stream) => zbus::connection::Builder::async_io_unix_stream(stream),
+        None => zbus::connection::Builder::session()?,
+    };
+    builder
         .method_timeout(METHOD_TIMEOUT)
         .internal_executor(false)
         .build()
         .await
+}
+
+/// The session bus socket, if `DBUS_SESSION_BUS_ADDRESS` (or the default
+/// `$XDG_RUNTIME_DIR/bus`) names a `unix:path=` that accepts a connection.
+fn session_socket() -> Option<std::os::unix::net::UnixStream> {
+    let address = std::env::var("DBUS_SESSION_BUS_ADDRESS").ok().or_else(|| {
+        std::env::var("XDG_RUNTIME_DIR")
+            .ok()
+            .map(|dir| format!("unix:path={dir}/bus"))
+    })?;
+    // Several addresses may be listed (`;`), tried in order.
+    address
+        .split(';')
+        .filter_map(unix_path)
+        .find_map(|path| std::os::unix::net::UnixStream::connect(path).ok())
+}
+
+/// The socket path of one `unix:path=...` D-Bus address (`%XX`-escaped
+/// bytes decoded), or `None` for any other kind.
+fn unix_path(address: &str) -> Option<String> {
+    let params = address.strip_prefix("unix:")?;
+    let escaped = params.split(',').find_map(|kv| kv.strip_prefix("path="))?;
+    let mut bytes = Vec::with_capacity(escaped.len());
+    let mut rest = escaped.as_bytes();
+    while let Some((&first, tail)) = rest.split_first() {
+        if first == b'%' {
+            let hex = tail.get(..2)?;
+            let text = std::str::from_utf8(hex).ok()?;
+            bytes.push(u8::from_str_radix(text, 16).ok()?);
+            rest = tail.get(2..)?;
+        } else {
+            bytes.push(first);
+            rest = tail;
+        }
+    }
+    String::from_utf8(bytes).ok()
 }
 
 /// A stream of the messages matching `rule`.
@@ -371,4 +418,24 @@ async fn serve(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unix_path;
+
+    #[test]
+    fn unix_paths() {
+        assert_eq!(
+            unix_path("unix:path=/run/user/1000/bus").as_deref(),
+            Some("/run/user/1000/bus")
+        );
+        assert_eq!(
+            unix_path("unix:path=/tmp/a%20b,guid=1").as_deref(),
+            Some("/tmp/a b")
+        );
+        assert_eq!(unix_path("unix:abstract=/tmp/dbus-x"), None);
+        assert_eq!(unix_path("tcp:host=localhost,port=1"), None);
+        assert_eq!(unix_path("unix:path=/bad%2"), None);
+    }
 }

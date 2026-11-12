@@ -358,7 +358,7 @@ fn dump_visualizer(app: &App) -> Value {
                 graphs::test_geometry(panel_x, y, panel_w);
             let (left, right) = levels(slot);
             json!({
-                "app": name, "slot": slot, "target": 0,
+                "app": name, "slot": slot, "target": vis.target(slot),
                 "panel_x": panel_x, "panel_y": y, "panel_w": panel_w, "panel_h": graphs::row_h(),
                 "graph_x": graph_x, "top_y": top_y, "bottom_y": bottom_y, "half_h": half_h,
                 "rows": rows, "levels_l": left, "levels_r": right,

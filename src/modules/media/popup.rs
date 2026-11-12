@@ -307,19 +307,23 @@ impl MediaPopup {
             .is_some_and(|o| o.graphs.frame_done(surface, qh))
     }
 
-    /// Which slots should capture now: a graph on screen whose player is
-    /// playing (and, in tests, is one of their fakes). All off when closed.
-    pub(crate) fn slot_wants(&self, media: &Media) -> [bool; MAX_SOURCES] {
-        let mut wants = [false; MAX_SOURCES];
+    /// Which slots should capture now, and whose process: a graph on screen
+    /// whose player is playing (and, in tests, is one of their fakes). All
+    /// off when closed.
+    pub(crate) fn slot_wants(&self, media: &Media) -> [(bool, u32); MAX_SOURCES] {
+        let mut wants = [(false, 0); MAX_SOURCES];
         let Some(open) = self.open.as_ref() else {
             return wants;
         };
         for ((slot, want), card) in wants.iter_mut().enumerate().zip(&open.content.cards) {
-            *want = card.vis_y.is_some()
+            let Some(player) = media.player(card.player) else {
+                continue;
+            };
+            let active = card.vis_y.is_some()
                 && open.graphs.shown(slot)
-                && media
-                    .player(card.player)
-                    .is_some_and(|p| p.is_playing() && media.visualizer.capture_allowed(&p.app));
+                && player.is_playing()
+                && media.visualizer.capture_allowed(&player.app);
+            *want = (active, player.pid);
         }
         wants
     }

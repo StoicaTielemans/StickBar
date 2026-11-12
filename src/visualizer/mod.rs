@@ -5,6 +5,10 @@
 //! 15 fps timer that only runs while a slot is capturing or still settling.
 //! With the dropdown closed nothing runs at all.
 //!
+//! **Real audio** comes from the `pipewire` thread (`src/pipewire/capture.rs`):
+//! a slot turned on sends it the card's player pid, and its capture stream
+//! fills that slot's shared rings, which each frame reads a window from.
+//!
 //! **Synthetic mode** (`STICKBAR_TEST_VISUALIZER_SYNTH`, set by
 //! `tests/test_visualizer.py`): no `PipeWire` at all; an active slot "hears"
 //! sine tones set over the test-control channel (`vis-tone`). Everything
@@ -15,12 +19,23 @@ pub(crate) mod spectrum;
 
 use spectrum::{BANDS, FFT_SIZE, Spectrum};
 
+use crate::pipewire::{
+    Capture,
+    capture::{CaptureCommand, SharedRings},
+};
+
 /// Graph slots: cards past this many get no graph.
 pub(crate) const MAX_SOURCES: usize = 4;
 /// Frames per second (the user's pick; 30 cost twice the CPU).
 pub(crate) const FPS: u32 = 15;
 /// The capture rate every stream is converted to.
 const CAPTURE_RATE: f32 = 48_000.0;
+/// Frames without new samples after which a slot's rings count as silence.
+/// "Playing" doesn't mean audio flows: between tracks or on a stalled stream
+/// `PipeWire` just stops delivering, and the last window would stay frozen,
+/// the graph with it. 2 frames (~133 ms) is several buffer periods, so
+/// ordinary jitter never trips it.
+const STALE_FRAMES: u8 = 2;
 /// Per-frame rise toward the newest level: most of the way at once, so beats
 /// land on the beat (0.6 per 30 fps frame, applied twice).
 const ATTACK: f32 = 0.84;
@@ -49,6 +64,14 @@ struct Slot {
     settled: bool,
     /// Synth mode: each channel's tone in Hz (0 = silence).
     tones: [f32; 2],
+    /// The player pid it was last pointed at (0 = unknown: the mix).
+    pid: u32,
+    /// Frames in a row without new samples.
+    stale: u8,
+    /// What its capture follows (a playback stream's serial, 0 = the mix).
+    target: u32,
+    /// Where its capture writes.
+    rings: SharedRings,
 }
 
 impl Default for Slot {
@@ -60,6 +83,10 @@ impl Default for Slot {
             hold: [[0; BANDS]; 2],
             settled: true,
             tones: [0.0; 2],
+            pid: 0,
+            stale: 0,
+            target: 0,
+            rings: SharedRings::default(),
         }
     }
 }
@@ -68,6 +95,10 @@ impl Default for Slot {
 pub(crate) struct Visualizer {
     /// Graphs are shown at all (else the dropdown has no graph rows).
     available: bool,
+    /// The compositor has subsurfaces and the tests didn't turn it off.
+    allowed: bool,
+    /// Sends slot commands to the `pipewire` thread (real capture).
+    capture: Option<Capture>,
     /// Synthetic tones instead of captured audio (tests).
     synth: bool,
     /// Tests: only players whose app name starts with this are captured.
@@ -108,15 +139,43 @@ impl Visualizer {
         let disabled = env_set("STICKBAR_TEST_NO_VISUALIZER").is_some();
         let synth = env_set("STICKBAR_TEST_VISUALIZER_SYNTH").is_some();
         Self {
-            // Real capture arrives with the PipeWire streams; until then
-            // only the synthetic mode has anything to show.
+            // Real capture needs the `pipewire` thread: see `set_capture`.
             available: subsurfaces && !disabled && synth,
+            allowed: subsurfaces && !disabled,
+            capture: None,
             synth,
             only: env_set("STICKBAR_TEST_VISUALIZER_ONLY"),
             slots: Default::default(),
             spectrum: None,
             window: [vec![0.0; FFT_SIZE], vec![0.0; FFT_SIZE]],
         }
+    }
+
+    /// Hands over the `pipewire` thread's command handle: real capture is
+    /// possible from now on (`None`: it couldn't start).
+    pub(crate) fn set_capture(&mut self, capture: Option<Capture>) {
+        self.capture = capture;
+        self.available = self.allowed && (self.synth || self.capture.is_some());
+    }
+
+    /// The `pipewire` thread couldn't connect: no graphs from now on.
+    pub(crate) fn set_unavailable(&mut self) {
+        if !self.synth {
+            self.capture = None;
+            self.available = false;
+        }
+    }
+
+    /// Slot `slot` now captures `target` (the `pipewire` thread says).
+    pub(crate) fn set_target(&mut self, slot: usize, target: u32) {
+        if let Some(s) = self.slots.get_mut(slot) {
+            s.target = target;
+        }
+    }
+
+    /// What slot `slot` captures (the tests' `dump visualizer`).
+    pub(crate) fn target(&self, slot: usize) -> u32 {
+        self.slots.get(slot).map_or(0, |s| s.target)
     }
 
     /// Whether the dropdown shows graphs.
@@ -153,24 +212,37 @@ impl Visualizer {
         }
     }
 
-    /// Turns `slot`'s capture on or off. Returns whether the animation timer
-    /// must run (a slot just turned on); turning off lets the levels fall,
-    /// and [`Self::pump`] says when everything has settled.
-    pub(crate) fn set_active(&mut self, slot: usize, active: bool) -> bool {
+    /// Turns `slot`'s capture on or off, pointed at player process `pid`.
+    /// Cheap and idempotent (called every loop pass): only a change does
+    /// anything. Returns whether the animation timer must run (a slot just
+    /// turned on); turning off lets the levels fall, and [`Self::pump`] says
+    /// when everything has settled.
+    pub(crate) fn set_source(&mut self, slot: usize, active: bool, pid: u32) -> bool {
         if !self.available {
             return false;
         }
+        let synth = self.synth;
         let Some(s) = self.slots.get_mut(slot) else {
             return false;
         };
-        if s.active == active {
+        let retarget = !synth && active && s.active && s.pid != pid;
+        if s.active == active && !retarget {
             return false;
         }
+        if !synth && let Some(capture) = self.capture.as_ref() {
+            capture.send(CaptureCommand::Slot {
+                slot,
+                want: active.then(|| (pid, std::sync::Arc::clone(&s.rings))),
+            });
+        }
+        let started = active && !s.active;
         s.active = active;
+        s.pid = pid;
+        s.stale = 0;
         if active {
             s.settled = false;
         }
-        active
+        started
     }
 
     /// One animation frame. Slots in `ready` (their graph can show a frame
@@ -192,10 +264,10 @@ impl Visualizer {
             if !slot.active && shown & bit == 0 {
                 // Off and off screen: nothing will ask for its frames.
                 if let Some(s) = self.slots.get_mut(i) {
-                    *s = Slot {
-                        tones: s.tones,
-                        ..Slot::default()
-                    };
+                    s.levels = [[0.0; BANDS]; 2];
+                    s.peaks = [[0.0; BANDS]; 2];
+                    s.hold = [[0; BANDS]; 2];
+                    s.settled = true;
                 }
                 continue;
             }
@@ -209,6 +281,28 @@ impl Visualizer {
         (changed, busy)
     }
 
+    /// Copies slot `i`'s newest window out of its rings (held only for the
+    /// copy, so the capture is never held up), counting it as silence once
+    /// no new samples have come for [`STALE_FRAMES`] frames.
+    fn read_rings(&mut self, i: usize) {
+        let Some(slot) = self.slots.get_mut(i) else {
+            return;
+        };
+        let Ok(mut rings) = slot.rings.lock() else {
+            return;
+        };
+        slot.stale = if rings.fresh > 0 {
+            0
+        } else {
+            slot.stale.saturating_add(1)
+        };
+        rings.fresh = 0;
+        if slot.stale >= STALE_FRAMES {
+            rings.clear();
+        }
+        rings.window(&mut self.window);
+    }
+
     /// One frame of analysis for slot `i`: both channels' windows, the FFT,
     /// and the smoothing. Returns whether anything moved.
     fn analyse(&mut self, i: usize) -> bool {
@@ -216,9 +310,12 @@ impl Visualizer {
             return false;
         };
         let (active, tones) = (slot.active, slot.tones);
+        if !self.synth {
+            self.read_rings(i);
+        }
         // Synthetic audio while active; silence once off, as a paused real
         // stream gives.
-        for (window, hz) in self.window.iter_mut().zip(tones) {
+        for (window, hz) in self.window.iter_mut().zip(tones).filter(|_| self.synth) {
             let hz = if active { hz } else { 0.0 };
             // The window is 4096 samples: every index fits a u16.
             for (n, sample) in (0_u16..).zip(window.iter_mut()) {

@@ -39,7 +39,7 @@
 | Timers / clock | timerfd + localtime | calloop `Timer` + **chrono** (`Local`) | |
 | inotify (EQ) | raw inotify | **rustix** `fs::inotify` as a calloop `Generic` source | rustix is already a dependency; its inotify API is safe, so no extra crate |
 | getifaddrs (network) | libc | **nix** (`net` feature) | Safe wrapper |
-| FFT (visualizer) | own `spectrum.c` | **rustfft** | |
+| FFT (visualizer) | own `spectrum.c` | **realfft** (rustfft's real-input wrapper) | Does the half-size complex FFT + untangle C hand-wrote; byte-identical graphs |
 | Child processes | fork/execv + mask reset | **nix `posix_spawn`** with an empty signal mask (the EQ script) | `std::process::Command` does **not** reset the mask (only SIGPIPE's handler), so its child keeps SIGINT/SIGTERM/SIGUSR1 blocked; `pre_exec` would need `unsafe`. `spawn_systemctl` still uses `Command` (BUG.md, Open) |
 
 Add each crate only in the milestone that first needs it.
@@ -174,8 +174,9 @@ must pass.
   (pipewire-rs 0.10), the node/link graph, mic/webcam/screen-share detection, the box and the
   dropdown. **C's `test_privacy` passes unchanged**; pixel-identical to C's (one known order
   difference inside a card). Playback-stream and Client tracking moves to M14, its only user.
-- [ ] **M14: Visualizer** (M14a done: analysis, the strips and the graphs, synthetic mode;
-  M14b next: the real capture streams) (`visualizer/*`, `bar/strip_surface.c` ~860). The desync
+- [x] **M14: Visualizer** (M14a: analysis, the strips and the graphs, synthetic mode; M14b: the
+  capture streams on the `pipewire` thread, and the player-to-stream matching). C's
+  `test_visualizer` passes unchanged; graphs byte-identical to C's; real capture checked live. (`visualizer/*`, `bar/strip_surface.c` ~860). The desync
   subsurface, up to 4 capture streams only while the dropdown is open, FFT bands, and
   synth mode for tests. Tests: `test_visualizer`.
 - [ ] **M15: Switch day.** Full `tests/run_all.py` green, `perf_compare --against main`
@@ -318,3 +319,12 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   With the same steady synthetic tones the dropdown, graphs included, is byte-identical to C's.
   20 of 22 tests pass (the two environment ones fail as before). 64 unit tests. Outside synth
   mode the visualizer stays unavailable until M14b, so the daily path is unchanged.
+- 2026-11-13 · M14b · Visualizer, real capture. Live with a fake player whose child plays a
+  1 kHz L / 3 kHz R tone into a null sink: the graph followed that child's stream, each tone only
+  in its half, the privacy dropdown didn't list the capture, and the node went on close and on
+  pause. One playing card, dropdown open: 0.55 % CPU (C: 0.55 %); closed: 0.10 % (C: 0.20 %).
+  20 of 22 tests pass (the 2 environment ones fail as before), 67 unit tests. Release binary
+  4.4 MB. **Open item:** idle CPU in `perf_compare` reads 0.12 % vs C's 0.05 % today (load average
+  about 4; at M13's commit both read 0.05 %). The M13 build measures 0.12 % too under the same
+  conditions, so M14 adds nothing. All of it is the main thread (two 10 ms ticks in 20 s). To
+  look into before switch day.

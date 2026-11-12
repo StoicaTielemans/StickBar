@@ -119,8 +119,10 @@ and `modules/privacy/privacy.c` + `privacy_info_popup.c` are the bar-facing half
 - **Order within a card:** PipeWire node id (roughly creation order). C used its node table's
   slot order, so with several streams in one card the two bars can list them differently;
   everything else is pixel-identical.
-- **Not ported yet:** tracking playback streams and Client objects to match a player's pid to
-  its stream. Only the visualizer (M14) uses it.
+- **Playback streams and clients** are tracked too (bound for their running state and
+  `application.process.id`), only for the visualizer's player-to-stream matching
+  (`Graph::find_playback`, with `capture::descends`). The privacy state only looks at
+  `Stream/Input/*`, so they never count here.
 - **No fixed caps:** nodes, links and entries are `HashMap`s, `BTreeMap`s and `Vec`s (C: 256 /
   256 / 32).
 - The webcam / screen-share split is ported unchanged and is as unverified as in C (no camera,

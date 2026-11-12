@@ -277,3 +277,35 @@ frequency band, soft faded ends.
   child-process players matched, L/R tones landed in the right halves, and the
   privacy icon stayed hidden. Every other test bar runs with the visualizer off
   (`STICKBAR_TEST_NO_VISUALIZER=1`, `tests/lib/common.py`).
+
+### The visualizer in the Rust port
+
+- **Files:** `src/visualizer/spectrum.rs` (FFT and bands, pure), `src/visualizer/mod.rs`
+  (`Visualizer`: slots, smoothing, peaks, synth mode, `pump`), `src/bar/strip_surface.rs`,
+  `src/modules/media/graphs.rs` (panels, frames, the per-card strips), `src/pipewire/capture.rs`
+  (rings, capture streams, the `/proc` ancestry walk), and the playback/client tracking in
+  `src/pipewire/{mod,graph}.rs`.
+- **Same pixels as C:** with the same steady synthetic tones, the dropdown (graphs included) is
+  byte-identical to C's, through `realfft` (rustfft's real-input FFT) instead of C's
+  hand-written half-size transform.
+- **Frames are plain slice copies into the strip's shm buffer**, no cairo per frame (SCTK's
+  buffer fill hands out the bytes). The popup's own paint composes the same frame under the strip
+  for `snapshot`. A frame is committed at most once per tick and only when a dot changed. During
+  the test's fall C committed 37 strip frames, the Rust bar 19.
+- **No second PipeWire connection or thread:** the capture streams live on the privacy
+  indicator's `pipewire` thread (C opened its own `pw_thread_loop` on the first capture).
+  - The main thread sends `CaptureCommand::Slot { slot, want: (player pid, rings) }` on a
+    `pipewire::channel`. The thread resolves the pid to a playback stream itself, and re-resolves
+    when playback streams start, stop, come or go, or a client's pid becomes known.
+  - The stream is recreated only when the target changes. Its properties are C's, including
+    `node.dont-fallback`.
+- **The rings** are an `Arc<Mutex<Rings>>` per slot: written by the `process` callback on the
+  `pipewire` thread, read once per frame by the main thread. It's the one genuinely shared buffer.
+- **Checked live** (a fake MPRIS player whose child plays a 1 kHz L / 3 kHz R tone into a null
+  sink):
+  - the graph followed the child's stream (the ancestry walk), with each tone only in its own
+    half;
+  - the privacy dropdown didn't list the capture;
+  - the capture node went away when the dropdown closed and when the player paused.
+- **Cost** (release, the same setup): one playing card with the dropdown open costs 0.55 % CPU,
+  the same as C; with it closed, 0.10 % against C's 0.20 %.

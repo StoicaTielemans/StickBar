@@ -69,6 +69,8 @@ pub(crate) struct PlayerInfo {
     pub(crate) can_seek: bool,
     /// `mpris:length` in microseconds (0 if unreported).
     pub(crate) length_us: i64,
+    /// The owning process (0 if unknown), for finding its own audio stream.
+    pub(crate) pid: u32,
 }
 
 impl PlayerInfo {
@@ -220,6 +222,7 @@ impl Players {
         let mut player = Player {
             info: PlayerInfo {
                 id: self.next_id,
+                pid,
                 ..PlayerInfo::default()
             },
             bus_name: bus_name.to_owned(),

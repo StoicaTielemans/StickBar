@@ -32,7 +32,9 @@ src/
 │   │                       (1x1 + viewporter), first-paint-after-configure
 │   ├── popup_host.rs       PopupHost: a menu under its box + a catcher per monitor;
 │   │                       resize() recreates the menu at a new size
-│   └── popups.rs           Popups: every dropdown kind; configure/menu routing
+│   ├── popups.rs           Popups: every dropdown kind; configure/menu routing
+│   └── strip_surface.rs    StripSurface: a desync subsurface with its own buffers and
+│                           frame pacing (the media graphs)
 ├── hyprland/
 │   ├── mod.rs              socket_path(), request()/request_json(): the request socket
 │   ├── events.rs           the event socket as a calloop source; line framing, filter
@@ -66,9 +68,14 @@ src/
 ├── mpris/mod.rs            Players (on the dbus thread): discovery, PropertiesChanged by
 │                           owner, is_shadowed, controls, Position polls on request
 ├── pipewire/
-│   ├── mod.rs              the `pipewire` thread: registry + node info listeners,
-│   │                       PrivacyState to the main loop only when it changed
-│   └── graph.rs            nodes/links, privacy classification (pure, unit-tested)
+│   ├── mod.rs              the `pipewire` thread: registry, node + client listeners,
+│   │                       PrivacyState only when changed, the visualizer's slots
+│   ├── graph.rs            nodes/links/clients, privacy classification, the player ->
+│   │                       playback stream match (pure, unit-tested)
+│   └── capture.rs          capture streams, the shared rings, /proc ancestry
+├── visualizer/
+│   ├── mod.rs              Visualizer: slots, smoothing, peaks, synth mode, pump
+│   └── spectrum.rs         Hann window, realfft, 82 log bands (pure, unit-tested)
 ├── network/mod.rs          Network: default route, rates, history; details via
 │                           /sys, resolv.conf and getifaddrs (nix)
 ├── util/history.rs         History2: the 120-sample ring behind every graph
@@ -78,7 +85,8 @@ src/
 │   ├── mem/                mod.rs (box), popup.rs (the memory dropdown)
 │   ├── network/            mod.rs (box), popup.rs (the network dropdown)
 │   ├── eq/                 mod.rs (sparkline + profile box), popup.rs (EQ dropdown)
-│   ├── media/              mod.rs (Media + the centred box), popup.rs (MediaPopup)
+│   ├── media/              mod.rs (Media + the centred box), popup.rs (MediaPopup),
+│   │                       graphs.rs (spectrum panels, frames, per-card strips)
 │   ├── privacy/            mod.rs (the box), popup.rs (PrivacyPopup)
 │   ├── tray/               mod.rs (Tray: items, icon surfaces, the icon row),
 │   │                       menu.rs (TrayMenu: the DBusMenu dropdown)

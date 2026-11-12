@@ -199,7 +199,8 @@ fn start_sources(handle: &calloop::LoopHandle<'static, App>, app: &mut App) -> R
 
     // The privacy indicator: the `pipewire` thread, which pushes who's
     // recording what into the loop.
-    pipewire::start(handle);
+    let capture = pipewire::start(handle);
+    app.renderer_mut().media.visualizer.set_capture(capture);
 
     // The system tray: the `dbus` thread, which pushes item changes into the loop.
     app.dbus = dbus::start(handle);

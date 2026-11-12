@@ -43,7 +43,7 @@ use crate::{
     dbus::{Command, Dbus, TrayEvent},
     hyprland::dispatch::Dispatcher,
     mpris::{MediaCommand, MediaEvent},
-    pipewire::{Category, PrivacyState},
+    pipewire::{Category, PipewireEvent, PrivacyState},
     render::Renderer,
 };
 
@@ -378,8 +378,8 @@ impl App {
     pub(crate) fn sync_visualizer(&mut self) {
         let wants = self.popups.media.slot_wants(&self.renderer.media);
         let mut start = false;
-        for (slot, want) in wants.into_iter().enumerate() {
-            start |= self.renderer.media.visualizer.set_active(slot, want);
+        for (slot, (active, pid)) in wants.into_iter().enumerate() {
+            start |= self.renderer.media.visualizer.set_source(slot, active, pid);
         }
         if start {
             self.start_visualizer_timer();
@@ -433,11 +433,22 @@ impl App {
         busy
     }
 
+    /// News from the `pipewire` thread.
+    pub(crate) fn pipewire_event(&mut self, event: PipewireEvent) {
+        match event {
+            PipewireEvent::Privacy(state) => self.privacy_update(state),
+            PipewireEvent::Target { slot, target } => {
+                self.renderer.media.visualizer.set_target(slot, target);
+            }
+            PipewireEvent::Unavailable => self.renderer.media.visualizer.set_unavailable(),
+        }
+    }
+
     /// Who's recording what changed (the `pipewire` thread only sends real
     /// changes). The bars redraw only if one of the three kinds turned on or
     /// off: a second app joining the mic changes the dropdown's list, not
     /// the box. An open dropdown keeps the snapshot it opened with.
-    pub(crate) fn privacy_update(&mut self, state: PrivacyState) {
+    fn privacy_update(&mut self, state: PrivacyState) {
         let kinds = |s: &PrivacyState| {
             [Category::Mic, Category::Webcam, Category::ScreenShare].map(|c| s.has(c))
         };

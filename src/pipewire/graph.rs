@@ -5,10 +5,12 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-/// The bar's own media visualizer captures as a `Stream/Input/Audio` node of
-/// this name (M14). It's never counted, or the privacy box would show a mic
+/// The bar's own media visualizer captures as `Stream/Input/Audio` nodes of
+/// this name. They're never counted, or the privacy box would show a mic
 /// naming stickBar whenever the media dropdown is open during playback.
 pub(crate) const VISUALIZER_NODE_NAME: &str = "stickBar-visualizer";
+/// An app's playback stream: what a media player's graph captures.
+pub(crate) const PLAYBACK_CLASS: &str = "Stream/Output/Audio";
 
 /// A recording's kind, in the order the dropdown lists them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -43,8 +45,13 @@ pub(crate) struct NodeEntry {
     pub(crate) media_class: String,
     /// Who it belongs to, for the dropdown ([`display_name`]).
     pub(crate) name: String,
-    /// Its state is `Running` (only watched for the streams [`is_watched`] picks).
+    /// Its state is `Running` (only watched for the streams [`is_watched`]
+    /// picks, and playback streams).
     pub(crate) running: bool,
+    /// `object.serial` (what a capture stream's `target.object` names).
+    pub(crate) serial: u32,
+    /// The owning client's global id.
+    pub(crate) client_id: u32,
 }
 
 /// Every node and link, by global id.
@@ -54,6 +61,8 @@ pub(crate) struct Graph {
     pub(crate) nodes: BTreeMap<u32, NodeEntry>,
     /// Links: (output node, input node), read off the link's global props.
     pub(crate) links: HashMap<u32, (u32, u32)>,
+    /// Clients' process ids, by client global id (0 while unknown).
+    pub(crate) clients: HashMap<u32, u32>,
 }
 
 impl Graph {
@@ -75,6 +84,35 @@ impl Graph {
         // Stable: within a category, node order is kept.
         entries.sort_by_key(|(category, _)| *category);
         PrivacyState { entries }
+    }
+
+    /// The `object.serial` of a playback stream belonging to process `pid`
+    /// or one of its descendants (`descends(client_pid, pid)` says), for a
+    /// media player's own graph; browsers play from a child process. Prefers
+    /// a running stream: Spotify keeps an idle one, a browser has one per tab.
+    pub(crate) fn find_playback(
+        &self,
+        pid: u32,
+        descends: impl Fn(u32, u32) -> bool,
+    ) -> Option<u32> {
+        if pid == 0 {
+            return None;
+        }
+        let mut found = None;
+        for node in self.nodes.values() {
+            if node.media_class != PLAYBACK_CLASS || node.serial == 0 {
+                continue;
+            }
+            let client_pid = self.clients.get(&node.client_id).copied().unwrap_or(0);
+            if client_pid == 0 || !descends(client_pid, pid) {
+                continue;
+            }
+            if node.running {
+                return Some(node.serial);
+            }
+            found = found.or(Some(node.serial));
+        }
+        found
     }
 
     /// Whether the video stream `id` reads a camera, by following the link
@@ -130,7 +168,34 @@ mod tests {
             media_class: media_class.to_owned(),
             name: name.to_owned(),
             running,
+            ..NodeEntry::default()
         }
+    }
+
+    #[test]
+    fn finds_a_players_playback_stream() {
+        let mut g = Graph::default();
+        let playback = |serial, client_id, running| NodeEntry {
+            media_class: "Stream/Output/Audio".to_owned(),
+            running,
+            serial,
+            client_id,
+            ..NodeEntry::default()
+        };
+        g.nodes.extend([
+            (10, playback(100, 1, false)),
+            (11, playback(101, 1, true)),
+            (12, playback(102, 2, true)),
+        ]);
+        g.clients.extend([(1, 500), (2, 777)]);
+        // pid 400 is the parent of 500 (a browser's audio child).
+        let descends =
+            |child: u32, ancestor: u32| child == ancestor || (child, ancestor) == (500, 400);
+        assert_eq!(g.find_playback(500, descends), Some(101)); // the running one
+        assert_eq!(g.find_playback(400, descends), Some(101));
+        assert_eq!(g.find_playback(777, descends), Some(102));
+        assert_eq!(g.find_playback(9, descends), None);
+        assert_eq!(g.find_playback(0, descends), None);
     }
 
     #[test]

@@ -7,7 +7,8 @@
 //! Right-region boxes open leftwards from their right edge (`open_right`),
 //! left-region ones rightwards from their left edge (`open_left`); the wrong
 //! one pushes the dropdown off-screen (BUG.md, "CPU/GPU/memory dropdowns
-//! off-screen").
+//! off-screen"). The centred media box's dropdown is centred on the monitor
+//! (`open_centered`).
 //!
 //! **Resizing** (`resize`) recreates the menu surface at the new size instead
 //! of calling `set_size` on it: Hyprland unmapped a layer surface that shrank
@@ -80,6 +81,26 @@ impl PopupHost {
             (top, 0, 0, left),
             Anchor::TOP | Anchor::LEFT,
         );
+        Self::open(env, placement, size, all_outputs)
+    }
+
+    /// Opens a `width` x `height` dropdown on `output` under the box
+    /// `trigger`, centred horizontally on the monitor (the media box, which is
+    /// itself centred), with a catcher on each of `all_outputs`.
+    ///
+    /// Anchored to the top edge only: layer-shell centres a surface on any
+    /// axis where it's anchored to neither edge. So there's no x to work out,
+    /// and a resize (recreated at the new width) stays centred too.
+    pub(crate) fn open_centered<'o>(
+        env: &PopupEnv<'_>,
+        output: &WlOutput,
+        trigger: BoxRect,
+        size: (i32, i32),
+        all_outputs: impl Iterator<Item = &'o WlOutput>,
+    ) -> Self {
+        // The same bar-height correction as `open_right`.
+        let top = whole_px(trigger.y + trigger.h) - i32::from(BAR.height);
+        let placement = (output.clone(), (top, 0, 0, 0), Anchor::TOP);
         Self::open(env, placement, size, all_outputs)
     }
 

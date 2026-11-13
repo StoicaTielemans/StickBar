@@ -231,7 +231,7 @@ impl MediaPopup {
         self.open = None;
         let mut eq = EqSection::new(text, (OUTER_MARGIN, EQ_COL_W));
         let (cards, size) = layout(media, &mut eq);
-        let host = PopupHost::open_left(
+        let host = PopupHost::open_centered(
             env,
             output,
             trigger,

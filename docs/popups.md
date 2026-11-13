@@ -8,7 +8,7 @@ Shared by all of them; a module's own section only records what differs.
 | mic | mute | device dropdown | | ±5% | TOP+RIGHT |
 | CPU / GPU / memory | | dropdown | | | TOP+LEFT |
 | privacy | | dropdown | | | TOP+LEFT |
-| media | play/pause (nothing when idle) | dropdown: players + EQ | | | TOP+LEFT |
+| media | play/pause (nothing when idle) | dropdown: players + EQ | | | TOP, centred on the monitor |
 | network | | dropdown | | | TOP+RIGHT |
 | clock | | calendar (toggle) | | | TOP+RIGHT |
 | tray | see the has-menu rule in [modules/tray.md](modules/tray.md) | same | | | TOP+RIGHT |
@@ -64,8 +64,10 @@ more: it lives only in the media dropdown.
   a second time.
 - **Anchor by which side of the bar the trigger is on**: right-region popups grow
   leftward from the trigger's right edge, left-region ones rightward from its left
-  edge (`left_margin = box_x`). Media sits in the center and
-  was given TOP+LEFT as the more reasonable default. Audio dropdowns anchor right
+  edge (`left_margin = box_x`). Media sits in the center, so its dropdown is
+  centred on the monitor (`PopupHost::open_centered`: anchored TOP only, which
+  layer-shell centres horizontally, so a width change stays centred too; it was
+  TOP+LEFT, which pushed the two-column dropdown off to the right). Audio dropdowns anchor right
   where the reference left-aligns under the widget, to reuse already-correct math.
 - **Dismissal: one full-screen, fully transparent, `LAYER_TOP` click-catcher per
   currently-known output**, not just the output the menu is on. The reference's

@@ -109,7 +109,9 @@ def smi_values():
          "--format=csv,noheader,nounits", "-i", "0"],
         capture_output=True, text=True, check=True).stdout.strip()
     temp, used, total, fan, power, pstate, name, driver, limit, max_clock = [x.strip() for x in out.split(",")]
-    return {"temp": int(temp), "mem_used": int(used), "mem_total": int(total),
+    # Driver 620's nvidia-smi prints the temperature with decimals ("36.66"),
+    # older drivers a whole number; NVML always gives whole degrees.
+    return {"temp": round(float(temp)), "mem_used": int(used), "mem_total": int(total),
             "fan": int(fan) if fan.isdigit() else 0, "power": float(power), "pstate": pstate,
             "name": name, "driver": driver, "power_limit": float(limit), "max_clock": int(max_clock)}
 

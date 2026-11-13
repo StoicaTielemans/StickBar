@@ -179,7 +179,7 @@ must pass.
   `test_visualizer` passes unchanged; graphs byte-identical to C's; real capture checked live. (`visualizer/*`, `bar/strip_surface.c` ~860). The desync
   subsurface, up to 4 capture streams only while the dropdown is open, FFT bands, and
   synth mode for tests. Tests: `test_visualizer`.
-- [ ] **M15: Switch day.** Full `tests/run_all.py` green, `perf_compare --against main`
+- [x] **M15: Switch day.** Full `tests/run_all.py` green, `perf_compare --against main`
   table recorded, the Rust release build run as the daily bar for about a week. Then:
   `git branch c-legacy main`, merge `rust-rewrite` into `main` (a merge, not a squash),
   push all three branches, and point Hyprland's exec line at `target/release/stickBar`.
@@ -187,13 +187,17 @@ must pass.
     and CLAUDE.md describe the Rust bar, and Hyprland's `bar` setting
     (`~/Dotfiles/hypr/.config/hypr/modules/settings.lua`) points at
     `StickBar-rust/target/release/stickBar`, which replaced the running C bar.
-  - [ ] **Part 2, after the trial**, in order:
+  - [x] **Part 2, 2026-11-13: switch day.** Done in this order:
     1. `git branch c-legacy main`;
     2. in the `main` checkout (`../StickBar`): `git merge --no-ff rust-rewrite`, then
        `./build.sh` there;
     3. point `settings.lua`'s `bar` at `StickBar/target/release/stickBar` and restart the bar;
     4. the user pushes `main`, `c-legacy` and `rust-rewrite`;
-    5. optionally remove the `StickBar-rust` worktree (`git worktree remove`).
+    5. remove the `StickBar-rust` worktree (`git worktree remove`).
+
+    The trial was cut to one day at the user's call, after a 2.9 h side-by-side run of
+    both release builds showed no growth: own memory (swap included) 29.2 MB C vs
+    30.1 MB Rust, CPU 0.040 % vs 0.050 % (log below).
 
 ## Rust-only additions
 
@@ -350,3 +354,10 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   held by other apps); both fail against the C bar too. Release vs release, 60 s: CPU 0.05 vs
   0.03 % (3 vs 2 ticks), private 28.8 vs 28.0 MB, PSS 38.2 vs 34.8 MB, RSS 59.2 vs 56.3 MB, 7
   threads vs 5, commits and damage identical. Release binary 4.4 MB.
+- 2026-11-13 · M15 part 2 · Switch day. The day's Rust-only work landed first (the EQ in the
+  media dropdown, the idle media box, the Arch logo on right-click, the centred media
+  dropdown, the Arch updates box). A side-by-side log of both release builds (no input, one
+  monitor, sampled every minute, 2.9 h): own memory with swap 27.6 → 29.2 MB (C) and
+  28.3 → 30.1 MB (Rust), flat after 1.5 h; RSS fell for both once the system started
+  swapping, so swap has to be counted. CPU 0.040 % vs 0.050 %. `c-legacy` keeps the C bar;
+  `rust-rewrite` merged into `main` (--no-ff); Hyprland runs `StickBar/target/release/stickBar`.

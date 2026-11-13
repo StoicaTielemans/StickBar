@@ -6,9 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **The Rust bar is the bar.** It was ported from C one module at a time (the record,
 milestones M0–M15 and every measurement, is [`docs/porting.md`](docs/porting.md)). The C
-bar is kept on the `c-legacy` branch; until switch day's merge it's still on `main`,
-checked out in the sibling folder `../StickBar`, and the Rust bar is on `rust-rewrite`
-(this folder) through a daily-use trial.
+bar is kept on the `c-legacy` branch. Since switch day (2026-11-13) the Rust bar is
+`main`, and Hyprland runs `target/release/stickBar` from this folder.
 
 `docs/` and `BUG.md` were written for the C implementation and stay as the spec and the
 history of hard-won lessons; each module doc ends with an **"In the Rust port"** section

@@ -102,10 +102,18 @@ def main():
                 fake.wait(timeout=5)
                 # It stays open even when that was the only player: the EQ card
                 # is still there (docs/modules/media.md).
+                # The players are a column beside the EQ card's: the last one
+                # going takes the column away (narrower); otherwise the column
+                # gets shorter, unless the EQ column is the taller one anyway.
                 after = bar.wait_menu(True, timeout=4.0, media_cards=players - 1)
-                if after["height"] >= opened["height"]:
-                    failures.append(f"popup didn't shrink: {opened['height']} -> {after['height']}")
-                gone = f"popup shrank {opened['height']} -> {after['height']}px, {players - 1} cards left"
+                before_wh = (opened["width"], opened["height"])
+                after_wh = (after["width"], after["height"])
+                if after_wh[0] > before_wh[0] or after_wh[1] > before_wh[1]:
+                    failures.append(f"popup grew: {before_wh} -> {after_wh}")
+                if players == 1 and after_wh[0] >= before_wh[0]:
+                    failures.append(f"popup didn't drop its player column: {before_wh} -> {after_wh}")
+                gone = (f"popup {before_wh[0]}x{before_wh[1]} -> {after_wh[0]}x{after_wh[1]}px, "
+                        f"{players - 1} cards left")
                 bar.must("catcher-click")
                 bar.wait_menu(False)
                 if players == 1:

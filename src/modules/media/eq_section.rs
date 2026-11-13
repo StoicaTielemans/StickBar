@@ -2,7 +2,7 @@
 //! box and dropdown of its own; at the user's request it now lives only in the
 //! media dropdown, with nothing in the bar:
 //!
-//! a card under the player cards ([`EqSection`]): a header row (equalizer
+//! a card left of the player cards ([`EqSection`]): a header row (equalizer
 //! glyph, profile name, `· low gain`, and a pill: `on` green, `off` /
 //! `no data` grey, `applying` yellow), the preamp and peak/min, the curve on a
 //! dB/frequency grid, and one compact chip per offered profile. Clicking a

@@ -9,13 +9,14 @@
 //!   out when both are empty), a timeline (`pos / length`; a click seeks
 //!   there if the player can seek), and prev / play-pause / next chips.
 //!
-//! - **The DAC EQ card** under the players (`eq_section.rs`): its header and
-//!   pill, the curve, and one chip per profile.
+//! - **The DAC EQ card** to the left of the player cards, side by side under
+//!   the header (`eq_section.rs`): its header and pill, the curve, and one
+//!   chip per profile.
 //!
-//! The width is fixed, so a longer title never resizes it; only the player
-//! count and the artist lines change the height, which recreates the
-//! surface. When the last player goes it stays open, shrunk to the header and
-//! the EQ card (the box it opened from is gone, so only a reopen needs a player).
+//! The columns' widths are fixed, so a longer title never resizes it; the
+//! player count and the artist lines change the height (the taller column
+//! wins), which recreates the surface. With no player it's just the header
+//! and the EQ column, one column wide.
 
 use std::fs::File;
 
@@ -53,8 +54,14 @@ use crate::{
 };
 
 // Layout, local to this popup (CLAUDE.md "Conventions").
-/// The content column's width (fixed: titles truncate instead).
+/// The player column's width (fixed: titles truncate instead).
 const CONTENT_W: f64 = 360.0;
+/// The EQ column's width, left of the players (its five chips fit in one row).
+const EQ_COL_W: f64 = 360.0;
+/// Between the EQ column and the player column.
+const COLUMN_GAP: f64 = SECTION_GAP;
+/// The player column's left edge.
+const CARDS_X: f64 = OUTER_MARGIN + EQ_COL_W + COLUMN_GAP;
 /// Card edge to its content.
 const CARD_PAD: f64 = 10.0;
 /// The app name / status line.
@@ -148,8 +155,8 @@ pub(crate) const fn graph_panel() -> (f64, f64) {
     (INNER_X, INNER_W)
 }
 
-/// The card column's content left edge.
-const INNER_X: f64 = OUTER_MARGIN + CARD_PAD;
+/// The player column's content left edge.
+const INNER_X: f64 = CARDS_X + CARD_PAD;
 /// The card's content width.
 const INNER_W: f64 = CONTENT_W - CARD_PAD * 2.0;
 
@@ -222,7 +229,7 @@ impl MediaPopup {
         text: &mut TextCache,
     ) {
         self.open = None;
-        let mut eq = EqSection::new(text, (OUTER_MARGIN, CONTENT_W));
+        let mut eq = EqSection::new(text, (OUTER_MARGIN, EQ_COL_W));
         let (cards, size) = layout(media, &mut eq);
         let host = PopupHost::open_left(
             env,
@@ -273,7 +280,9 @@ impl MediaPopup {
             content.hovered_timeline = None;
         }
         content.cards = cards;
-        if whole_px(size.1) != whole_px(content.size.1) {
+        // Height for players and artist lines; width for none <-> some.
+        let px = |(w, h): (f64, f64)| (whole_px(w), whole_px(h));
+        if px(size) != px(content.size) {
             open.host.resize(env, (whole_px(size.0), whole_px(size.1)));
         }
         content.size = size;
@@ -576,10 +585,12 @@ fn status_word(player: &PlayerInfo) -> (&'static str, Color) {
     }
 }
 
-/// The cards for `media`'s players, the EQ card placed under them, and the
-/// popup's size.
+/// The cards for `media`'s players (right column), the EQ card placed left
+/// of them, and the popup's size: two columns wide with players, just the EQ
+/// column without, and as tall as the taller column.
 fn layout(media: &Media, eq: &mut EqSection) -> (Vec<Card>, (f64, f64)) {
-    let mut y = OUTER_MARGIN + HEADER_H + SECTION_GAP;
+    let top = OUTER_MARGIN + HEADER_H + SECTION_GAP;
+    let mut y = top;
     let count = media.players.len();
     let mut cards = Vec::with_capacity(count);
     for (i, player) in media.players.iter().enumerate() {
@@ -608,17 +619,16 @@ fn layout(media: &Media, eq: &mut EqSection) -> (Vec<Card>, (f64, f64)) {
             timeline_y,
             buttons_y,
         });
-        y += h + CARD_GAP;
+        y += h + if i + 1 < count { CARD_GAP } else { 0.0 };
     }
-    // Under the last player card (or straight under the header without one).
-    // The players' and the EQ's are different kinds of card, so a section gap
-    // instead of a card gap.
-    if count > 0 {
-        y += SECTION_GAP - CARD_GAP;
-    }
-    eq.place(y);
-    y += eq.height();
-    (cards, (CONTENT_W + OUTER_MARGIN * 2.0, y + OUTER_MARGIN))
+    eq.place(top);
+    let bottom = y.max(top + eq.height());
+    let width = if count == 0 {
+        EQ_COL_W + OUTER_MARGIN * 2.0
+    } else {
+        CARDS_X + CONTENT_W + OUTER_MARGIN
+    };
+    (cards, (width, bottom + OUTER_MARGIN))
 }
 
 /// The timeline meter's width: the row minus the widest time text.
@@ -664,7 +674,12 @@ fn draw(
     (content, graphs): (&Content, &Graphs),
 ) -> Result<(), cairo::Error> {
     popup_chrome::draw_frame(cr, content.size.0, content.size.1, ACCENT)?;
-    draw_header(cr, text, media, content.cards.len())?;
+    draw_header(
+        cr,
+        text,
+        media,
+        (content.cards.len(), content.size.0 - OUTER_MARGIN * 2.0),
+    )?;
     let active = media.active().map(|p| p.id);
     for (i, card) in content.cards.iter().enumerate() {
         if let Some(player) = media.player(card.player) {
@@ -690,7 +705,7 @@ fn draw_header(
     cr: &cairo::Context,
     text: &mut TextCache,
     media: &Media,
-    count: usize,
+    (count, width): (usize, f64),
 ) -> Result<(), cairo::Error> {
     let any = |status: &str| media.players.iter().any(|p| p.status == status);
     let (pill, pill_fill) = if any("Playing") {
@@ -713,7 +728,7 @@ fn draw_header(
         pill: Some(pill),
         pill_fill,
     };
-    popup_chrome::draw_header(cr, text, (OUTER_MARGIN, OUTER_MARGIN, CONTENT_W), &header)
+    popup_chrome::draw_header(cr, text, (OUTER_MARGIN, OUTER_MARGIN, width), &header)
 }
 
 /// One player's card; `active` (the bar's player) gets the accent border.
@@ -726,7 +741,7 @@ fn draw_card(
     content: &Content,
 ) -> Result<(), cairo::Error> {
     let rect = BoxRect {
-        x: OUTER_MARGIN,
+        x: CARDS_X,
         y: card.y,
         w: CONTENT_W,
         h: card.h,

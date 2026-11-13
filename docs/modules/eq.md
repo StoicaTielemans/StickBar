@@ -84,8 +84,8 @@ this module never opens the DAC's HID device.
   - **Bar:** nothing. A sparkline at the end of the media box was tried and removed at the
     user's request ("keep the song title"). So the EQ is reachable only while a player
     gives the media box a reason to exist.
-  - **Dropdown:** the media dropdown (right-click on the media box) has an EQ card under
-    the player cards: header row (glyph, profile, `· low gain`, the `on`/`off`/`no data`/
+  - **Dropdown:** the media dropdown (right-click on the media box) has an EQ card in a
+    column left of the player cards: header row (glyph, profile, `· low gain`, the `on`/`off`/`no data`/
     `applying` pill), preamp and peak/min, the curve on its dB/Hz grid (90 px tall now, was
     110), and one compact chip per profile instead of full cards (no descriptions; they're
     in `PROFILES`' doc comment). Chip states: active = lavender border and name, applying

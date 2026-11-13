@@ -178,8 +178,10 @@ userdata pointer, `in_use`-gated iteration, `_count()`/`_get(index)` accessors).
   the thread keeps it as its "last polled" position for a relative `Seek`.
 - **No fixed caps:** players and cards are `Vec`s (C: 16).
 - **The DAC EQ is part of this module** (`src/modules/media/eq_section.rs`, details in
-  [eq.md](eq.md)), in the dropdown only: an EQ card under the player cards. The dropdown
-  no longer closes when the last player goes: it shrinks to the header and the EQ card.
+  [eq.md](eq.md)), in the dropdown only: an EQ card in a column **left of** the player
+  cards (user request), both under one full-width header (754 px wide with players). The
+  height is the taller column's. The dropdown no longer closes when the last player goes:
+  it drops the player column, leaving the header and the EQ card (384 px wide).
 - **The box never goes away** (user request): with no player it shows `▶  No media
   playing` until something has played since the bar started, then `▶  <artist - title>`
   of the last thing the box showed (`Media::idle_text`, kept in memory only, so a restart

@@ -1,0 +1,226 @@
+[package]
+name = "stickbar"
+version = "0.1.0"
+edition = "2024"
+# The Arch-packaged toolchain this was set up with; bump deliberately, not by accident.
+rust-version = "1.99"
+description = "A Wayland status bar for Hyprland, drawn with cairo/pango"
+publish = false
+
+# Keep the binary name the C bar had, so the Python tests, Hyprland exec lines and
+# `pkill stickBar` habits all keep working unchanged.
+[[bin]]
+name = "stickBar"
+path = "src/main.rs"
+
+# Each crate is added when the module that needs it is ported, so nothing unused
+# gets compiled in. Crate choices and why: docs/porting.md.
+[dependencies]
+# Safe bindings to the system cairo library: all drawing. "png" = writing a
+# popup's picture to a file, for the tests' `snapshot` command.
+cairo-rs = { version = "0.22", features = ["png"] }
+# The event loop every input joins (the C bar's epoll loop). Same version SCTK uses;
+# `signals` adds the signalfd-based SIGINT/SIGTERM/SIGUSR1 source.
+calloop = { version = "0.14", features = ["signals"] }
+# Local time for the clock's text ("clock" = read the system clock + time zone).
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# libpulse, safely wrapped, for volume/mic (the same library the C bar links;
+# pipewire-pulse serves its protocol). pa_v15 unlocks the API up to libpulse 15
+# (this system has 17).
+libpulse-binding = { version = "2.30", features = ["pa_v15"] }
+# getifaddrs() for the network dropdown's IPv4 address (no `ip` subprocess).
+# The same nix calloop already pulls in; "net" turns on its ifaddrs module.
+# "signal" (with "process", which calloop already turns on too): posix_spawn
+# with a reset signal mask, and waitpid, for the EQ's profile script.
+nix = { version = "0.31", features = ["net", "signal"] }
+# NVIDIA's NVML (the library nvidia-smi wraps), loaded at runtime like the C
+# bar's dlopen: no driver = the GPU box shows "--", the bar still starts. Uses the
+# _v2 memory call (v1 counts reserved memory) and the _v3 process queries.
+nvml-wrapper = "0.13"
+# PipeWire (pipewire-rs) for the privacy indicator: which apps record the mic,
+# webcam or screen. libpulse can't see the stream graph or video at all. Runs
+# on its own `pipewire` thread; the bindings are generated with bindgen at build
+# time (needs libclang and the PipeWire headers).
+pipewire = "0.10"
+# The media visualizer's FFT: rustfft's real-input wrapper (the half-size
+# complex FFT + untangle pass the C bar hand-wrote in spectrum.c).
+realfft = "3"
+# Safe bindings to pango + pangocairo: every piece of text is shaped by pango (the
+# toy cairo text API can't do Nerd Font icons or kanji; see clippy.toml).
+pango = "0.22"
+pangocairo = "0.22"
+# Safe wrappers over Linux syscalls cairo/calloop don't cover. "time" = timerfd,
+# for the clock's wall-clock-aligned tick (calloop's Timer is monotonic-only);
+# "param" = the page size, for per-process memory from /proc/PID/statm;
+# "fs" = inotify, for the EQ's state-file watch and the pacman database watch
+# (no separate inotify crate); "pipe" = close-on-exec pipes for reading a
+# child's output (util/spawn.rs: the updates check).
+rustix = { version = "1", features = ["time", "param", "fs", "pipe"] }
+# JSON for the test-control channel's replies (and Hyprland IPC from M5).
+serde_json = "1"
+# D-Bus for the tray (and MPRIS from M12), on its own `dbus` thread. Pinned to 5.x:
+# 6.x dropped the blocking API and changed the runtime layer. No default
+# features: async-io is the only runtime needed; the proxy/interface macros
+# aren't used (the Watcher is served by hand, docs/modules/tray.md).
+zbus = { version = "5.19", default-features = false, features = ["async-io"] }
+# Already in the tree through zbus: merging the D-Bus thread's streams, and the
+# channel the main thread sends tray commands on.
+async-channel = "2"
+futures-lite = "2"
+# Wayland toolkit: compositor, shm pools, outputs, layer-shell. API changes between
+# releases, so it stays pinned to one minor version.
+smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop"] }
+# Use the system libwayland-client instead of wayland-rs's pure-Rust transport.
+# Not called directly: this only switches the backend, so WAYLAND_DEBUG=1 prints
+# libwayland's own `[HH:MM:SS.micro] wl_surface#N.commit()` lines with wall-clock
+# timestamps, which tests/lib/common.py parses (test_clock_alignment, test_redraw).
+wayland-backend = { version = "0.3", features = ["client_system"] }
+
+# `cargo build` (debug) is the default dev profile, the equivalent of the C bar's
+# `build/` at -O0, and what tests/ run against. `cargo build --release` is what the
+# user runs day to day.
+
+# Dependencies (rustfft, serde_json, zbus, ...) are optimized even in the debug
+# build, so timing-sensitive tests (the clock's 50 ms window, the visualizer's
+# 15 fps) measure our code, not unoptimized libraries. Our own crate stays at
+# opt-level 0 with overflow checks, like the C bar's build/.
+[profile.dev.package."*"]
+opt-level = 2
+
+# Not used: `target-cpu=native`. Nearly all CPU time goes to Arch's prebuilt
+# cairo/pango, so the gain can't be measured, and the binary would stop being portable.
+[profile.release]
+lto = "fat"         # optimize across all crates, not just inside each one
+codegen-units = 1   # slower build, smaller and faster binary
+strip = true        # drop symbols from the shipped binary
+# Abort instead of unwinding: with unwinding, a panicking worker thread (pulse,
+# PipeWire, D-Bus) would die quietly and leave its module frozen. Abort fails loudly.
+panic = "abort"
+
+# ---------------------------------------------------------------------------
+# Lint policy. Rust's safety only holds if nobody takes the escape hatches, so
+# the shortcuts that compile but bring back C-style failure modes are build
+# errors here. Never weaken a lint to make code compile: fix the code.
+# ---------------------------------------------------------------------------
+[lints.rust]
+# No `unsafe` blocks in this crate, and `forbid` (unlike `deny`) means no
+# `#[allow]` can switch it back on. Dependencies still use unsafe internally
+# behind safe APIs (that's how cairo-rs, pipewire-rs etc. wrap the C libraries).
+unsafe_code = "forbid"
+# Every warning fails the build, so warnings can't pile up unnoticed.
+warnings = "deny"
+# A Result or other #[must_use] value that's dropped is a silently ignored error.
+unused_must_use = "deny"
+unused_results = "deny"
+missing_debug_implementations = "warn"
+# Modern-idiom group: e.g. no hidden lifetimes in paths (`Foo<'_>`, not `Foo`).
+rust_2018_idioms = { level = "deny", priority = -1 }
+# Identifiers stay plain ASCII (same spirit as the glyph rule in CLAUDE.md).
+non_ascii_idents = "forbid"
+# No `pub` on items nothing outside their module can reach.
+unreachable_pub = "warn"
+# Dead or misleading code: needless paths, unused/redundant lifetimes, casts to the
+# type a value already has, `let _ = x` that drops something meaningful, `let x = ();`.
+unused_qualifications = "warn"
+unused_lifetimes = "warn"
+redundant_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+let_underscore_drop = "warn"
+unit_bindings = "warn"
+explicit_outlives_requirements = "warn"
+# Performance: one huge enum variant makes every value of that enum that big.
+variant_size_differences = "warn"
+
+[lints.clippy]
+# Groups first at a lower priority, so the individual lints below override them.
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+# Crash shortcuts: each of these turns "I didn't handle this case" into a
+# runtime panic, which takes the whole bar down. Handle the case instead
+# (match, `?`, `if let`, `.get()`, a default value).
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"   # `v[i]` panics when out of range; use `v.get(i)`
+exit = "deny"               # process::exit skips destructors (sockets, buffers)
+string_slice = "deny"       # `&s[a..b]` panics mid-UTF-8 character (the C glyph-bug class)
+get_unwrap = "deny"
+unwrap_in_result = "deny"
+panic_in_result_fn = "deny"
+unchecked_time_subtraction = "deny"  # `Instant - Instant` panics if the order is wrong
+fallible_impl_from = "deny"          # a `From` that can panic should be `TryFrom`
+
+# Silent-bug shortcuts: these compile and run, but can quietly give wrong results.
+as_conversions = "deny"     # `x as u8` truncates silently; use `u8::try_from(x)`
+mem_forget = "deny"         # leaks the value and skips its cleanup
+let_underscore_must_use = "deny"
+float_cmp = "deny"
+float_cmp_const = "deny"
+lossy_float_literal = "deny"  # a float literal that can't be stored exactly
+unused_result_ok = "deny"     # `result.ok();` throws the error away
+map_err_ignore = "deny"       # `.map_err(|_| ..)` loses the original error
+assertions_on_result_states = "deny"
+let_underscore_untyped = "deny"
+
+# Threads and shared state (the pulse, PipeWire, zbus and NVML threads land later).
+rc_mutex = "warn"             # Rc is single-threaded, so a Mutex inside it is pointless
+mutex_atomic = "warn"         # a Mutex<bool> should be an AtomicBool
+mutex_integer = "warn"
+significant_drop_in_scrutinee = "warn"  # a lock held for a whole `match` by accident
+significant_drop_tightening = "warn"    # a lock held longer than it's used
+
+# Leftover debugging. Diagnostics go to stderr via eprintln!, like the C bar.
+dbg_macro = "deny"
+print_stdout = "deny"
+
+# Escape hatches: no `#[allow]` at all. A suppression is `#[expect(lint, reason
+# = "...")]`, which itself becomes an error once the lint stops firing, so stale
+# suppressions can't linger.
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+# Write `Rc::clone(&x)` rather than `x.clone()`, so a cheap refcount bump is
+# visibly different from a deep copy.
+clone_on_ref_ptr = "warn"
+
+# Style and readability.
+missing_docs_in_private_items = "warn"  # every item needs a `///` doc comment (the
+                                        # project's "comment heavily" rule, enforced)
+self_named_module_files = "deny"  # each module is a directory with mod.rs,
+                                  # matching "one directory per widget"
+shadow_unrelated = "warn"         # no reusing a name for something unrelated
+wildcard_enum_match_arm = "warn"  # list every variant, so a new one (a new module,
+                                  # a new popup kind) shows every place to update
+non_ascii_literal = "deny"        # no raw glyphs in literals: '\u{f0e7}' consts
+                                  # in src/config/glyphs.rs
+str_to_string = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+if_then_some_else_none = "warn"
+semicolon_outside_block = "warn"
+tests_outside_test_module = "warn"
+use_self = "warn"
+debug_assert_with_mut_call = "warn"
+iter_not_returning_iterator = "warn"
+infallible_try_from = "warn"
+
+# Performance, beyond clippy::perf (already on through `all`).
+redundant_clone = "warn"
+needless_collect = "warn"
+or_fun_call = "warn"            # `.unwrap_or(expensive())` runs it even when unused
+format_push_string = "warn"     # `s += &format!(..)` allocates twice; use write!
+rc_buffer = "warn"              # Rc<String> -> Rc<str>
+large_stack_frames = "warn"
+iter_with_drain = "warn"
+string_lit_as_bytes = "warn"
+trivial_regex = "warn"
+inefficient_to_string = "warn"
+naive_bytecount = "warn"
+
+# Considered and left out: arithmetic_side_effects (mostly noise on pixel math;
+# debug builds already panic on overflow, and the tests run the debug build),
+# the whole nursery/restriction groups (the Clippy book advises against both),
+# and clippy::cargo (it wants publishing metadata for a crate that's never published).

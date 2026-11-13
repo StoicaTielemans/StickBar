@@ -50,3 +50,21 @@ IPC library — just raw AF_UNIX sockets + cJSON:
     runtime). On this machine's Lua config, the very first attempt already
     succeeds, so **no stderr output should ever appear in normal use**. If you see
     rejection messages in the log -- especially repeated ones -- this regressed.
+
+## In the Rust port
+
+- **Files:** `src/hyprland/mod.rs` (request socket), `src/hyprland/events.rs` (event socket),
+  `src/hyprland/dispatch.rs` (`Dispatcher`), `src/modules/workspaces/mod.rs` (pills).
+- **Requests** use a blocking `UnixStream` with a **1 s read/write timeout**, because they run on
+  the main loop as in C and a stuck Hyprland mustn't freeze the bar. As before:
+  `shutdown(Write)` first, then read to EOF.
+- **Events:** the socket is a calloop source. A read with any relevant line triggers one
+  re-query, and bars redraw only if the occupied set or the focused id changed. On EOF/error
+  the source removes itself and sets `App::hyprland_events_lost`, and `main.rs` reconnects
+  exactly once.
+- **Pills are `ClickTarget`s** (`render::ClickTarget`, `Action::FocusWorkspace`): spots inside
+  the `workspaces` box that a left click acts on. The box itself isn't clickable, so the gaps
+  between pills do nothing and keep the arrow cursor.
+- **Testing:** `tests/test_workspaces.py` runs the bar against `tests/lib/fake_hyprland.py`
+  (`HYPRLAND_INSTANCE_SIGNATURE` pointing at a temporary socket directory). Never point a
+  workspace-click test at the real Hyprland: it would switch the user's workspace.

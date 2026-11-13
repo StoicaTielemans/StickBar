@@ -42,3 +42,23 @@ before touching this code:
   (`read_events`/`dispatch_pending` returning -1, or a non-`EAGAIN` flush
   failure), log `Wayland connection lost (...)`, and `main.c` breaks out, runs
   the normal teardown, and exits with status 1.
+
+## In the Rust port
+
+- **calloop + `WaylandSource` replace the prepare_read/read_events/cancel_read
+  dance.** The source does that dance internally and flushes outgoing requests
+  before the loop sleeps. The C rule still holds: a dispatch error means the
+  connection is gone, and `main.rs` must end the loop and exit 1, never carry on.
+  `test_wayland_disconnect.py` guards it.
+- **The system libwayland is the transport** (`wayland-backend`'s `client_system`
+  feature). wayland-rs's pure-Rust transport prints `WAYLAND_DEBUG` as
+  `[1799736.153][rs] -> wl_surface@11.commit()`. That's a monotonic timestamp and `@`
+  instead of `#`, which `tests/lib/common.py` can't parse, and `test_clock_alignment`
+  needs the wall-clock time.
+- **SCTK's `SlotPool` owns the memfd**, so the C bar's fd-0 bug (closing a zeroed
+  `fd`) has no equivalent. `test_stdin_intact.py` still runs as a guard.
+- **A busy buffer is detected with `Buffer::canvas()` returning `None`**, the same as
+  the C bar's `busy[]` flags. With both buffers held by the compositor, the bar
+  stays dirty and draws after the release event.
+- **SCTK acks layer-surface configures itself** before calling
+  `LayerShellHandler::configure`; don't ack again.

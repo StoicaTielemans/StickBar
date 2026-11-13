@@ -160,3 +160,39 @@ PulseAudio (on PipeWire 1.6.8)`) — via **libpulse**, not raw `libpipewire`.
   ±1 regardless of the reported value) — one call is meant to represent
   exactly one physical wheel notch, matching the "steps of 5%" behavior that
   was asked for.
+
+## In the Rust port
+
+- **Files:** `src/audio/mod.rs` (`AudioState` snapshot, `Command`, the `Audio` handle, percent
+  maths), `src/audio/pulse.rs` (the pulse thread), `src/audio/volume_style.rs`,
+  `src/modules/{volume,mic}/mod.rs`.
+- **libpulse through `libpulse-binding`** (safe wrapper, same calls as C). The binding's
+  types aren't `Send`, which is what pushed the design below.
+- **One thread that owns everything, channels instead of a lock.** The `pulse` thread creates a
+  *standard* mainloop and the context and never shares them; its cache is an `Rc<RefCell<..>>`
+  only its own callbacks touch. It loops `iterate(true)` → run queued commands → if anything
+  changed, send one full `AudioState` to the main thread on a calloop channel (one per iteration,
+  so a list of N sinks is one update, not N). Commands go the other way on an `mpsc` channel plus
+  one byte on a socket pair, whose read end is a libpulse IO event so the blocked `iterate`
+  wakes. Volume steps are computed on the pulse thread from its cache, like C.
+- **Redraw rule kept:** `App::audio_update` redraws the bars only when the default sink's or
+  source's (volume, mute) changed (`AudioState::shown`); `test_redraw`'s no-op check covers it.
+- **Startup** waits at most 2 s for the connection (C waits unbounded), then reports failure
+  once and the boxes show `0%`.
+- **No fixed caps:** devices and streams are `Vec`s (C's 32-slot arrays).
+- **Scrolling** reads `value120` (SCTK binds `wl_seat` up to v10; C binds v7 and gets
+  `discrete`). Partial high-resolution movement is added up and one ±5 % step is taken per full
+  120; `discrete` is the fallback for old seats. Direction as in C (up = louder).
+- **Device dropdown** (`src/audio/device_popup.rs`): constants, layout and hit areas ported 1:1
+  (the percent column counts as the card body, as in C). The popup returns `Command`s and
+  `App` sends them, so it never touches the pulse thread itself. Cards hold the device's index
+  and look it up in the latest snapshot on every paint. A drag remembers the last percent
+  sent, drawn instead of the server's figure until the release. Count changes resize through
+  `PopupHost::resize`, which recreates the menu surface (C's rule) and keeps the catchers.
+  The hand cursor shows over the cards (Rust-only, like the rest of the cursor shapes).
+- **Mixer** (`src/audio/mixer_popup.rs`): the same shape as the device dropdown (rows by stream
+  index, drag shows the last percent sent, `PopupHost::resize` on a row-count change, an
+  empty-state card so it always opens). Volume requests skip streams without `has_volume`
+  (passthrough), as in C. Its surfaces are routed before everything else, as C's are.
+- **Middle button** only reaches the volume box (the mixer); other buttons than left/right/middle
+  are ignored, as in C.

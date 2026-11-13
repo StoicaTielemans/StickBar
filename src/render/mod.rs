@@ -1,0 +1,396 @@
+//! Drawing one bar (the C bar's `render/render.c`).
+//!
+//! The bar has three regions, as in the C bar: left-region modules laid out
+//! left to right from x = 0, right-region ones right to left from the right
+//! edge, and the media box centered between. So far: the Arch logo, the
+//! workspace pills, CPU, GPU, memory and privacy on the left; the tray, clock,
+//! network, volume and mic on the right; the media box (with the EQ) in the centre.
+
+pub(crate) mod braille_graph;
+pub(crate) mod meter_bar;
+pub(crate) mod module_box;
+pub(crate) mod popup_chrome;
+pub(crate) mod popup_style;
+pub(crate) mod stat_card;
+pub(crate) mod text;
+
+use crate::{
+    audio::AudioState,
+    config::{BAR, COLORS},
+    modules::{
+        clock::Clock,
+        cpu, gpu,
+        media::{self, Media},
+        mem, mic, network,
+        powermenu::arch_logo,
+        privacy,
+        tray::{self, Tray},
+        updates, volume,
+        workspaces::Workspaces,
+    },
+    network::Network,
+    pipewire::PrivacyState,
+    sysmon::Sysmon,
+    updates::Updates,
+};
+use text::TextCache;
+
+/// A rectangle in bar-surface pixels (cairo works in `f64`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BoxRect {
+    /// Left edge.
+    pub(crate) x: f64,
+    /// Top edge.
+    pub(crate) y: f64,
+    /// Width.
+    pub(crate) w: f64,
+    /// Height.
+    pub(crate) h: f64,
+}
+
+impl BoxRect {
+    /// Whether (x, y) is inside: left/top edges included, right/bottom excluded,
+    /// so neighbouring boxes never both claim a point.
+    pub(crate) fn contains(self, x: f64, y: f64) -> bool {
+        x >= self.x && x < self.x + self.w && y >= self.y && y < self.y + self.h
+    }
+}
+
+/// Converts a length or position in px from cairo's `f64` to a whole number,
+/// dropping the fraction (like the C bar's `(int)` casts), for Wayland requests
+/// that take integers (surface sizes, margins). Out-of-range values saturate.
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    reason = "f64 -> i32 has no lossless conversion; `as` saturates and drops the fraction, which is the intent"
+)]
+pub(crate) fn whole_px(value: f64) -> i32 {
+    value as i32
+}
+
+/// Where one module's box was drawn. Each bar keeps the list from its last full
+/// redraw: the tests read it (`rects`), and from M4 clicks are hit-tested against it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ModuleBox {
+    /// The module's name, as the tests know it (`clock`, `cpu`, ...).
+    pub(crate) name: &'static str,
+    /// Where its box is.
+    pub(crate) rect: BoxRect,
+    /// Whether the box reacts to a click (any button). The pointer turns into
+    /// a hand over it (a Rust-only addition: see `docs/porting.md`).
+    pub(crate) clickable: bool,
+}
+
+/// Something a click can do, found by hit-testing a [`ClickTarget`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Action {
+    /// Focus Hyprland workspace `id` (a workspace pill, left button).
+    FocusWorkspace(i32),
+    /// Tray item `id` was clicked: its menu (any button) or `Activate` (left).
+    TrayIcon(u64),
+}
+
+/// A clickable spot inside a module's box. A box like `workspaces` holds
+/// several (one per pill), each doing something different; the gaps between
+/// them do nothing. Tray icons work the same way.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ClickTarget {
+    /// Where it is, in bar-surface px.
+    pub(crate) rect: BoxRect,
+    /// What a click there does.
+    pub(crate) action: Action,
+}
+
+/// Where everything on one bar was drawn: the module boxes and the click
+/// targets inside them.
+#[derive(Debug, Default)]
+pub(crate) struct BarLayout {
+    /// One per module shown.
+    pub(crate) boxes: Vec<ModuleBox>,
+    /// Clickable spots within boxes.
+    pub(crate) targets: Vec<ClickTarget>,
+}
+
+/// The drawing state every bar shares: the text cache and each module's data.
+/// One instance, owned by `App`, used by every monitor's bar.
+#[derive(Debug)]
+pub(crate) struct Renderer {
+    /// Shaped-text cache (pango). Popups draw with it too.
+    pub(crate) text: TextCache,
+    /// The clock module.
+    pub(crate) clock: Clock,
+    /// The workspace pills' data (from Hyprland).
+    pub(crate) workspaces: Workspaces,
+    /// CPU/GPU/memory figures.
+    pub(crate) sysmon: Sysmon,
+    /// Network status and rates.
+    pub(crate) network: Network,
+    /// The latest audio snapshot from the pulse thread (empty until the first).
+    pub(crate) audio: AudioState,
+    /// The system tray's items (from the `dbus` thread).
+    pub(crate) tray: Tray,
+    /// The media players (from the `dbus` thread).
+    pub(crate) media: Media,
+    /// Who's recording what (from the `pipewire` thread).
+    pub(crate) privacy: PrivacyState,
+    /// Pending Arch updates (from the `updates-check` thread).
+    pub(crate) updates: Updates,
+}
+
+impl Renderer {
+    /// Sets up pango and the modules.
+    pub(crate) fn new() -> Result<Self, cairo::Error> {
+        Ok(Self {
+            text: TextCache::new()?,
+            clock: Clock::new(),
+            workspaces: Workspaces::default(),
+            sysmon: {
+                // The first poll before anything is drawn, as the C bar does.
+                let mut sysmon = Sysmon::new();
+                sysmon.poll();
+                sysmon
+            },
+            network: {
+                let mut network = Network::default();
+                network.poll();
+                network
+            },
+            audio: AudioState::default(),
+            tray: Tray::default(),
+            media: Media::new(),
+            privacy: PrivacyState::default(),
+            updates: Updates::default(),
+        })
+    }
+
+    /// Draws the whole bar of the monitor at `output_index` (`width` x
+    /// `height`) into `cr` and returns where everything landed.
+    pub(crate) fn render_output(
+        &mut self,
+        cr: &cairo::Context,
+        width: f64,
+        height: f64,
+        output_index: usize,
+    ) -> Result<BarLayout, cairo::Error> {
+        COLORS.mantle.set_source(cr);
+        cr.paint()?;
+        let mut layout = BarLayout::default();
+
+        // Left region, laid out from x = 0 rightwards. Each module returns
+        // where the next one starts (its right edge + item_spacing), so its
+        // own box is everything up to there minus that gap (C's record_left).
+        let arch = arch_logo::render(cr, &mut self.text, 0.0, (0.0, height))?;
+        layout.boxes.push(ModuleBox {
+            name: "arch",
+            rect: arch,
+            // Right click opens the power menu.
+            clickable: true,
+        });
+        let mut left = arch.x + arch.w + BAR.item_spacing;
+        let (next, pills) =
+            self.workspaces
+                .render(cr, &mut self.text, left, output_index, (0.0, height))?;
+        let pills_w = next - BAR.item_spacing - left;
+        if pills_w > 0.0 {
+            layout.boxes.push(ModuleBox {
+                name: "workspaces",
+                rect: BoxRect {
+                    x: left,
+                    y: 0.0,
+                    w: pills_w,
+                    h: height,
+                },
+                // Only the pills themselves are clickable (as targets), not
+                // the gaps between them.
+                clickable: false,
+            });
+        }
+        layout.targets.extend(pills);
+        // With no pills, `next` is still `left` (no gap is added).
+        left = next;
+
+        let cpu = cpu::render(cr, &mut self.text, &self.sysmon.cpu, left, (0.0, height))?;
+        layout.boxes.push(ModuleBox {
+            name: "cpu",
+            rect: cpu,
+            // Right click opens its dropdown.
+            clickable: true,
+        });
+        left = cpu.x + cpu.w + BAR.item_spacing;
+
+        let gpu = gpu::render(cr, &mut self.text, &self.sysmon.gpu, left, (0.0, height))?;
+        layout.boxes.push(ModuleBox {
+            name: "gpu",
+            rect: gpu,
+            // Right click opens its dropdown.
+            clickable: true,
+        });
+        left = gpu.x + gpu.w + BAR.item_spacing;
+
+        let mem = mem::render(cr, &mut self.text, &self.sysmon.mem, left, (0.0, height))?;
+        layout.boxes.push(ModuleBox {
+            name: "mem",
+            rect: mem,
+            // Right click opens its dropdown.
+            clickable: true,
+        });
+        let mut left_end = mem.x + mem.w + BAR.item_spacing;
+
+        // Only while something records; otherwise it takes no space.
+        let privacy_box =
+            privacy::render(cr, &mut self.text, &self.privacy, left_end, (0.0, height))?;
+        if let Some(rect) = privacy_box {
+            layout.boxes.push(ModuleBox {
+                name: "privacy",
+                rect,
+                // Right click lists who's recording.
+                clickable: true,
+            });
+            left_end = rect.x + rect.w + BAR.item_spacing;
+        }
+
+        let right_start = self.render_right(cr, width, height, &mut layout)?;
+
+        // The centre: the media box, drawn last so it knows where both side
+        // regions ended and is clamped between them.
+        let media_box = media::render(
+            cr,
+            &mut self.text,
+            &self.media,
+            width,
+            (left_end, right_start),
+            (0.0, height),
+        )?;
+        if let Some(rect) = media_box {
+            layout.boxes.push(ModuleBox {
+                name: "media",
+                rect,
+                // Left plays/pauses, right opens its dropdown (players + EQ).
+                clickable: true,
+            });
+        }
+        Ok(layout)
+    }
+
+    /// The right region, laid out from the right edge leftwards: the tray,
+    /// clock, network, volume, mic and (only while there are any) pending
+    /// updates. (The EQ that sat between network and
+    /// volume in the C bar now lives in the media box.)
+    /// Returns where the region starts, its gap included (the media box's
+    /// right limit).
+    fn render_right(
+        &mut self,
+        cr: &cairo::Context,
+        width: f64,
+        height: f64,
+        layout: &mut BarLayout,
+    ) -> Result<f64, cairo::Error> {
+        // The tray takes no space at all when empty.
+        let (tray_box, icons) = tray::render(cr, &self.tray, width, (0.0, height))?;
+        let clock_right = match tray_box {
+            Some(rect) => {
+                layout.boxes.push(ModuleBox {
+                    name: "tray",
+                    rect,
+                    // Only the icons are clickable (as targets), not the gaps.
+                    clickable: false,
+                });
+                rect.x - BAR.item_spacing
+            }
+            None => width,
+        };
+        layout.targets.extend(icons);
+        let clock = self
+            .clock
+            .render(cr, &mut self.text, clock_right, (0.0, height))?;
+        layout.boxes.push(ModuleBox {
+            name: "clock",
+            rect: clock,
+            // Right-click opens the year calendar.
+            clickable: true,
+        });
+        let network_box = network::render(
+            cr,
+            &mut self.text,
+            &self.network,
+            clock.x - BAR.item_spacing,
+            (0.0, height),
+        )?;
+        layout.boxes.push(ModuleBox {
+            name: "network",
+            rect: network_box,
+            // Right click opens its dropdown.
+            clickable: true,
+        });
+        let volume_box = volume::render(
+            cr,
+            &mut self.text,
+            &self.audio,
+            network_box.x - BAR.item_spacing,
+            (0.0, height),
+        )?;
+        layout.boxes.push(ModuleBox {
+            name: "volume",
+            rect: volume_box,
+            // Left mutes, scrolling steps.
+            clickable: true,
+        });
+        let mic_box = mic::render(
+            cr,
+            &mut self.text,
+            &self.audio,
+            volume_box.x - BAR.item_spacing,
+            (0.0, height),
+        )?;
+        layout.boxes.push(ModuleBox {
+            name: "mic",
+            rect: mic_box,
+            // Left mutes, scrolling steps.
+            clickable: true,
+        });
+        // Only while something needs updating; otherwise it takes no space.
+        let updates_box = updates::render(
+            cr,
+            &mut self.text,
+            &self.updates,
+            mic_box.x - BAR.item_spacing,
+            (0.0, height),
+        )?;
+        let Some(updates_box) = updates_box else {
+            return Ok(mic_box.x - BAR.item_spacing);
+        };
+        layout.boxes.push(ModuleBox {
+            name: "updates",
+            rect: updates_box,
+            // Right click lists the packages.
+            clickable: true,
+        });
+        Ok(updates_box.x - BAR.item_spacing)
+    }
+
+    /// Repaints only the clock, over its previous box `old`, on a frame that
+    /// otherwise already holds the previous picture (C's
+    /// `render_output_clock_only`). The clock ticks far more often than anything
+    /// else changes, so this skips laying out every other module.
+    ///
+    /// Returns the new box, or `None` if its width changed. Then the boxes to
+    /// its left would have to move, so the caller must do a full redraw instead.
+    pub(crate) fn render_clock_only(
+        &mut self,
+        cr: &cairo::Context,
+        old: BoxRect,
+    ) -> Result<Option<BoxRect>, cairo::Error> {
+        cr.save()?;
+        cr.rectangle(old.x, old.y, old.w, old.h);
+        cr.clip();
+        COLORS.mantle.set_source(cr);
+        cr.paint()?;
+        let new = self
+            .clock
+            .render(cr, &mut self.text, old.x + old.w, (old.y, old.h))?;
+        cr.restore()?;
+        // Widths are whole pixels (pango pixel sizes plus fixed padding), so a
+        // half-pixel tolerance is an exact comparison without float `==`.
+        Ok(((new.w - old.w).abs() < 0.5).then_some(new))
+    }
+}

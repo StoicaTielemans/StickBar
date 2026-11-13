@@ -17,6 +17,11 @@ by running the bar and observing it (it's fine to run alongside the existing
 Quickshell bar; see below), plus watching stderr for Wayland protocol errors or
 Hyprland IPC failures.
 
+- **In the Rust port** the channel is `src/testing/mod.rs`: the same command names,
+  arguments and replies (so the same tests run against both bars), one `match` arm per
+  command, added as each module is ported (`docs/porting.md`). stdin is a calloop source.
+  On EOF the source is removed, because a closed pipe stays readable and would spin the
+  loop. `tests/test_control_channel.py` checks the channel itself.
 - **Test-control channel (`src/testing/test_control.c`) -- prefer it over
   ydotool for anything popup-related.** `STICKBAR_TEST_CONTROL=1` makes stdin
   a command channel (one JSON reply per line on stdout): `rects <output>`

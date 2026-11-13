@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Runs every tests/test_*.py against build/stickBar (or `--bin PATH`).
+"""Runs every tests/test_*.py against target/debug/stickBar (or `--bin PATH`).
 
-    meson compile -C build && python3 tests/run_all.py
+    ./build.sh && python3 tests/run_all.py
 
 Each test starts its own short-lived second bar instance next to the one
 you're running, so expect extra bars to flash at the top of the screen

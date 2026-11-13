@@ -8,16 +8,18 @@ Shared by all of them; a module's own section only records what differs.
 | mic | mute | device dropdown | | ±5% | TOP+RIGHT |
 | CPU / GPU / memory | | dropdown | | | TOP+LEFT |
 | privacy | | dropdown | | | TOP+LEFT |
-| media | play/pause | dropdown | | | TOP+LEFT |
-
-Inside the media dropdown, a left click on a card's chips plays/pauses or skips,
-and a left click on its timeline seeks to that spot
-([modules/media.md](modules/media.md)).
+| updates | | dropdown (package list) | | | TOP+RIGHT |
+| media | play/pause (nothing when idle) | dropdown: players + EQ | | | TOP, centred on the monitor |
 | network | | dropdown | | | TOP+RIGHT |
 | clock | | calendar (toggle) | | | TOP+RIGHT |
-| EQ | | dropdown | | | TOP+RIGHT |
 | tray | see the has-menu rule in [modules/tray.md](modules/tray.md) | same | | | TOP+RIGHT |
-| Arch logo | power menu | | | | full-screen overlay |
+| Arch logo | | power menu | | | full-screen overlay |
+
+Inside the media dropdown, a left click on a card's chips plays/pauses or skips,
+a left click on its timeline seeks to that spot
+([modules/media.md](modules/media.md)), and a click on an EQ profile chip applies
+that profile ([modules/eq.md](modules/eq.md)). The EQ has no box of its own any
+more: it lives only in the media dropdown.
 
 - **Right-click, because there's no hover**: the reference opens most of these on
   hover (with a debounce timer, or its tooltip). `wayland/pointer.c` only tracks
@@ -26,6 +28,11 @@ and a left click on its timeline seeks to that spot
   was free and is a conventional way to expose a secondary action. Status-only
   widgets (CPU/GPU/memory, network, privacy) have no obvious "primary action", so
   left-click does nothing; `SystemMonitorWidget.qml` has no `onClicked` at all.
+- **Hand cursor (Rust port only):** the C bar never sets a cursor. The Rust port shows a
+  hand over every bar box and dropdown target that reacts to a click (any button, so
+  right-click-only boxes count) and the arrow elsewhere, catchers included. Each module
+  marks its boxes `clickable`, and each dropdown answers "is (x, y) a target". See
+  `docs/porting.md` "Rust-only additions".
 - **Look**: a `mantle` surface with the module's accent as a
   `BAR.module_border_width` border, square corners; a header (glyph, bold title,
   dim summary, and a filled status pill on the right); `base` cards with a 1px
@@ -58,8 +65,10 @@ and a left click on its timeline seeks to that spot
   a second time.
 - **Anchor by which side of the bar the trigger is on**: right-region popups grow
   leftward from the trigger's right edge, left-region ones rightward from its left
-  edge (`left_margin = box_x`). Media sits in the center and
-  was given TOP+LEFT as the more reasonable default. Audio dropdowns anchor right
+  edge (`left_margin = box_x`). Media sits in the center, so its dropdown is
+  centred on the monitor (`PopupHost::open_centered`: anchored TOP only, which
+  layer-shell centres horizontally, so a width change stays centred too; it was
+  TOP+LEFT, which pushed the two-column dropdown off to the right). Audio dropdowns anchor right
   where the reference left-aligns under the widget, to reuse already-correct math.
 - **Dismissal: one full-screen, fully transparent, `LAYER_TOP` click-catcher per
   currently-known output**, not just the output the menu is on. The reference's
@@ -102,3 +111,22 @@ and a left click on its timeline seeks to that spot
   visible samples only, and the axis label comes from the real span
   (`braille_graph_span_label()`: e.g. `8 min ago`). 30 cells stays as each card's
   minimum width.
+
+## In the Rust port
+
+- **Files:** `src/bar/popup_surface.rs` (`PopupSurface`: a menu or a catcher),
+  `src/bar/popup_host.rs` (`PopupHost`: a menu and its catchers, placed under the box),
+  `src/bar/popups.rs` (`Popups`: one field per dropdown kind, which replaces the C
+  `POPUP_ROUTES` table), `src/render/popup_chrome.rs` (frame and card), and
+  `src/wayland/pointer.rs` (seat, pointer and routing). A dropdown holds
+  `Option<PopupHost>`; dropping it closes the menu and every catcher.
+- **First paint:** a paint before the first configure only sets `needs_paint`, and
+  `PopupSurface::configure` returns it so the owner paints again. Nothing keeps the drawn
+  frame: the drawing goes into a temporary image that's freed after the copy into shm, so an
+  open dropdown costs only its shm buffer (keeping a copy would add its full size again).
+  `snapshot` redraws into a fresh image, the same as C. Because of that, `test_calendar`
+  checks the first paint in the `WAYLAND_DEBUG` log rather than in a snapshot.
+- **Catchers** with a viewporter: 1×1 buffer, `set_destination` on every configure. Without
+  one: a full-size transparent buffer. SCTK has no viewporter helper:
+  `src/wayland/viewporter.rs` binds it and implements SCTK's `Dispatch2` for it (it has no
+  events).

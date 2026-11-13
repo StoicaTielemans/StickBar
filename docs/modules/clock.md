@@ -53,3 +53,16 @@ same way but on **right**-click.
   generic enough (fine print, secondary emphasis, large titles) to be genuine
   shared tokens rather than one-off local tuning, unlike e.g. the workspace
   pill's own local padding constants.
+
+## In the Rust port
+
+- **Files:** `src/modules/clock/mod.rs` holds `Clock`, which formats and caches the text and
+  draws the box. `src/modules/clock/timer.rs` holds the tick. The box goes through
+  `src/render/module_box.rs` and the text through `src/render/text.rs`.
+- **The tick is a `CLOCK_REALTIME` timerfd armed `ABSTIME | CANCEL_ON_SET`** at the next
+  whole second, the same as the C bar. It uses rustix's safe timerfd wrappers, because calloop's
+  `Timer` is monotonic-only. On `ECANCELED` (the wall clock was set) it re-arms on the new second.
+- **Clock-only redraw:** a tick that changes the text marks bars `Dirty::Clock`. The bar copies
+  its previous frame and repaints just the clock's box. If the clock's width changed, it falls
+  back to a full redraw (`bar/bar_surface.rs`, `render::Renderer::render_clock_only`).
+- The box is pixel-identical to the C bar's (checked with `grim` on both, byte-equal PNGs).

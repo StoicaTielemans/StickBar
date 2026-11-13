@@ -1,5 +1,137 @@
 # Architecture
 
+## Rust layout (ported so far)
+
+The Rust port keeps the C bar's shape: one directory per concern (`mod.rs` inside),
+the same names. Everything below this section still describes the **C bar**, the
+reference for the parts not yet ported (progress: [`porting.md`](porting.md)).
+
+```
+src/
+├── main.rs                 entry point, the C main.c: signals first, connect, bind,
+│                           the calloop event loop, exit status (0 on SIGINT/SIGTERM,
+│                           1 when the compositor connection is lost)
+├── wayland/
+│   ├── mod.rs              App: all state (the AppContext equivalent), the SCTK
+│   │                       handler impls (frame callbacks, layer configure/closed,
+│   │                       shm, registry), and the delegate macros wiring them up
+│   ├── pointer.rs          seat + pointer; App::pointer_button/pointer_motion, the
+│   │                       one routing path real and injected input share
+│   ├── shm_buffers.rs      ShmBuffers: a surface's two shm buffers (bars + popups)
+│   ├── viewporter.rs       optional wp_viewporter bind (SCTK has no helper)
+│   └── output.rs           Output: one tracked monitor (index, name, its bar);
+│                           OutputHandler: a record + bar per monitor, the
+│                           STICKBAR_TEST_OUTPUT filter
+├── bar/
+│   ├── bar_surface.rs      BarSurface: the layer surface, two shm buffers, the
+│   │                       prev/next cairo frames, Dirty (clean/clock/full) +
+│   │                       frame-callback pacing, draw -> diff -> commit only the
+│   │                       changed rectangle, and the boxes of the last frame
+│   ├── damage.rs           changed_rect(): the frame diff, with unit tests
+│   ├── popup_surface.rs    PopupSurface: an overlay menu or a top-layer catcher
+│   │                       (1x1 + viewporter), first-paint-after-configure
+│   ├── popup_host.rs       PopupHost: a menu under its box + a catcher per monitor;
+│   │                       resize() recreates the menu at a new size
+│   ├── popups.rs           Popups: every dropdown kind; configure/menu routing
+│   └── strip_surface.rs    StripSurface: a desync subsurface with its own buffers and
+│                           frame pacing (the media graphs)
+├── hyprland/
+│   ├── mod.rs              socket_path(), request()/request_json(): the request socket
+│   ├── events.rs           the event socket as a calloop source; line framing, filter
+│   └── dispatch.rs         Dispatcher: Lua form first, classic fallback, cached
+├── sysmon/
+│   ├── mod.rs              Sysmon: CPU/GPU/memory figures + histories, poll()
+│   ├── cpu.rs              /proc/stat deltas, temperature, P/E split, process sample
+│   ├── gpu.rs              NVML (nvml-wrapper): usage/temp per poll, details on open
+│   ├── memory.rs           /proc/meminfo, PSI, zram, top apps by private memory
+│   └── timer.rs            the 5 s poll (calloop Timer), shared with the network
+├── audio/
+│   ├── mod.rs              AudioState snapshot, Command, Audio (main-side handle)
+│   ├── pulse.rs            the pulse thread: libpulse mainloop + cache, channels
+│   ├── device_popup.rs     DevicePopup: sinks/sources, meter drag, mute, set default
+│   ├── mixer_popup.rs      MixerPopup: per-app streams, slider drag, mute
+│   └── volume_style.rs     level icon, meter gradient, slider percent
+├── eq/
+│   ├── mod.rs              EqState: state.json snapshot (serde_json), pending/running,
+│   │                       the inotify watch on the state directory (rustix)
+│   ├── launcher.rs         EqState::apply: the eq-script thread, posix_spawn (nix)
+│   │                       with an empty signal mask, waitpid, exit -> channel
+│   └── curve.rs            range_db, freq_to_x, draw: the curve, pure cairo
+├── dbus/
+│   ├── mod.rs              the `dbus` thread: one async loop (zbus 5) over the merged
+│   │                       streams + commands; TrayEvent/Command channels
+│   ├── watcher.rs          StatusNotifierWatcher served by hand, or Host mode
+│   ├── sni.rs              Registry: items, GetAll (typed visitor), NewIcon, Activate
+│   ├── sni_icon.rs         IconPixmap -> premultiplied bytes, symbolic-mask recolour
+│   ├── icon_theme.rs       IconName -> PNG bytes (IconThemePath, hicolor, pixmaps)
+│   └── dbusmenu.rs         AboutToShow + GetLayout parsing, Event (NoReplyExpected)
+├── mpris/mod.rs            Players (on the dbus thread): discovery, PropertiesChanged by
+│                           owner, is_shadowed, controls, Position polls on request
+├── pipewire/
+│   ├── mod.rs              the `pipewire` thread: registry, node + client listeners,
+│   │                       PrivacyState only when changed, the visualizer's slots
+│   ├── graph.rs            nodes/links/clients, privacy classification, the player ->
+│   │                       playback stream match (pure, unit-tested)
+│   └── capture.rs          capture streams, the shared rings, /proc ancestry
+├── visualizer/
+│   ├── mod.rs              Visualizer: slots, smoothing, peaks, synth mode, pump
+│   └── spectrum.rs         Hann window, realfft, 82 log bands (pure, unit-tested)
+├── network/mod.rs          Network: default route, rates, history; details via
+│                           /sys, resolv.conf and getifaddrs (nix)
+├── util/history.rs         History2: the 120-sample ring behind every graph
+├── util/spawn.rs           posix_spawn with an empty signal mask (EQ script, update check)
+├── updates/mod.rs          Updates: checkupdates + yay -Qua on a thread, timers, pacman db watch
+├── modules/
+│   ├── cpu/                mod.rs (box), popup.rs (the CPU dropdown)
+│   ├── gpu/                mod.rs (box), popup.rs (the GPU dropdown)
+│   ├── mem/                mod.rs (box), popup.rs (the memory dropdown)
+│   ├── network/            mod.rs (box), popup.rs (the network dropdown)
+│   ├── media/              mod.rs (Media + the centred box), popup.rs (MediaPopup),
+│   │                       graphs.rs (spectrum panels, frames, per-card strips),
+│   │                       eq_section.rs (the DAC EQ's dropdown card)
+│   ├── privacy/            mod.rs (the box), popup.rs (PrivacyPopup)
+│   ├── updates/            mod.rs (the box), popup.rs (UpdatesPopup)
+│   ├── tray/               mod.rs (Tray: items, icon surfaces, the icon row),
+│   │                       menu.rs (TrayMenu: the DBusMenu dropdown)
+│   ├── volume/mod.rs       the volume box
+│   ├── mic/mod.rs          the mic box
+│   ├── workspaces/mod.rs   Workspaces: occupied/focused from Hyprland, kanji pills
+│   ├── powermenu/
+│   │   ├── mod.rs          PowerMenu: full-screen overlay per monitor, cards, the
+│   │   │                   record-only test guard (actions run in wayland/pointer.rs)
+│   │   └── arch_logo.rs    the sapphire Arch block (sized from the glyph's ink)
+│   └── clock/
+│       ├── mod.rs          Clock: cached text, tick(), its box
+│       ├── calendar.rs     CalendarPopup: the year calendar (chrono date maths)
+│       └── timer.rs        wall-clock-aligned timerfd (rustix), ECANCELED re-arm
+├── render/
+│   ├── mod.rs              Renderer (shared by every bar: text cache + modules),
+│   │                       render_output(), render_clock_only(), BoxRect/ModuleBox,
+│   │                       ClickTarget/Action (clickable spots inside a box)
+│   ├── text.rs             TextCache: pango context, font descriptions, LRU of 64
+│   │                       shaped layouts; all text goes through here
+│   ├── module_box.rs       draw_rect() and label(): the bordered module box
+│   ├── braille_graph.rs    btop-style dot graphs (pure cairo)
+│   ├── meter_bar.rs        segmented meters
+│   ├── stat_card.rs        graph card sizing, axis, label/value and top-apps rows
+│   ├── popup_chrome.rs     draw_frame(), draw_card(), draw_header(), draw_pill()
+│   └── popup_style.rs      shared dropdown layout tokens (margins, header, pill)
+├── testing/mod.rs          the test-control channel on stdin (STICKBAR_TEST_CONTROL=1)
+└── config/
+    ├── colors.rs           Color + the Catppuccin Mocha palette
+    ├── bar.rs              BAR geometry
+    ├── fonts.rs            FONT: family and sizes
+    └── glyphs.rs           Nerd Font icons as '\u{...}' char consts
+```
+
+How an event becomes pixels: SCTK reads the Wayland socket and calls a handler
+method on `App` (`&mut App`, so all state is in that one struct). Handlers only
+mark bars dirty; after each loop pass, `main.rs` calls `App::flush_dirty()`, which
+draws each dirty bar that isn't waiting on a frame callback, so a burst of
+events in one pass is drawn once.
+
+# C bar architecture (reference)
+
 ## File layout
 
 One subdirectory per concern, and one directory per bar widget under `modules/` —

@@ -6,19 +6,48 @@ limitations, as opposed to bugs, are in `docs/limitations.md`.
 
 ## Open
 
-- **EQ: `applying` can stay on screen after a failed profile switch.** If the script
-  exits without writing state (e.g. the DAC is unplugged), `eq_state_pending_profile()`
-  only clears the pending name when something asks for it after the 15 s
-  `PENDING_TIMEOUT_SEC`, and nothing redraws the open dropdown at that moment. The card
-  and yellow pill stay until the next redraw, such as moving the pointer over the popup.
-  A timer tick while pending, like `media_popup_tick()`, would fix it.
-- **EQ: clicking a profile while one is applying starts a second script.**
-  `eq_popup_handle_click()` and `eq_state_apply_profile()` don't check for a pending
-  apply, so two `blackpearl-eq.py` processes can run at once and steal each other's
-  replies on the DAC's hidraw node (see "Why a state file" in `docs/modules/eq.md`). Ignoring
-  clicks while something is pending would fix it.
+- **Power menu (Rust port): `systemctl` starts with SIGINT, SIGTERM and SIGUSR1 blocked.**
+  `spawn_systemctl()` in `src/wayland/pointer.rs` uses `std::process::Command`, which doesn't
+  reset the signal mask the bar blocks for its signal source (found while porting the EQ, see
+  below). Low impact, since `systemctl reboot`/`poweroff` is short-lived, but the same fix as
+  the EQ launcher (nix `posix_spawn` with an empty mask) applies.
 
 ## Fixed
+
+### Tray
+
+- **A quit app's icon stayed in a Host-mode bar forever** (C bar). As the Watcher, the C bar
+  removed an item whose owner disconnected but never emitted `StatusNotifierItemUnregistered`,
+  and in Host mode it only listened for that signal. So a second C bar (or any other host of
+  the C bar's Watcher) kept the icon. Seen in the port's checks: with the C bar as the Watcher, a
+  test C bar still showed a quit fake app's icon 6 s later; the Rust bar dropped it after 0.10 s.
+  The Rust port follows `NameOwnerChanged` in both modes and emits `…Unregistered` as the
+  Watcher.
+- **Big tray icons cost megabytes and left popups resident** (Rust port, before it shipped).
+  `GetAll` was read into `HashMap<String, OwnedValue>`, where an `ay` is one `Value` per byte;
+  CurseForge's 256x256 `IconPixmap` blew up to several MB, and freeing it raised glibc's mmap
+  threshold. `test_calendar` caught it: opening the calendar grew RSS by 6.1 MB, not 3.8. With
+  glibc's threshold pinned (`MALLOC_MMAP_THRESHOLD_`) or no tray items it was back to 3.8,
+  which pointed at it. Now read with a typed visitor (`docs/modules/tray.md`).
+
+### EQ
+
+- **`applying` could stay on screen after a failed profile switch** (C bar). If the script
+  exited without writing state (e.g. the DAC unplugged), the pending name was only cleared
+  when something asked for it after the 15 s `PENDING_TIMEOUT_SEC`, and nothing redrew the
+  open dropdown then: the card and yellow pill stayed until the next redraw. Fixed in the
+  Rust port by following the script process: its thread reports the exit, which ends
+  "applying" at once. Checked with a fake that exits 1 after 2 s without writing state:
+  cleared after 2.06 s.
+- **Clicking a profile while one was applying started a second script** (C bar). Nothing
+  checked for a pending apply, so two `blackpearl-eq.py` processes could run at once and
+  steal each other's replies on the DAC's hidraw node. The Rust port ignores profile clicks
+  while a script runs or a switch is pending. Checked: a second click during a 2 s fake run
+  added nothing to its log.
+- **The script started with the bar's blocked signals** (Rust port, before it shipped).
+  `docs/porting.md` assumed `std::process::Command` resets the signal mask in the child; it
+  doesn't. Found by having a fake script write its `/proc/self/status`: `SigBlk` was
+  `0x4202` (SIGINT, SIGUSR1, SIGTERM). Now `posix_spawn` with an empty mask: `SigBlk: 0`.
 
 ### Wayland and buffers
 
@@ -104,6 +133,14 @@ limitations, as opposed to bugs, are in `docs/limitations.md`.
   stale* (an earlier track). Fixed by `is_shadowed()`.
 - **Spotify's timeline never appeared.** The spec says `mpris:length` is int64, but
   Spotify sends uint64 (confirmed with `busctl`), so its length stayed 0.
+- **One player's status or track showed on every player's card** (C bar). Every MPRIS player
+  lives at the same object path, and `mpris_client.c` subscribed to each one's
+  `PropertiesChanged` with its well-known bus name as the match's sender. sd-bus can't check a
+  well-known sender locally, so every subscription received every player's signal. Found while
+  porting: with two fake players on a private bus, one PlayPause made the C bar show both as
+  Playing while the other really stayed Paused (`busctl` confirmed it). With real players, a
+  track change on one would overwrite the other's title. The Rust port matches signals by the
+  sender's unique name (`docs/modules/media.md`).
 - **Long titles covered neighbouring boxes.** A long title on a narrow output drew over
   (and stole clicks from) its neighbours, until the box was clamped between the side
   regions.

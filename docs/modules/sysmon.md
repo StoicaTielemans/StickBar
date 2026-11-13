@@ -177,3 +177,29 @@ dropdown, rather than one shared tooltip for all three.
   reports 0% (no prior sample yet to diff against), self-correcting on the
   next poll 5 seconds later. Not a bug; matches the reference's own `prev ?
   percent : 0` behavior.
+
+## In the Rust port
+
+- **Files:** `src/sysmon/mod.rs` (`Sysmon`: figures + histories, `poll()`),
+  `src/sysmon/memory.rs`, `src/sysmon/timer.rs` (the 5 s calloop `Timer`),
+  `src/util/history.rs` (`History2`), `src/render/{braille_graph,meter_bar,stat_card}.rs`,
+  `src/modules/mem/{mod,popup}.rs`, `src/sysmon/cpu.rs`, `src/modules/cpu/{mod,popup}.rs`,
+  `src/sysmon/gpu.rs`, `src/modules/gpu/{mod,popup}.rs`.
+- **NVML through `nvml-wrapper`:** it loads `libnvidia-ml.so.1` at runtime (no driver = `--`, the
+  bar still starts). `memory_info()` is the `_v2` call and the process lists are `_v3`, as the
+  C bar settled on (checked in the crate's source). The fan comes from `nvmlDeviceGetFanSpeed_v2`
+  (fan 0), not C's `nvmlDeviceGetFanSpeed`; it should be the same reading, but confirm against
+  `nvidia-smi` once the driver works. A `Device` borrows the `Nvml`, so it's looked up per call
+  (`device_by_index(0)`, cheap) instead of being stored. NVML's threads start after the SIGUSR1
+  signal source, so they inherit the block (`test_power_menu` checks every thread).
+- **CPU process sample:** the per-PID tick table is a `HashMap<pid, ticks>` replaced on every scan,
+  so exited PIDs drop out (C used two swapped open-addressing tables). Ticks per second come
+  from `rustix::param::clock_ticks_per_second`. The first-figures tick hangs off the clock's
+  1 s timer (`App::clock_tick` → `CpuPopup::tick`).
+- `Sysmon` lives in the `Renderer`, next to the other module data, so bar boxes and dropdowns
+  read it directly. `App::poll_5s()` polls, refreshes an open sysmon dropdown, does the same
+  for the network, and marks the bars dirty.
+- Dropdown sections take `Option<&cairo::Context>`: `None` only measures. That's how the height
+  is fixed before the popup opens (C's `paint(NULL)` pass).
+- Numbers from `/proc` are parsed straight to `f64` (exact below 2^53), which avoids lossy
+  integer-to-float casts.

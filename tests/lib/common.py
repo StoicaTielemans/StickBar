@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-DEFAULT_BIN = REPO / "build" / "stickBar"
+DEFAULT_BIN = REPO / "target" / "debug" / "stickBar"
 
 # One line per Wayland request/event under WAYLAND_DEBUG=1, prefixed with a
 # wall-clock timestamp, e.g.:
@@ -29,7 +29,7 @@ _WL_LINE = re.compile(r"^\[(\d+):(\d+):(\d+)\.(\d+)\].*?wl_surface#(\d+)\.(\w+)\
 
 
 def bar_binary(argv=None):
-    """Binary under test: `--bin PATH` on the command line, else build/stickBar."""
+    """Binary under test: `--bin PATH` on the command line, else target/debug/stickBar."""
     argv = sys.argv if argv is None else argv
     if "--bin" in argv:
         return Path(argv[argv.index("--bin") + 1]).resolve()
@@ -38,7 +38,7 @@ def bar_binary(argv=None):
 
 def require_binary(path):
     if not path.is_file():
-        fail(f"{path} not found -- run `meson compile -C build` first")
+        fail(f"{path} not found -- run `./build.sh` first")
 
 
 def require_session():

@@ -149,6 +149,45 @@ userdata pointer, `in_use`-gated iteration, `_count()`/`_get(index)` accessors).
   client-side mute-state bookkeeping like the reference's own `_mutedVolumes`, judged
   not essential for v1).
 
+## In the Rust port
+
+- **Files:** `src/mpris/mod.rs` (the players, on the `dbus` thread), `src/modules/media/mod.rs`
+  (`Media` and the centred box), `src/modules/media/popup.rs` (`MediaPopup`). The box and the
+  dropdown are pixel-identical to C's with one and two players: open, chip hovered, timeline
+  hovered. The visualizer is M14, so the cards have the C bar's no-graph layout, the same one
+  every test bar uses (`STICKBAR_TEST_NO_VISUALIZER=1`).
+- **MPRIS shares the tray's `dbus` thread and connection** (`docs/modules/tray.md`): one more
+  stream (`PropertiesChanged` on `/org/mpris/MediaPlayer2`), the `NameOwnerChanged` stream the
+  tray already had, a second calloop channel (`MediaEvent`, to `App::media_event`), and
+  `Command::Media`. The main loop never waits for a player.
+- **The main thread gets the visible players' `PlayerInfo`s, and only when that list
+  changed.** That's C's "dirty only if something shown changed", for free: a browser's
+  `PropertiesChanged` storms (volume, rate) cost no redraw.
+- **Rule: match a player's signals by the sender's unique name.** Every player shares one
+  object path, and C subscribed per player with the well-known name as the match's sender,
+  which sd-bus can't check locally. So every subscription got every player's
+  `PropertiesChanged`, and one player's status or track showed on all of them (BUG.md "Media").
+  Here each player keeps its owner's unique name, and a signal applies to the players that
+  connection owns.
+- **Position is polled asynchronously:** `App::clock_tick` sends `PollPositions` while the
+  dropdown is open (once a second, plus once on open), and the answer repaints. No `Position`
+  is read while it's closed (checked with `dbus-monitor`: 5 reads in an 11 s window with it open
+  for 4 s). C read the positions synchronously before the first frame; here the first frame
+  shows the last known position for the few ms until the answer.
+- **Seeking:** the target position is set on the main side at once (C's optimistic jump), and
+  the thread keeps it as its "last polled" position for a relative `Seek`.
+- **No fixed caps:** players and cards are `Vec`s (C: 16).
+- **The DAC EQ is part of this module** (`src/modules/media/eq_section.rs`, details in
+  [eq.md](eq.md)), in the dropdown only: an EQ card in a column **left of** the player
+  cards (user request), both under one full-width header (754 px wide with players). The
+  height is the taller column's. The dropdown no longer closes when the last player goes:
+  it drops the player column, leaving the header and the EQ card (384 px wide).
+- **The box never goes away** (user request): with no player it shows `▶  No media
+  playing` until something has played since the bar started, then `▶  <artist - title>`
+  of the last thing the box showed (`Media::idle_text`, kept in memory only, so a restart
+  starts over). Same yellow box; a left click on it does nothing, a right click opens the
+  dropdown, so the EQ is always reachable. `dump media` reports it as `idle_text`.
+
 ## Spectrum visualizer
 
 No reference equivalent -- added per user request ("an audio wave thingy in the
@@ -248,3 +287,35 @@ frequency band, soft faded ends.
   child-process players matched, L/R tones landed in the right halves, and the
   privacy icon stayed hidden. Every other test bar runs with the visualizer off
   (`STICKBAR_TEST_NO_VISUALIZER=1`, `tests/lib/common.py`).
+
+### The visualizer in the Rust port
+
+- **Files:** `src/visualizer/spectrum.rs` (FFT and bands, pure), `src/visualizer/mod.rs`
+  (`Visualizer`: slots, smoothing, peaks, synth mode, `pump`), `src/bar/strip_surface.rs`,
+  `src/modules/media/graphs.rs` (panels, frames, the per-card strips), `src/pipewire/capture.rs`
+  (rings, capture streams, the `/proc` ancestry walk), and the playback/client tracking in
+  `src/pipewire/{mod,graph}.rs`.
+- **Same pixels as C:** with the same steady synthetic tones, the dropdown (graphs included) is
+  byte-identical to C's, through `realfft` (rustfft's real-input FFT) instead of C's
+  hand-written half-size transform.
+- **Frames are plain slice copies into the strip's shm buffer**, no cairo per frame (SCTK's
+  buffer fill hands out the bytes). The popup's own paint composes the same frame under the strip
+  for `snapshot`. A frame is committed at most once per tick and only when a dot changed. During
+  the test's fall C committed 37 strip frames, the Rust bar 19.
+- **No second PipeWire connection or thread:** the capture streams live on the privacy
+  indicator's `pipewire` thread (C opened its own `pw_thread_loop` on the first capture).
+  - The main thread sends `CaptureCommand::Slot { slot, want: (player pid, rings) }` on a
+    `pipewire::channel`. The thread resolves the pid to a playback stream itself, and re-resolves
+    when playback streams start, stop, come or go, or a client's pid becomes known.
+  - The stream is recreated only when the target changes. Its properties are C's, including
+    `node.dont-fallback`.
+- **The rings** are an `Arc<Mutex<Rings>>` per slot: written by the `process` callback on the
+  `pipewire` thread, read once per frame by the main thread. It's the one genuinely shared buffer.
+- **Checked live** (a fake MPRIS player whose child plays a 1 kHz L / 3 kHz R tone into a null
+  sink):
+  - the graph followed the child's stream (the ancestry walk), with each tone only in its own
+    half;
+  - the privacy dropdown didn't list the capture;
+  - the capture node went away when the dropdown closed and when the player paused.
+- **Cost** (release, the same setup): one playing card with the dropdown open costs 0.55 % CPU,
+  the same as C; with it closed, 0.10 % against C's 0.20 %.

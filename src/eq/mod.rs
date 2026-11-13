@@ -83,7 +83,7 @@ pub(crate) struct Snapshot {
 pub(crate) struct EqState {
     /// What the state file last said.
     pub(crate) snap: Snapshot,
-    /// The profile being applied, shown as "NAME..." / "applying...", until
+    /// The profile being applied, shown as the yellow chip / "applying" pill, until
     /// the state write arrives or the script exits.
     pub(crate) pending: Option<String>,
     /// A script is running. Clicks on profiles are ignored meanwhile.

@@ -9,11 +9,13 @@
 //!   out when both are empty), a timeline (`pos / length`; a click seeks
 //!   there if the player can seek), and prev / play-pause / next chips.
 //!
+//! - **The DAC EQ card** under the players (`eq_section.rs`): its header and
+//!   pill, the curve, and one chip per profile.
+//!
 //! The width is fixed, so a longer title never resizes it; only the player
 //! count and the artist lines change the height, which recreates the
-//! surface. The last player going closes it. The spectrum graphs of the C
-//! bar's cards come with the visualizer (M14): this is the C bar's layout
-//! without them, which it also uses when the visualizer can't run.
+//! surface. When the last player goes it stays open, shrunk to the header and
+//! the EQ card (the box it opened from is gone, so only a reopen needs a player).
 
 use std::fs::File;
 
@@ -24,6 +26,7 @@ use smithay_client_toolkit::reexports::client::{
 
 use super::{
     Media, display_title,
+    eq_section::{self, EqSection},
     graphs::{self, Graphs, VIS_ROW_GAP},
 };
 use crate::{
@@ -131,6 +134,15 @@ impl Button {
     }
 }
 
+/// What a press on the dropdown asks for.
+#[derive(Debug)]
+pub(crate) enum MediaPress {
+    /// A player chip or timeline: send this to the player.
+    Player(MediaCommand),
+    /// An EQ chip: apply this profile.
+    EqProfile(&'static str),
+}
+
 /// A graph panel's (x, width) in the popup (the tests' `dump visualizer`).
 pub(crate) const fn graph_panel() -> (f64, f64) {
     (INNER_X, INNER_W)
@@ -174,6 +186,10 @@ struct Content {
     /// The timeline meter's width, measured once at open (it's text-based,
     /// and hit-tests run where no text cache is at hand).
     meter_w: f64,
+    /// The EQ card, below the player cards.
+    eq: EqSection,
+    /// The EQ chip under the pointer.
+    hovered_chip: Option<usize>,
 }
 
 /// An open dropdown.
@@ -196,7 +212,7 @@ pub(crate) struct MediaPopup {
 
 impl MediaPopup {
     /// Opens the dropdown under the box `trigger` on `output`, replacing an
-    /// open one. Nothing opens without players.
+    /// open one (with or without players: the EQ card is always there).
     pub(crate) fn open<'o>(
         &mut self,
         (env, strips): (&PopupEnv<'_>, Option<&StripEnv<'_>>),
@@ -206,10 +222,8 @@ impl MediaPopup {
         text: &mut TextCache,
     ) {
         self.open = None;
-        let (cards, size) = layout(media);
-        if cards.is_empty() {
-            return;
-        }
+        let mut eq = EqSection::new(text, (OUTER_MARGIN, CONTENT_W));
+        let (cards, size) = layout(media, &mut eq);
         let host = PopupHost::open_left(
             env,
             output,
@@ -226,15 +240,18 @@ impl MediaPopup {
                 hovered: None,
                 hovered_timeline: None,
                 meter_w: timeline_meter_w(text),
+                eq,
+                hovered_chip: None,
             },
         });
         self.update_graphs(strips, media);
         self.paint(media, text);
     }
 
-    /// The players changed: re-lays out, recreates the surface if the height
-    /// changed (resizing a layer surface in place made Hyprland unmap it on
-    /// shrink, as with the mixer), closes it when no player is left.
+    /// The players changed: re-lays out, and recreates the surface if the
+    /// height changed (resizing a layer surface in place made Hyprland unmap
+    /// it on shrink, as with the mixer). It stays open with no player left:
+    /// the EQ card is still there.
     pub(crate) fn refresh(
         &mut self,
         (env, strips): (&PopupEnv<'_>, Option<&StripEnv<'_>>),
@@ -244,12 +261,8 @@ impl MediaPopup {
         let Some(open) = self.open.as_mut() else {
             return;
         };
-        let (cards, size) = layout(media);
-        if cards.is_empty() {
-            self.open = None;
-            return;
-        }
         let content = &mut open.content;
+        let (cards, size) = layout(media, &mut content.eq);
         if content.hovered.is_some_and(|(card, _)| card >= cards.len()) {
             content.hovered = None;
         }
@@ -375,6 +388,11 @@ impl MediaPopup {
         self.open.as_ref().map(|o| o.content.cards.len())
     }
 
+    /// How many EQ profile chips are shown (the tests' `menu`), `None` when closed.
+    pub(crate) fn eq_chip_count(&self) -> Option<usize> {
+        self.open.as_ref().map(|_| eq_section::PROFILES.len())
+    }
+
     /// Paints the open dropdown.
     pub(crate) fn paint(&mut self, media: &Media, text: &mut TextCache) {
         if let Some(Open {
@@ -396,33 +414,53 @@ impl MediaPopup {
         let content = &mut open.content;
         let hovered = button_at(content, x, y);
         let hovered_timeline = timeline_at(content, media, x, y).map(|(card, _)| card);
-        if (hovered, hovered_timeline) != (content.hovered, content.hovered_timeline) {
+        let hovered_chip = content.eq.chip_at(x, y);
+        let now = (hovered, hovered_timeline, hovered_chip);
+        if now
+            != (
+                content.hovered,
+                content.hovered_timeline,
+                content.hovered_chip,
+            )
+        {
             content.hovered = hovered;
             content.hovered_timeline = hovered_timeline;
+            content.hovered_chip = hovered_chip;
             self.paint(media, text);
         }
     }
 
-    /// A press at (x, y) on the dropdown (any button, as in C): the command
-    /// it sends, if it hit a seekable timeline or a chip. The dropdown stays
-    /// open.
-    pub(crate) fn press(&self, (x, y): (f64, f64), media: &Media) -> Option<MediaCommand> {
+    /// A press at (x, y) on the dropdown (any button, as in C): what it asks
+    /// for, if it hit a seekable timeline, a player chip, or an EQ chip while
+    /// no profile switch is under way. The dropdown stays open.
+    pub(crate) fn press(&self, (x, y): (f64, f64), media: &Media) -> Option<MediaPress> {
         let content = &self.open.as_ref()?.content;
+        if let Some(chip) = content.eq.chip_at(x, y) {
+            if media.eq.busy() {
+                return None;
+            }
+            return eq_section::PROFILES
+                .get(chip)
+                .map(|name| MediaPress::EqProfile(name));
+        }
         if let Some((card, fraction)) = timeline_at(content, media, x, y) {
             let player = media.player(content.cards.get(card)?.player)?;
             // The length is at most a day, so this is exact enough in f64.
             let position_us = fraction * micros_f64(player.length_us);
-            return Some(MediaCommand::Seek {
+            return Some(MediaPress::Player(MediaCommand::Seek {
                 player: player.id,
                 position_us: micros_i64(position_us),
-            });
+            }));
         }
         let (card, button) = button_at(content, x, y)?;
-        Some(button.command(content.cards.get(card)?.player))
+        Some(MediaPress::Player(
+            button.command(content.cards.get(card)?.player),
+        ))
     }
 
     /// Whether a click at (x, y) would do something (the hand cursor): an
-    /// enabled chip, or a seekable timeline.
+    /// enabled chip, a seekable timeline, or an EQ chip while no profile
+    /// switch is under way.
     pub(crate) fn over_clickable(&self, (x, y): (f64, f64), media: &Media) -> bool {
         let Some(open) = self.open.as_ref() else {
             return false;
@@ -435,7 +473,14 @@ impl MediaPopup {
                 .and_then(|c| media.player(c.player))
                 .is_some_and(|p| button.enabled(p))
         });
-        on_chip || timeline_at(content, media, x, y).is_some()
+        let on_eq_chip = !media.eq.busy() && content.eq.chip_at(x, y).is_some();
+        on_chip || on_eq_chip || timeline_at(content, media, x, y).is_some()
+    }
+
+    /// Where the tests' `target eq <what>` points, popup-local
+    /// ([`EqSection::target`]).
+    pub(crate) fn eq_target(&self, what: &str) -> Option<(f64, f64)> {
+        self.open.as_ref()?.content.eq.target(what)
     }
 
     /// Where `what` (`prev`, `next`, `play` or `timeline:FRACTION`) is on the
@@ -531,8 +576,9 @@ fn status_word(player: &PlayerInfo) -> (&'static str, Color) {
     }
 }
 
-/// The cards for `media`'s players, and the popup's size.
-fn layout(media: &Media) -> (Vec<Card>, (f64, f64)) {
+/// The cards for `media`'s players, the EQ card placed under them, and the
+/// popup's size.
+fn layout(media: &Media, eq: &mut EqSection) -> (Vec<Card>, (f64, f64)) {
     let mut y = OUTER_MARGIN + HEADER_H + SECTION_GAP;
     let count = media.players.len();
     let mut cards = Vec::with_capacity(count);
@@ -562,8 +608,16 @@ fn layout(media: &Media) -> (Vec<Card>, (f64, f64)) {
             timeline_y,
             buttons_y,
         });
-        y += h + if i + 1 < count { CARD_GAP } else { 0.0 };
+        y += h + CARD_GAP;
     }
+    // Under the last player card (or straight under the header without one).
+    // The players' and the EQ's are different kinds of card, so a section gap
+    // instead of a card gap.
+    if count > 0 {
+        y += SECTION_GAP - CARD_GAP;
+    }
+    eq.place(y);
+    y += eq.height();
     (cards, (CONTENT_W + OUTER_MARGIN * 2.0, y + OUTER_MARGIN))
 }
 
@@ -628,7 +682,7 @@ fn draw(
             graphs.paint_under(cr, i, vis_y, media)?;
         }
     }
-    Ok(())
+    content.eq.draw(cr, text, &media.eq, content.hovered_chip)
 }
 
 /// The header row: the pill is the liveliest state across players.
@@ -646,8 +700,11 @@ fn draw_header(
     } else {
         ("stopped", COLORS.overlay1)
     };
-    let plural = if count == 1 { "" } else { "s" };
-    let summary = format!("  \u{b7}  {count} player{plural}");
+    let summary = match count {
+        0 => "  \u{b7}  no players".to_owned(),
+        1 => "  \u{b7}  1 player".to_owned(),
+        _ => format!("  \u{b7}  {count} players"),
+    };
     let header = Header {
         icon: Some(ICON_MEDIA_PLAY),
         icon_color: ACCENT,

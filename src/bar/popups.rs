@@ -12,10 +12,9 @@ use super::{popup_host::PopupHost, popup_surface::PopupSurface};
 use crate::{
     audio::{device_popup::DevicePopup, mixer_popup::MixerPopup},
     modules::{
-        clock::calendar::CalendarPopup, cpu::popup::CpuPopup, eq::popup::EqPopup,
-        gpu::popup::GpuPopup, media::popup::MediaPopup, mem::popup::MemPopup,
-        network::popup::NetworkPopup, powermenu::PowerMenu, privacy::popup::PrivacyPopup,
-        tray::menu::TrayMenu,
+        clock::calendar::CalendarPopup, cpu::popup::CpuPopup, gpu::popup::GpuPopup,
+        media::popup::MediaPopup, mem::popup::MemPopup, network::popup::NetworkPopup,
+        powermenu::PowerMenu, privacy::popup::PrivacyPopup, tray::menu::TrayMenu,
     },
     render::Renderer,
 };
@@ -39,8 +38,6 @@ pub(crate) struct Popups {
     pub(crate) device: DevicePopup,
     /// The per-app mixer.
     pub(crate) mixer: MixerPopup,
-    /// The DAC EQ dropdown.
-    pub(crate) eq: EqPopup,
     /// A tray item's menu.
     pub(crate) tray: TrayMenu,
     /// The media dropdown.
@@ -52,12 +49,11 @@ pub(crate) struct Popups {
 impl Popups {
     /// The open hosts of the dropdowns that have one (everything but the
     /// power menu, whose overlays are their own catchers).
-    fn hosts(&self) -> [Option<&PopupHost>; 11] {
+    fn hosts(&self) -> [Option<&PopupHost>; 10] {
         [
             self.privacy.host(),
             self.media.host(),
             self.tray.host(),
-            self.eq.host(),
             self.mixer.host(),
             self.device.host(),
             self.calendar.host(),
@@ -161,12 +157,6 @@ impl Popups {
             }
             return true;
         }
-        if let Some(popup) = self.eq.host_mut().and_then(|h| h.surface_mut(surface)) {
-            if popup.configure(shm, width, height) {
-                self.eq.paint(&renderer.eq, text);
-            }
-            return true;
-        }
         if let Some(popup) = self
             .calendar
             .host_mut()
@@ -190,7 +180,6 @@ impl Popups {
             self.network.host_mut(),
             self.device.host_mut(),
             self.mixer.host_mut(),
-            self.eq.host_mut(),
             self.tray.host_mut(),
             self.media.host_mut(),
             self.privacy.host_mut(),
@@ -217,7 +206,6 @@ impl Popups {
             .or_else(|| self.gpu.menu())
             .or_else(|| self.mem.menu())
             .or_else(|| self.network.menu())
-            .or_else(|| self.eq.menu())
             .or_else(|| self.tray.menu())
             .or_else(|| self.media.menu())
             .or_else(|| self.privacy.menu())
@@ -257,8 +245,6 @@ impl Popups {
             self.media.snapshot(path, &renderer.media, text)
         } else if self.tray.host().is_some() {
             self.tray.snapshot(path, &renderer.tray, text)
-        } else if self.eq.host().is_some() {
-            self.eq.snapshot(path, &renderer.eq, text)
         } else {
             self.calendar.snapshot(path, text)
         }

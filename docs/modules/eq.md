@@ -79,11 +79,26 @@ this module never opens the DAC's HID device.
 
 ## In the Rust port
 
+- **The EQ lives in the media module** (user request, after the port). The C bar's own EQ
+  box (sparkline + profile name, between network and volume) and its dropdown are gone:
+  - **Bar:** nothing. A sparkline at the end of the media box was tried and removed at the
+    user's request ("keep the song title"). So the EQ is reachable only while a player
+    gives the media box a reason to exist.
+  - **Dropdown:** the media dropdown (right-click on the media box) has an EQ card under
+    the player cards: header row (glyph, profile, `· low gain`, the `on`/`off`/`no data`/
+    `applying` pill), preamp and peak/min, the curve on its dB/Hz grid (90 px tall now, was
+    110), and one compact chip per profile instead of full cards (no descriptions; they're
+    in `PROFILES`' doc comment). Chip states: active = lavender border and name, applying
+    = yellow, hover = `surface0`. The dropdown opens, and stays open, with no players.
+  - Its size doesn't depend on the EQ state, so a state change only repaints it
+    (`App::eq_state_changed`); the bars aren't redrawn for EQ changes at all.
 - **Files:** `src/eq/mod.rs` (`EqState`: the snapshot, pending/running, the inotify watch),
-  `src/eq/launcher.rs` (`EqState::apply`), `src/eq/curve.rs` (pure cairo),
-  `src/modules/eq/mod.rs` (the box), `src/modules/eq/popup.rs` (`EqPopup`). Layout constants,
-  colours and text are C's, and the box and dropdown are pixel-identical to C's (no state,
-  active, off, custom, hovered, applying).
+  `src/eq/launcher.rs` (`EqState::apply`), `src/eq/curve.rs` (pure cairo), and
+  `src/modules/media/eq_section.rs` (`PROFILES`, `EqSection`: the dropdown
+  card, its chip layout and hit-testing). `EqState` is `Media::eq`. The test-control
+  commands keep their names: `dump eq`, `target eq NAME` (a chip's middle),
+  `target eq NAME:edge` (its left border), `target eq pill`, and `menu`'s `eq_cards`
+  (the chip count while the media dropdown is open).
 - **inotify through rustix's `fs::inotify`** (no separate crate), as a calloop `Generic` source
   on the directory, same mask and `state.json` name filter as C. `App::eq_file_changed`
   redraws only when the file parsed.

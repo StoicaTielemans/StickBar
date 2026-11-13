@@ -462,23 +462,24 @@ impl App {
     /// Something was written in the EQ's state directory: re-read the state
     /// file, and redraw only if it parsed.
     pub(crate) fn eq_file_changed(&mut self) {
-        if self.renderer.eq.load() {
+        if self.renderer.media.eq.load() {
             self.eq_state_changed();
         }
     }
 
     /// A profile script finished (successfully or not): "applying" ends.
     pub(crate) fn eq_script_exited(&mut self) {
-        self.renderer.eq.script_exited();
+        self.renderer.media.eq.script_exited();
         self.eq_state_changed();
     }
 
-    /// What the EQ shows changed: repaint its dropdown, if open, and the bars
-    /// (bars whose pixels didn't change skip the commit anyway).
+    /// What the EQ shows changed: repaint the media dropdown's EQ card, if
+    /// open. The EQ has nothing in the bar, so the bars aren't redrawn, and
+    /// the dropdown's size doesn't depend on the EQ state, so a repaint is
+    /// enough.
     pub(crate) fn eq_state_changed(&mut self) {
         let renderer = &mut self.renderer;
-        self.popups.eq.paint(&renderer.eq, &mut renderer.text);
-        self.mark_all_dirty();
+        self.popups.media.paint(&renderer.media, &mut renderer.text);
     }
 
     /// The renderer, read-only (the tests' `target` commands).

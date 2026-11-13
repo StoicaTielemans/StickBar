@@ -8,16 +8,17 @@ Shared by all of them; a module's own section only records what differs.
 | mic | mute | device dropdown | | ±5% | TOP+RIGHT |
 | CPU / GPU / memory | | dropdown | | | TOP+LEFT |
 | privacy | | dropdown | | | TOP+LEFT |
-| media | play/pause | dropdown | | | TOP+LEFT |
-
-Inside the media dropdown, a left click on a card's chips plays/pauses or skips,
-and a left click on its timeline seeks to that spot
-([modules/media.md](modules/media.md)).
+| media | play/pause | dropdown: players + EQ | | | TOP+LEFT |
 | network | | dropdown | | | TOP+RIGHT |
 | clock | | calendar (toggle) | | | TOP+RIGHT |
-| EQ | | dropdown | | | TOP+RIGHT |
 | tray | see the has-menu rule in [modules/tray.md](modules/tray.md) | same | | | TOP+RIGHT |
 | Arch logo | power menu | | | | full-screen overlay |
+
+Inside the media dropdown, a left click on a card's chips plays/pauses or skips,
+a left click on its timeline seeks to that spot
+([modules/media.md](modules/media.md)), and a click on an EQ profile chip applies
+that profile ([modules/eq.md](modules/eq.md)). The EQ has no box of its own any
+more: it lives only in the media dropdown.
 
 - **Right-click, because there's no hover**: the reference opens most of these on
   hover (with a debounce timer, or its tooltip). `wayland/pointer.c` only tracks

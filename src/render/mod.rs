@@ -4,7 +4,7 @@
 //! left to right from x = 0, right-region ones right to left from the right
 //! edge, and the media box centered between. So far: the Arch logo, the
 //! workspace pills, CPU, GPU, memory and privacy on the left; the tray, clock,
-//! network, EQ, volume and mic on the right; the media box in the centre.
+//! network, volume and mic on the right; the media box (with the EQ) in the centre.
 
 pub(crate) mod braille_graph;
 pub(crate) mod meter_bar;
@@ -17,10 +17,9 @@ pub(crate) mod text;
 use crate::{
     audio::AudioState,
     config::{BAR, COLORS},
-    eq::EqState,
     modules::{
         clock::Clock,
-        cpu, eq, gpu,
+        cpu, gpu,
         media::{self, Media},
         mem, mic, network,
         powermenu::arch_logo,
@@ -127,8 +126,6 @@ pub(crate) struct Renderer {
     pub(crate) network: Network,
     /// The latest audio snapshot from the pulse thread (empty until the first).
     pub(crate) audio: AudioState,
-    /// The DAC EQ's state file, and the profile switch in progress.
-    pub(crate) eq: EqState,
     /// The system tray's items (from the `dbus` thread).
     pub(crate) tray: Tray,
     /// The media players (from the `dbus` thread).
@@ -156,9 +153,8 @@ impl Renderer {
                 network
             },
             audio: AudioState::default(),
-            eq: EqState::new(),
             tray: Tray::default(),
-            media: Media::default(),
+            media: Media::new(),
             privacy: PrivacyState::default(),
         })
     }
@@ -265,7 +261,7 @@ impl Renderer {
             layout.boxes.push(ModuleBox {
                 name: "media",
                 rect,
-                // Left plays/pauses, right opens its dropdown.
+                // Left plays/pauses, right opens its dropdown (players + EQ).
                 clickable: true,
             });
         }
@@ -273,8 +269,8 @@ impl Renderer {
     }
 
     /// The right region, laid out from the right edge leftwards: the tray,
-    /// clock, network, EQ, volume and mic, as in the C bar. The EQ (a StickBar-only
-    /// module) sits between network and volume, keeping the audio together.
+    /// clock, network, volume and mic. (The EQ that sat between network and
+    /// volume in the C bar now lives in the media box.)
     /// Returns where the region starts, its gap included (the media box's
     /// right limit).
     fn render_right(
@@ -321,24 +317,11 @@ impl Renderer {
             // Right click opens its dropdown.
             clickable: true,
         });
-        let eq_box = eq::render(
-            cr,
-            &mut self.text,
-            &self.eq,
-            network_box.x - BAR.item_spacing,
-            (0.0, height),
-        )?;
-        layout.boxes.push(ModuleBox {
-            name: "eq",
-            rect: eq_box,
-            // Right click opens its dropdown.
-            clickable: true,
-        });
         let volume_box = volume::render(
             cr,
             &mut self.text,
             &self.audio,
-            eq_box.x - BAR.item_spacing,
+            network_box.x - BAR.item_spacing,
             (0.0, height),
         )?;
         layout.boxes.push(ModuleBox {

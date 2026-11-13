@@ -44,7 +44,10 @@ use crate::{
     bar::{popup_surface::PopupEnv, strip_surface::StripEnv},
     config::{COLORS, Color},
     dbus::{self, MenuEntry, TrayCommand},
-    modules::powermenu::{PowerAction, PowerClick},
+    modules::{
+        media::popup::MediaPress,
+        powermenu::{PowerAction, PowerClick},
+    },
     mpris::MediaCommand,
     render::{Action, BoxRect},
 };
@@ -194,11 +197,9 @@ impl App {
             // A right click on the network box opens its dropdown (reopens it
             // if open). It's independent of the sysmon three.
             ("network", BTN_RIGHT) => self.open_network_popup(position, rect),
-            // A right click on the EQ box opens its dropdown (reopens it if
-            // open). Left does nothing, at the user's request.
-            ("eq", BTN_RIGHT) => self.open_eq_popup(position, rect),
             // The media box: left plays/pauses the player it shows, right
-            // opens the dropdown of every player (reopens it if open).
+            // opens the dropdown of every player plus the EQ card (reopens it
+            // if open).
             ("media", BTN_LEFT) => {
                 if let Some(player) = self.renderer.media.active().map(|p| p.id) {
                     self.dbus
@@ -263,11 +264,21 @@ impl App {
         false
     }
 
-    /// A press at (x, y) on the media dropdown: a chip or a seekable timeline
-    /// sends its command (any button, as in C), and the dropdown stays open.
+    /// A press at (x, y) on the media dropdown: a player chip or a seekable
+    /// timeline sends its command (any button, as in C); an EQ chip applies
+    /// its profile, unless a switch is already under way. The dropdown stays
+    /// open either way.
     fn media_press(&mut self, x: f64, y: f64) {
-        let Some(command) = self.popups.media.press((x, y), &self.renderer.media) else {
-            return;
+        let command = match self.popups.media.press((x, y), &self.renderer.media) {
+            None => return,
+            Some(MediaPress::EqProfile(name)) => {
+                self.renderer.media.eq.apply(name);
+                // The chip and pill turn to "applying" now, and the bar's
+                // sparkline yellow; the new curve comes with the state write.
+                self.eq_state_changed();
+                return;
+            }
+            Some(MediaPress::Player(command)) => command,
         };
         if let MediaCommand::Seek {
             player,
@@ -350,24 +361,6 @@ impl App {
             }
             if host.is_catcher(surface) {
                 self.popups.tray.close();
-                return true;
-            }
-        }
-
-        // The EQ dropdown: any button on a profile card applies it (as in C),
-        // unless a switch is already under way; its catcher closes it.
-        if let Some(host) = self.popups.eq.host() {
-            if host.is_menu(surface) {
-                if let Some(name) = self.popups.eq.press((x, y), &self.renderer.eq) {
-                    self.renderer.eq.apply(name);
-                    // The card and pill turn to "applying" now, and the bar's
-                    // box to "NAME..."; the new curve comes with the state write.
-                    self.eq_state_changed();
-                }
-                return true;
-            }
-            if host.is_catcher(surface) {
-                self.popups.eq.close();
                 return true;
             }
         }
@@ -571,12 +564,6 @@ impl App {
         {
             return;
         }
-        if self.popups.eq.host().is_some_and(|h| h.is_menu(surface)) {
-            self.popups
-                .eq
-                .motion((x, y), &self.renderer.eq, &mut self.renderer.text);
-            return;
-        }
         if self.popups.tray.host().is_some_and(|h| h.is_menu(surface)) {
             self.popups
                 .tray
@@ -651,14 +638,6 @@ impl App {
         // An enabled tray menu entry reacts to a click.
         if self.popups.tray.host().is_some_and(|h| h.is_menu(surface)) {
             return if self.popups.tray.over_clickable((x, y)) {
-                Shape::Pointer
-            } else {
-                Shape::Default
-            };
-        }
-        // A profile card reacts to a click, unless a switch is under way.
-        if self.popups.eq.host().is_some_and(|h| h.is_menu(surface)) {
-            return if self.popups.eq.over_clickable((x, y), &self.renderer.eq) {
                 Shape::Pointer
             } else {
                 Shape::Default
@@ -977,43 +956,6 @@ impl App {
             self.dbus
                 .send(dbus::Command::Media(MediaCommand::PollPositions));
         }
-    }
-
-    /// Opens the EQ dropdown under the box `trigger` on the monitor at
-    /// `position` in `outputs`.
-    fn open_eq_popup(&mut self, position: usize, trigger: BoxRect) {
-        let Some(output_width) = self.outputs.get(position).map(|o| self.output_size(o).0) else {
-            return;
-        };
-        let Self {
-            qh,
-            compositor,
-            layer_shell,
-            viewporter,
-            test_mode,
-            outputs,
-            popups,
-            renderer,
-            ..
-        } = self;
-        let Some(output) = outputs.get(position) else {
-            return;
-        };
-        let env = PopupEnv {
-            qh,
-            compositor,
-            layer_shell,
-            viewporter: viewporter.as_ref(),
-            test_mode: *test_mode,
-        };
-        popups.eq.open(
-            &env,
-            (output.wl_output(), output_width),
-            trigger,
-            outputs.iter().map(Output::wl_output),
-            &renderer.eq,
-            &mut renderer.text,
-        );
     }
 
     /// Runs a power menu card's action.

@@ -92,7 +92,7 @@ pub(crate) const ICON_CHECKBOX_OFF: char = '\u{f0131}';
 pub(crate) const ICON_RADIO_ON: char = '\u{f043e}';
 /// `md-radiobox_blank`: an unchosen radio entry in a tray menu.
 pub(crate) const ICON_RADIO_OFF: char = '\u{f043d}';
-/// `md-equalizer`, the EQ dropdown's header icon.
+/// `md-equalizer`, the header icon of the media dropdown's EQ card.
 pub(crate) const ICON_EQUALIZER: char = '\u{f0ea2}';
 
 /// Workspace numerals 1-10 as kanji (一 二 三 四 五 六 七 八 九 十), matching the

@@ -100,15 +100,13 @@ def main():
 
                 fake.terminate()
                 fake.wait(timeout=5)
-                if players == 1:
-                    bar.wait_menu(False, timeout=4.0)
-                    gone = "popup closed (it was the only player)"
-                else:
-                    after = bar.wait_menu(True, timeout=4.0, media_cards=players - 1)
-                    if after["height"] >= opened["height"]:
-                        failures.append(f"popup didn't shrink: {opened['height']} -> {after['height']}")
-                    gone = f"popup shrank {opened['height']} -> {after['height']}px"
-                    bar.must("catcher-click")
+                # It stays open even when that was the only player: the EQ card
+                # is still there (docs/modules/media.md).
+                after = bar.wait_menu(True, timeout=4.0, media_cards=players - 1)
+                if after["height"] >= opened["height"]:
+                    failures.append(f"popup didn't shrink: {opened['height']} -> {after['height']}")
+                gone = f"popup shrank {opened['height']} -> {after['height']}px, {players - 1} cards left"
+                bar.must("catcher-click")
         finally:
             if fake.poll() is None:
                 fake.kill()

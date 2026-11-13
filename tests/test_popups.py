@@ -35,11 +35,10 @@ POPUPS = [
     ("mem", "right", "yellow"),
     ("network", "right", "teal"),
     ("clock", "right", "mauve"),
-    ("eq", "right", "lavender"),
     ("volume", "right", "sky"),
     ("volume", "middle", "sky"),  # the per-app mixer
     ("mic", "right", "blue"),
-    ("media", "right", "yellow"),  # only if a player is running
+    ("media", "right", "yellow"),  # players + the EQ card; only if a player or EQ state exists
 ]
 MAX_POPUP_RSS_MB = 4.0  # a full-size catcher buffer alone was ~8 MB on 1920x1080
 

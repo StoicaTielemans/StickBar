@@ -88,7 +88,7 @@ Modules:
 | [`docs/modules/network.md`](docs/modules/network.md) | Network status, rates, its graph | `network/`, `modules/network/`, `render/braille_graph.c` |
 | [`docs/modules/privacy.md`](docs/modules/privacy.md) | Mic/webcam/screen-share indicator, PipeWire | `pipewire/`, `modules/privacy/` |
 | [`docs/modules/power-menu.md`](docs/modules/power-menu.md) | Power menu, Arch logo, SIGUSR1 | `modules/powermenu/` |
-| [`docs/modules/eq.md`](docs/modules/eq.md) | DAC EQ, state file, profile switching | `eq/`, `modules/eq/` |
+| [`docs/modules/eq.md`](docs/modules/eq.md) | DAC EQ, state file, profile switching (shown inside the media module) | `eq/`, `modules/media/eq_section.rs` |
 
 ## Rust rules
 

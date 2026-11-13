@@ -29,7 +29,7 @@
 //! target power <logout|restart|shutdown|corner|header>
 //! target device <meter|mute|body> <fraction> <description...>
 //! target mixer <slider|mute> <fraction> <stream name...>
-//! target eq <profile>
+//! target eq <profile[:edge]|pill>  (the media dropdown's EQ card)
 //! target traymenu <label...> / target trayicon <output> <title...>
 //! target media <prev|next|play|timeline:FRACTION> <app name...>
 //!                        -> {"ok":true,"x","y"}: a point on the power menu, a
@@ -265,8 +265,8 @@ fn menu(app: &App) -> Value {
         .map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX));
     let eq_cards = app
         .popups()
-        .eq
-        .card_count()
+        .media
+        .eq_chip_count()
         .map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX));
     let mut reply = match app.popups().latest_menu().and_then(PopupSurface::menu_size) {
         Some((width, height)) => json!({
@@ -329,7 +329,7 @@ fn dump(app: &mut App, section: &str) -> Value {
         "gpu" => dump_gpu(&renderer.sysmon),
         "net" => dump_net(&renderer.network),
         "audio" => dump_audio(&renderer.audio),
-        "eq" => dump_eq(&renderer.eq),
+        "eq" => dump_eq(&renderer.media.eq),
         "media" => dump_media(&renderer.media),
         _ => error("unknown dump section"),
     }
@@ -570,7 +570,7 @@ fn dump_net(n: &Network) -> Value {
 fn target(app: &mut App, args: &str) -> Value {
     let found = match args.split_once(' ') {
         Some(("power", part)) => app.popups().power.target(part.trim()),
-        Some(("eq", profile)) => app.popups().eq.target(profile.trim()),
+        Some(("eq", what)) => app.popups().media.eq_target(what.trim()),
         Some(("traymenu", label)) => app.popups().tray.target(label.trim()),
         Some(("media", rest)) => rest.trim().split_once(' ').and_then(|(what, name)| {
             app.popups()

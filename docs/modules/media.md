@@ -177,6 +177,9 @@ userdata pointer, `in_use`-gated iteration, `_count()`/`_get(index)` accessors).
 - **Seeking:** the target position is set on the main side at once (C's optimistic jump), and
   the thread keeps it as its "last polled" position for a relative `Seek`.
 - **No fixed caps:** players and cards are `Vec`s (C: 16).
+- **The DAC EQ is part of this module** (`src/modules/media/eq_section.rs`, details in
+  [eq.md](eq.md)), in the dropdown only: an EQ card under the player cards. The dropdown
+  no longer closes when the last player goes: it shrinks to the header and the EQ card.
 
 ## Spectrum visualizer
 

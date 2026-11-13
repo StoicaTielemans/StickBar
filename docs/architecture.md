@@ -84,9 +84,9 @@ src/
 │   ├── gpu/                mod.rs (box), popup.rs (the GPU dropdown)
 │   ├── mem/                mod.rs (box), popup.rs (the memory dropdown)
 │   ├── network/            mod.rs (box), popup.rs (the network dropdown)
-│   ├── eq/                 mod.rs (sparkline + profile box), popup.rs (EQ dropdown)
 │   ├── media/              mod.rs (Media + the centred box), popup.rs (MediaPopup),
-│   │                       graphs.rs (spectrum panels, frames, per-card strips)
+│   │                       graphs.rs (spectrum panels, frames, per-card strips),
+│   │                       eq_section.rs (the DAC EQ's dropdown card)
 │   ├── privacy/            mod.rs (the box), popup.rs (PrivacyPopup)
 │   ├── tray/               mod.rs (Tray: items, icon surfaces, the icon row),
 │   │                       menu.rs (TrayMenu: the DBusMenu dropdown)

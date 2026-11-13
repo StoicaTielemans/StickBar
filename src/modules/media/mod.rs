@@ -5,8 +5,10 @@
 //! title truncates instead of covering its neighbours (BUG.md "Media"), and
 //! with no player, or no room for even the icon and `...`, it takes no space.
 //! A left click is `PlayPause` on that player; a right click opens the dropdown
-//! of every player (`popup.rs`).
+//! of every player, plus the DAC EQ's card (`popup.rs`, `eq_section.rs`). The
+//! EQ has nothing in the bar itself, at the user's request.
 
+pub(crate) mod eq_section;
 pub(crate) mod graphs;
 pub(crate) mod popup;
 
@@ -17,6 +19,7 @@ use crate::{
         BAR, COLORS, FONT,
         glyphs::{ICON_MEDIA_PAUSE, ICON_MEDIA_PLAY},
     },
+    eq::EqState,
     mpris::PlayerInfo,
     render::{
         BoxRect,
@@ -29,7 +32,7 @@ use crate::{
 /// The track text's widest, as the reference's `Math.min(implicitWidth, 300)`.
 const TRACK_TEXT_MAX_W: f64 = 300.0;
 
-/// The media players, as the `dbus` thread last reported them.
+/// The media players, as the `dbus` thread last reported them, and the DAC EQ.
 #[derive(Debug, Default)]
 pub(crate) struct Media {
     /// The visible players, in order.
@@ -39,9 +42,19 @@ pub(crate) struct Media {
     positions: HashMap<u64, i64>,
     /// The dropdown's spectrum graphs' audio and levels.
     pub(crate) visualizer: Visualizer,
+    /// The DAC EQ's state file, and the profile switch in progress.
+    pub(crate) eq: EqState,
 }
 
 impl Media {
+    /// No players yet; the EQ's current state read from its file.
+    pub(crate) fn new() -> Self {
+        Self {
+            eq: EqState::new(),
+            ..Self::default()
+        }
+    }
+
     /// The player the box shows: the first one playing, else the first.
     pub(crate) fn active(&self) -> Option<&PlayerInfo> {
         self.players

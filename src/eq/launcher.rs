@@ -6,32 +6,14 @@
 //! report is what lets "applying" end the moment a failed script exits,
 //! instead of after C's 15 s guess.
 //!
-//! **Why `posix_spawn` and not `std::process::Command`:** the bar blocks
-//! SIGINT, SIGTERM and SIGUSR1 in every thread for its signal source, and a
-//! blocked mask survives exec. `Command` doesn't reset it (only SIGPIPE's
-//! handler), so the script would start unable to be stopped by SIGTERM or
-//! Ctrl-C. Resetting it with `Command::pre_exec` needs `unsafe`; nix's safe
-//! `posix_spawn` wrapper takes the mask as an attribute instead. The C bar
-//! reset it by hand in the child.
+//! The script is started through `util::spawn` (empty signal mask, stdio on
+//! `/dev/null`): a child of the bar must not inherit its blocked signals.
 
-use std::{
-    ffi::CString,
-    fs::File,
-    os::{
-        fd::AsRawFd,
-        unix::ffi::{OsStrExt, OsStringExt},
-    },
-    path::Path,
-};
+use std::{os::unix::ffi::OsStrExt, path::Path};
 
-use nix::{
-    spawn::{PosixSpawnAttr, PosixSpawnFileActions, PosixSpawnFlags, posix_spawn},
-    sys::{
-        signal::{SigSet, Signal},
-        wait::{WaitStatus, waitpid},
-    },
-    unistd::Pid,
-};
+use nix::sys::wait::{WaitStatus, waitpid};
+
+use crate::util::spawn::{Stdout, spawn};
 
 use super::EqState;
 
@@ -80,7 +62,7 @@ impl EqState {
 
 /// Runs the script and waits for it (on the `eq-script` thread).
 fn run_script(script: &Path, profile: &str) {
-    let pid = match spawn(script, profile) {
+    let pid = match start(script, profile) {
         Ok(pid) => pid,
         Err(err) => {
             eprintln!("stickBar: eq: couldn't run {}: {err}", script.display());
@@ -96,58 +78,14 @@ fn run_script(script: &Path, profile: &str) {
     }
 }
 
-/// Starts `python3 SCRIPT profile NAME` with an empty signal mask, SIGPIPE
-/// back to its default action (Rust's runtime ignores it in the bar), the
-/// bar's environment, and stdin/stdout/stderr on `/dev/null`. **stdin too**:
-/// in test mode the bar's stdin is the test-control channel.
-fn spawn(script: &Path, profile: &str) -> Result<Pid, String> {
-    let c_string =
-        |bytes: Vec<u8>| CString::new(bytes).map_err(|_nul| "a NUL byte in an argument".to_owned());
-    let args = [
-        PYTHON_PATH.as_bytes().to_vec(),
-        script.as_os_str().as_bytes().to_vec(),
-        b"profile".to_vec(),
-        profile.as_bytes().to_vec(),
-    ]
-    .into_iter()
-    .map(c_string)
-    .collect::<Result<Vec<_>, _>>()?;
-    // posix_spawn takes the environment explicitly: pass the bar's own on
-    // (HOME and XDG_CACHE_HOME decide where the script writes its state).
-    let env: Vec<CString> = std::env::vars_os()
-        .filter_map(|(key, value)| {
-            let mut entry = key.into_vec();
-            entry.push(b'=');
-            entry.extend_from_slice(value.as_bytes());
-            CString::new(entry).ok()
-        })
-        .collect();
-
-    // Opened close-on-exec (std's default): only the dup2'd copies reach the
-    // script. It must stay open until posix_spawn returns.
-    let devnull = File::options()
-        .read(true)
-        .write(true)
-        .open("/dev/null")
-        .map_err(|err| format!("/dev/null: {err}"))?;
-    let mut actions = PosixSpawnFileActions::init().map_err(|e| e.to_string())?;
-    for fd in 0..=2 {
-        actions
-            .add_dup2(devnull.as_raw_fd(), fd)
-            .map_err(|e| e.to_string())?;
-    }
-
-    let mut attr = PosixSpawnAttr::init().map_err(|e| e.to_string())?;
-    attr.set_sigmask(&SigSet::empty())
-        .map_err(|e| e.to_string())?;
-    let mut sigpipe = SigSet::empty();
-    sigpipe.add(Signal::SIGPIPE);
-    attr.set_sigdefault(&sigpipe).map_err(|e| e.to_string())?;
-    // The two attributes above only apply with their flags set.
-    attr.set_flags(
-        PosixSpawnFlags::POSIX_SPAWN_SETSIGMASK | PosixSpawnFlags::POSIX_SPAWN_SETSIGDEF,
-    )
-    .map_err(|e| e.to_string())?;
-
-    posix_spawn(PYTHON_PATH, &actions, &attr, &args, &env).map_err(|e| e.to_string())
+/// Starts `python3 SCRIPT profile NAME` (stdout thrown away: the script
+/// reports through its state file).
+fn start(script: &Path, profile: &str) -> Result<nix::unistd::Pid, String> {
+    let args: [&[u8]; 4] = [
+        PYTHON_PATH.as_bytes(),
+        script.as_os_str().as_bytes(),
+        b"profile",
+        profile.as_bytes(),
+    ];
+    spawn(PYTHON_PATH, &args, Stdout::Null).map(|(pid, _no_pipe)| pid)
 }

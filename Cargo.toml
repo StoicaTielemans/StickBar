@@ -52,8 +52,10 @@ pangocairo = "0.22"
 # Safe wrappers over Linux syscalls cairo/calloop don't cover. "time" = timerfd,
 # for the clock's wall-clock-aligned tick (calloop's Timer is monotonic-only);
 # "param" = the page size, for per-process memory from /proc/PID/statm;
-# "fs" = inotify, for the EQ's state-file watch (no separate inotify crate).
-rustix = { version = "1", features = ["time", "param", "fs"] }
+# "fs" = inotify, for the EQ's state-file watch and the pacman database watch
+# (no separate inotify crate); "pipe" = close-on-exec pipes for reading a
+# child's output (util/spawn.rs: the updates check).
+rustix = { version = "1", features = ["time", "param", "fs", "pipe"] }
 # JSON for the test-control channel's replies (and Hyprland IPC from M5).
 serde_json = "1"
 # D-Bus for the tray (and MPRIS from M12), on its own `dbus` thread. Pinned to 5.x:

@@ -79,6 +79,8 @@ src/
 ├── network/mod.rs          Network: default route, rates, history; details via
 │                           /sys, resolv.conf and getifaddrs (nix)
 ├── util/history.rs         History2: the 120-sample ring behind every graph
+├── util/spawn.rs           posix_spawn with an empty signal mask (EQ script, update check)
+├── updates/mod.rs          Updates: checkupdates + yay -Qua on a thread, timers, pacman db watch
 ├── modules/
 │   ├── cpu/                mod.rs (box), popup.rs (the CPU dropdown)
 │   ├── gpu/                mod.rs (box), popup.rs (the GPU dropdown)
@@ -88,6 +90,7 @@ src/
 │   │                       graphs.rs (spectrum panels, frames, per-card strips),
 │   │                       eq_section.rs (the DAC EQ's dropdown card)
 │   ├── privacy/            mod.rs (the box), popup.rs (PrivacyPopup)
+│   ├── updates/            mod.rs (the box), popup.rs (UpdatesPopup)
 │   ├── tray/               mod.rs (Tray: items, icon surfaces, the icon row),
 │   │                       menu.rs (TrayMenu: the DBusMenu dropdown)
 │   ├── volume/mod.rs       the volume box

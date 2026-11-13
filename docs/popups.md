@@ -8,6 +8,7 @@ Shared by all of them; a module's own section only records what differs.
 | mic | mute | device dropdown | | ±5% | TOP+RIGHT |
 | CPU / GPU / memory | | dropdown | | | TOP+LEFT |
 | privacy | | dropdown | | | TOP+LEFT |
+| updates | | dropdown (package list) | | | TOP+RIGHT |
 | media | play/pause (nothing when idle) | dropdown: players + EQ | | | TOP, centred on the monitor |
 | network | | dropdown | | | TOP+RIGHT |
 | clock | | calendar (toggle) | | | TOP+RIGHT |

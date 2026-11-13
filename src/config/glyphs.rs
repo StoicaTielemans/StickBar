@@ -92,6 +92,8 @@ pub(crate) const ICON_CHECKBOX_OFF: char = '\u{f0131}';
 pub(crate) const ICON_RADIO_ON: char = '\u{f043e}';
 /// `md-radiobox_blank`: an unchosen radio entry in a tray menu.
 pub(crate) const ICON_RADIO_OFF: char = '\u{f043d}';
+/// `md-package_up`, the pending-updates box and its dropdown's header.
+pub(crate) const ICON_UPDATES: char = '\u{f03d5}';
 /// `md-equalizer`, the header icon of the media dropdown's EQ card.
 pub(crate) const ICON_EQUALIZER: char = '\u{f0ea2}';
 

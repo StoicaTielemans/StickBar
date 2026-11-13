@@ -25,12 +25,13 @@ use crate::{
         powermenu::arch_logo,
         privacy,
         tray::{self, Tray},
-        volume,
+        updates, volume,
         workspaces::Workspaces,
     },
     network::Network,
     pipewire::PrivacyState,
     sysmon::Sysmon,
+    updates::Updates,
 };
 use text::TextCache;
 
@@ -132,6 +133,8 @@ pub(crate) struct Renderer {
     pub(crate) media: Media,
     /// Who's recording what (from the `pipewire` thread).
     pub(crate) privacy: PrivacyState,
+    /// Pending Arch updates (from the `updates-check` thread).
+    pub(crate) updates: Updates,
 }
 
 impl Renderer {
@@ -156,6 +159,7 @@ impl Renderer {
             tray: Tray::default(),
             media: Media::new(),
             privacy: PrivacyState::default(),
+            updates: Updates::default(),
         })
     }
 
@@ -269,7 +273,8 @@ impl Renderer {
     }
 
     /// The right region, laid out from the right edge leftwards: the tray,
-    /// clock, network, volume and mic. (The EQ that sat between network and
+    /// clock, network, volume, mic and (only while there are any) pending
+    /// updates. (The EQ that sat between network and
     /// volume in the C bar now lives in the media box.)
     /// Returns where the region starts, its gap included (the media box's
     /// right limit).
@@ -343,7 +348,24 @@ impl Renderer {
             // Left mutes, scrolling steps.
             clickable: true,
         });
-        Ok(mic_box.x - BAR.item_spacing)
+        // Only while something needs updating; otherwise it takes no space.
+        let updates_box = updates::render(
+            cr,
+            &mut self.text,
+            &self.updates,
+            mic_box.x - BAR.item_spacing,
+            (0.0, height),
+        )?;
+        let Some(updates_box) = updates_box else {
+            return Ok(mic_box.x - BAR.item_spacing);
+        };
+        layout.boxes.push(ModuleBox {
+            name: "updates",
+            rect: updates_box,
+            // Right click lists the packages.
+            clickable: true,
+        });
+        Ok(updates_box.x - BAR.item_spacing)
     }
 
     /// Repaints only the clock, over its previous box `old`, on a frame that

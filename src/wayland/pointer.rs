@@ -211,6 +211,9 @@ impl App {
             ("media", BTN_RIGHT) => self.open_media_popup(position, rect),
             // A right click on the privacy box lists who's recording.
             ("privacy", BTN_RIGHT) => self.open_privacy_popup(position, rect),
+            // A right click on the updates box lists the packages. Left does
+            // nothing, at the user's request.
+            ("updates", BTN_RIGHT) => self.open_updates_popup(position, rect),
             // Right-click on the clock toggles the year calendar. Left does
             // nothing: the clock has no obvious primary action (docs/popups.md).
             ("clock", BTN_RIGHT) => self.toggle_calendar(position, rect),
@@ -249,6 +252,17 @@ impl App {
             }
             if host.is_catcher(surface) {
                 self.popups.privacy.close();
+                return true;
+            }
+        }
+
+        // The updates dropdown: nothing clickable inside; its catcher closes it.
+        if let Some(host) = self.popups.updates.host() {
+            if host.is_menu(surface) {
+                return true;
+            }
+            if host.is_catcher(surface) {
+                self.popups.updates.close();
                 return true;
             }
         }
@@ -877,6 +891,43 @@ impl App {
             trigger,
             outputs.iter().map(Output::wl_output),
             &mut renderer.network,
+            &mut renderer.text,
+        );
+    }
+
+    /// Opens the updates dropdown under the box `trigger` on the monitor at
+    /// `position` in `outputs`.
+    fn open_updates_popup(&mut self, position: usize, trigger: BoxRect) {
+        let Some(output_width) = self.outputs.get(position).map(|o| self.output_size(o).0) else {
+            return;
+        };
+        let Self {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter,
+            test_mode,
+            outputs,
+            popups,
+            renderer,
+            ..
+        } = self;
+        let Some(output) = outputs.get(position) else {
+            return;
+        };
+        let env = PopupEnv {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter: viewporter.as_ref(),
+            test_mode: *test_mode,
+        };
+        popups.updates.open(
+            &env,
+            (output.wl_output(), output_width),
+            trigger,
+            outputs.iter().map(Output::wl_output),
+            &renderer.updates,
             &mut renderer.text,
         );
     }

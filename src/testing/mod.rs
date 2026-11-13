@@ -17,7 +17,7 @@
 //!                        -> a click on that monitor's bar, bar-local px
 //! menu                   -> {"ok":true,"open":bool,"width","height","catchers",
 //!                            "power_last_action","device_cards","mixer_rows","eq_cards",
-//!                            "media_cards","tray_entries"/"privacy_entries" (only while
+//!                            "media_cards","update_rows","tray_entries"/"privacy_entries" (only while
 //!                            that dropdown is open)}
 //! menu-click <x> <y> [button] / menu-motion <x> <y>
 //!                        -> a click / move on the open menu, menu-local px
@@ -34,10 +34,12 @@
 //! target media <prev|next|play|timeline:FRACTION> <app name...>
 //!                        -> {"ok":true,"x","y"}: a point on the power menu, a
 //!                           device or mixer card, or an EQ profile card
-//! refresh <mem|cpu|cpu-reset|gpu|poll>
+//! refresh <mem|cpu|cpu-reset|gpu|poll|updates>
 //!                        -> run a dropdown's details refresh (cpu-reset: start
-//!                           a fresh process window first), or a full 5 s poll
-//! dump <mem|cpu|gpu|net|audio|eq|media|visualizer>
+//!                           a fresh process window first), a full 5 s poll, or
+//!                           an updates check (in the background: poll `dump
+//!                           updates` until `checking` is false)
+//! dump <mem|cpu|gpu|net|audio|eq|media|updates|visualizer>
 //! vis-tone <slot> <channel> <hz>
 //!                        -> synthetic audio for a visualizer slot (synth mode)
 //!                        -> every figure the bar holds (test_sysmon_data,
@@ -78,6 +80,7 @@ use crate::{
     network::Network,
     render::{Action, ClickTarget},
     sysmon::Sysmon,
+    updates::{Pkg, Updates},
     visualizer::{MAX_SOURCES, spectrum::BANDS},
     wayland::{App, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Output},
 };
@@ -263,6 +266,11 @@ fn menu(app: &App) -> Value {
         .media
         .card_count()
         .map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX));
+    let update_rows = app
+        .popups()
+        .updates
+        .row_count()
+        .map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX));
     let eq_cards = app
         .popups()
         .media
@@ -273,11 +281,12 @@ fn menu(app: &App) -> Value {
             "ok": true, "open": true, "width": width, "height": height,
             "catchers": catchers, "power_last_action": last, "device_cards": device_cards,
             "mixer_rows": mixer_rows, "eq_cards": eq_cards, "media_cards": media_cards,
+            "update_rows": update_rows,
         }),
         None => json!({
             "ok": true, "open": false, "catchers": catchers, "power_last_action": last,
             "device_cards": device_cards, "mixer_rows": mixer_rows, "eq_cards": eq_cards,
-            "media_cards": media_cards,
+            "media_cards": media_cards, "update_rows": update_rows,
         }),
     };
     // Only present while a tray menu is open, as in C.
@@ -299,6 +308,10 @@ fn menu(app: &App) -> Value {
 
 /// `refresh <what>`: what an open dropdown or the 5 s timer would do, now.
 fn refresh(app: &mut App, what: &str) -> Value {
+    if what == "updates" {
+        app.check_updates();
+        return json!({ "ok": true });
+    }
     let sysmon = &mut app.renderer_mut().sysmon;
     match what {
         "mem" => sysmon.mem.refresh_details(),
@@ -331,8 +344,27 @@ fn dump(app: &mut App, section: &str) -> Value {
         "audio" => dump_audio(&renderer.audio),
         "eq" => dump_eq(&renderer.media.eq),
         "media" => dump_media(&renderer.media),
+        "updates" => dump_updates(&renderer.updates),
         _ => error("unknown dump section"),
     }
+}
+
+/// `dump updates` (read by `test_updates`): both lists as `name old -> new`
+/// lines, and the check's state.
+fn dump_updates(updates: &Updates) -> Value {
+    let lines = |list: &[Pkg]| {
+        list.iter()
+            .map(|p| format!("{} {} -> {}", p.name, p.old, p.new))
+            .collect::<Vec<_>>()
+    };
+    json!({
+        "ok": true,
+        "total": updates.total(),
+        "repo": lines(&updates.repo),
+        "aur": lines(&updates.aur),
+        "checking": updates.checking,
+        "last_error": updates.last_error.as_deref().unwrap_or_default(),
+    })
 }
 
 /// `dump visualizer` (read by `test_visualizer`): whether graphs are shown,

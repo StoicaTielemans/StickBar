@@ -56,6 +56,9 @@ The C version is kept on the `c-legacy` branch.
   download/upload graph and IP/gateway/MAC/DNS details.
 - **Privacy indicator** — appears only while an app is using the mic, webcam
   or screen sharing (via PipeWire); right-click to see which app.
+- **Arch updates** — appears only while updates are pending: how many (official
+  repos via `checkupdates`, AUR via `yay -Qua`), checked every 30 min and right
+  after you update; right-click for the package list. Needs `pacman-contrib`.
 - **Power menu** — right-click the Arch logo (the bar's own leftmost item) for a
   full-screen Logout/Restart/Shutdown overlay, or trigger it from a Hyprland
   keybind (see "Power menu keybind" below).

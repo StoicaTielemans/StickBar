@@ -11,5 +11,6 @@ pub(crate) mod network;
 pub(crate) mod powermenu;
 pub(crate) mod privacy;
 pub(crate) mod tray;
+pub(crate) mod updates;
 pub(crate) mod volume;
 pub(crate) mod workspaces;

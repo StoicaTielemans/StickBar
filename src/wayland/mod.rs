@@ -45,6 +45,7 @@ use crate::{
     mpris::{MediaCommand, MediaEvent},
     pipewire::{Category, PipewireEvent, PrivacyState},
     render::Renderer,
+    updates::CheckResult,
 };
 
 /// All of the bar's state, handed to every Wayland event handler.
@@ -480,6 +481,55 @@ impl App {
     pub(crate) fn eq_state_changed(&mut self) {
         let renderer = &mut self.renderer;
         self.popups.media.paint(&renderer.media, &mut renderer.text);
+    }
+
+    /// Time for an updates check (the timer, or the tests' `refresh updates`).
+    /// It runs in the background; `updates_result` gets what it found.
+    pub(crate) fn check_updates(&mut self) {
+        self.renderer.updates.check();
+        // The open dropdown's pill turns to "checking".
+        let renderer = &mut self.renderer;
+        self.popups
+            .updates
+            .paint(&renderer.updates, &mut renderer.text);
+    }
+
+    /// An updates check finished: the box appears, changes or goes, and an
+    /// open dropdown re-lays out (or closes with nothing left to update).
+    pub(crate) fn updates_result(&mut self, result: CheckResult) {
+        self.renderer.updates.finish(result);
+        self.mark_all_dirty();
+        let Self {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter,
+            test_mode,
+            popups,
+            renderer,
+            ..
+        } = self;
+        let env = PopupEnv {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter: viewporter.as_ref(),
+            test_mode: *test_mode,
+        };
+        popups
+            .updates
+            .refresh(&env, &renderer.updates, &mut renderer.text);
+    }
+
+    /// The package database changed: whether to schedule the delayed re-check
+    /// (`updates::watch_db`), i.e. none is pending yet.
+    pub(crate) const fn updates_settle_start(&mut self) -> bool {
+        self.renderer.updates.settle_start()
+    }
+
+    /// The package database has settled: re-check.
+    pub(crate) fn updates_settle_done(&mut self) {
+        self.renderer.updates.settle_done();
     }
 
     /// The renderer, read-only (the tests' `target` commands).

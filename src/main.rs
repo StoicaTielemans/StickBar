@@ -22,6 +22,7 @@ mod pipewire;
 mod render;
 mod sysmon;
 mod testing;
+mod updates;
 mod util;
 mod visualizer;
 mod wayland;
@@ -207,6 +208,10 @@ fn start_sources(handle: &calloop::LoopHandle<'static, App>, app: &mut App) -> R
 
     // CPU/GPU/memory figures, polled every 5 s (the first poll already ran).
     sysmon::timer::start(handle)?;
+
+    // Pending Arch updates: checked 60 s from now, every 30 min and after the
+    // package database changes (never automatically in test mode).
+    updates::start(handle, &mut app.renderer_mut().updates, testing::enabled());
 
     // The test-control channel on stdin, only with STICKBAR_TEST_CONTROL=1.
     testing::start(handle);

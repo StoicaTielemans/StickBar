@@ -10,6 +10,10 @@ each other through `power_menu_toggle()` — matching `PowerMenuState.toggle()`
 exactly, with no separate `_open()`/`_close()` pair exposed, since every trigger
 this bar has (the button, and the keybind below) always wants toggle semantics.
 
+**Rust bar: the Arch logo opens it on right-click**, not left (user request, after the
+port), like every other box's menu. A left click does nothing. `test_power_menu`
+checks both.
+
 - **`ArchLogoWidget.qml`'s "cutout" styling is deliberately *not* routed through
   the usual bordered module-box look** every other widget uses: a solid
   `COLORS.sapphire` fill with the Arch glyph rendered in `COLORS.mantle` (the

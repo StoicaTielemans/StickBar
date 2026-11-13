@@ -188,8 +188,10 @@ impl App {
             return;
         };
         match (name, button) {
-            // A left click on the Arch logo toggles the power menu.
-            ("arch", BTN_LEFT) => self.toggle_power_menu(),
+            // A right click on the Arch logo toggles the power menu (right,
+            // like every other box's menu, at the user's request; left does
+            // nothing).
+            ("arch", BTN_RIGHT) => self.toggle_power_menu(),
             // A right click on the CPU, GPU or memory box opens its dropdown
             // (reopens it if open, as in C). They open at the same spot, so
             // each replaces the others.
@@ -197,9 +199,9 @@ impl App {
             // A right click on the network box opens its dropdown (reopens it
             // if open). It's independent of the sysmon three.
             ("network", BTN_RIGHT) => self.open_network_popup(position, rect),
-            // The media box: left plays/pauses the player it shows, right
-            // opens the dropdown of every player plus the EQ card (reopens it
-            // if open).
+            // The media box: left plays/pauses the player it shows (nothing
+            // when it's the idle box, with no player), right opens the
+            // dropdown of every player plus the EQ card (reopens it if open).
             ("media", BTN_LEFT) => {
                 if let Some(player) = self.renderer.media.active().map(|p| p.id) {
                     self.dbus

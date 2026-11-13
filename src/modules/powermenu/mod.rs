@@ -1,7 +1,7 @@
 //! The power menu (the C bar's `modules/powermenu/power_menu.c`; the full
 //! story is in `docs/modules/power-menu.md`).
 //!
-//! Opened by a left click on the Arch logo or by the Hyprland keybind
+//! Opened by a right click on the Arch logo or by the Hyprland keybind
 //! (`pkill -SIGUSR1 -x stickBar`, handled in `main.rs`), and both toggle it. On
 //! every monitor it puts a full-screen surface on the overlay layer: a 30%
 //! crust dim with a centered panel. The panel has a header ("Power ·

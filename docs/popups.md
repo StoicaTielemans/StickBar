@@ -8,11 +8,11 @@ Shared by all of them; a module's own section only records what differs.
 | mic | mute | device dropdown | | ±5% | TOP+RIGHT |
 | CPU / GPU / memory | | dropdown | | | TOP+LEFT |
 | privacy | | dropdown | | | TOP+LEFT |
-| media | play/pause | dropdown: players + EQ | | | TOP+LEFT |
+| media | play/pause (nothing when idle) | dropdown: players + EQ | | | TOP+LEFT |
 | network | | dropdown | | | TOP+RIGHT |
 | clock | | calendar (toggle) | | | TOP+RIGHT |
 | tray | see the has-menu rule in [modules/tray.md](modules/tray.md) | same | | | TOP+RIGHT |
-| Arch logo | power menu | | | | full-screen overlay |
+| Arch logo | | power menu | | | full-screen overlay |
 
 Inside the media dropdown, a left click on a card's chips plays/pauses or skips,
 a left click on its timeline seeks to that spot

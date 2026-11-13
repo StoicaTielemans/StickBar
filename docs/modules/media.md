@@ -180,6 +180,11 @@ userdata pointer, `in_use`-gated iteration, `_count()`/`_get(index)` accessors).
 - **The DAC EQ is part of this module** (`src/modules/media/eq_section.rs`, details in
   [eq.md](eq.md)), in the dropdown only: an EQ card under the player cards. The dropdown
   no longer closes when the last player goes: it shrinks to the header and the EQ card.
+- **The box never goes away** (user request): with no player it shows `▶  No media
+  playing` until something has played since the bar started, then `▶  <artist - title>`
+  of the last thing the box showed (`Media::idle_text`, kept in memory only, so a restart
+  starts over). Same yellow box; a left click on it does nothing, a right click opens the
+  dropdown, so the EQ is always reachable. `dump media` reports it as `idle_text`.
 
 ## Spectrum visualizer
 

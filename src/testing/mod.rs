@@ -526,7 +526,7 @@ fn dump_media(media: &Media) -> Value {
             })
         })
         .collect();
-    json!({ "ok": true, "players": players })
+    json!({ "ok": true, "players": players, "idle_text": media.idle_text() })
 }
 
 /// `dump eq` (read by `test_eq`). `pending` is "" when nothing is, as in C.

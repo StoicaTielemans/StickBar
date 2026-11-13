@@ -56,7 +56,7 @@ The C version is kept on the `c-legacy` branch.
   download/upload graph and IP/gateway/MAC/DNS details.
 - **Privacy indicator** — appears only while an app is using the mic, webcam
   or screen sharing (via PipeWire); right-click to see which app.
-- **Power menu** — click the Arch logo (the bar's own leftmost item) for a
+- **Power menu** — right-click the Arch logo (the bar's own leftmost item) for a
   full-screen Logout/Restart/Shutdown overlay, or trigger it from a Hyprland
   keybind (see "Power menu keybind" below).
 - **DAC EQ** — part of the media dropdown: right-click the media box for a TRN
@@ -129,8 +129,8 @@ connection and doesn't share any socket or lock file with anything else.
 
 ## Power menu keybind
 
-The power menu (Logout/Restart/Shutdown) opens from the Arch logo button on
-the bar, or from a Hyprland keybind — the bar listens for `SIGUSR1` and
+The power menu (Logout/Restart/Shutdown) opens from a right click on the Arch
+logo on the bar, or from a Hyprland keybind — the bar listens for `SIGUSR1` and
 toggles the menu open/closed when it receives it. Add a line like this to
 your `hyprland.conf`:
 

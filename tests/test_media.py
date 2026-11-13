@@ -107,6 +107,15 @@ def main():
                     failures.append(f"popup didn't shrink: {opened['height']} -> {after['height']}")
                 gone = f"popup shrank {opened['height']} -> {after['height']}px, {players - 1} cards left"
                 bar.must("catcher-click")
+                bar.wait_menu(False)
+                if players == 1:
+                    # No player left: the box stays, showing the last track.
+                    idle = bar.must("dump media")["idle_text"]
+                    if idle != "Fake Artist - Fake Track Title":
+                        failures.append(f"idle box shows {idle!r}, expected the fake's last track")
+                    if "media" not in bar.must(f"rects {bar.output}")["rects"]:
+                        failures.append("the media box went away with the last player")
+                    gone += "; box kept, showing the last track"
         finally:
             if fake.poll() is None:
                 fake.kill()

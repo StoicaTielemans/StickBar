@@ -13,8 +13,8 @@ signals go to its pid only):
   - every thread's /proc status has SIGUSR1 in SigBlk;
   - SIGUSR1 opens the overlay, a second one closes it, and a burst of them
     leaves the bar running;
-  - a click on the Arch logo opens it, and a click on the dimmed background
-    (well away from the panel) closes it;
+  - a left click on the Arch logo does nothing, a right click opens it, and a
+    click on the dimmed background (well away from the panel) closes it;
   - the panel is centered on its surface, with the accent border on an opaque
     background over the 30% dim, and a hovered card takes its action's colour;
   - a click on the panel's header is absorbed; a click on each card closes the
@@ -82,7 +82,7 @@ def check_panel_and_actions(binary, failures):
         env = {"PATH": f"{tmp}:{os.environ.get('PATH', '')}", "HYPRLAND_INSTANCE_SIGNATURE": "stickbar-test-no-such-instance"}
         png = str(tmp / "power.png")
         with common.ControlledBar(binary, env_extra=env) as bar:
-            bar.click_module("arch", "left")
+            bar.click_module("arch", "right")
             opened = wait_sized(bar)
 
             corner = bar.must("target power corner")
@@ -171,7 +171,15 @@ def main():
         if bar.must("menu")["open"]:  # ten toggles: back to closed
             failures.append("after an even number of toggles the menu is open")
 
+        # Left does nothing (the power menu is on right-click, like every
+        # other box's menu); right opens it.
         bar.click_module("arch", "left")
+        time.sleep(0.3)
+        if bar.must("menu")["open"]:
+            failures.append("a left click on the Arch logo opened the power menu")
+            bar.must("menu-click 8 8")
+            bar.wait_menu(False)
+        bar.click_module("arch", "right")
         bar.wait_menu(True)
         bar.must("menu-click 8 8")  # top-left corner: dimmed background, far from the panel
         bar.wait_menu(False)
@@ -181,7 +189,7 @@ def main():
     if failures:
         common.fail("; ".join(failures))
     common.ok(f"SIGUSR1 blocked in all {threads} threads; keybind signal opens/closes the overlay and a "
-              f"burst of 12 leaves the bar running; Arch-logo click opens it, background click closes it; panel centered, hover colours right, "
+              f"burst of 12 leaves the bar running; Arch-logo right click opens it (left doesn't), background click closes it; panel centered, hover colours right, "
               f"each card picks its action (recorded, never run)")
 
 

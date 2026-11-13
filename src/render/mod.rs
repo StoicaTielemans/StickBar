@@ -179,7 +179,7 @@ impl Renderer {
         layout.boxes.push(ModuleBox {
             name: "arch",
             rect: arch,
-            // Left click opens the power menu.
+            // Right click opens the power menu.
             clickable: true,
         });
         let mut left = arch.x + arch.w + BAR.item_spacing;

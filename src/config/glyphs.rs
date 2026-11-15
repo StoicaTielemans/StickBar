@@ -92,10 +92,16 @@ pub(crate) const ICON_CHECKBOX_OFF: char = '\u{f0131}';
 pub(crate) const ICON_RADIO_ON: char = '\u{f043e}';
 /// `md-radiobox_blank`: an unchosen radio entry in a tray menu.
 pub(crate) const ICON_RADIO_OFF: char = '\u{f043d}';
+/// `md-server`, the Proxmox box and its dropdown's header.
+pub(crate) const ICON_SERVER: char = '\u{f048b}';
 /// `md-package_up`, the pending-updates box and its dropdown's header.
 pub(crate) const ICON_UPDATES: char = '\u{f03d5}';
 /// `md-equalizer`, the header icon of the media dropdown's EQ card.
 pub(crate) const ICON_EQUALIZER: char = '\u{f0ea2}';
+/// `md-view_dashboard`, the media dropdown's top header ("Dashboard").
+pub(crate) const ICON_DASHBOARD: char = '\u{f056e}';
+/// `md-power_plug`, the header icon of the media dropdown's smart-plug card.
+pub(crate) const ICON_PLUG: char = '\u{f06a5}';
 
 /// Workspace numerals 1-10 as kanji (一 二 三 四 五 六 七 八 九 十), matching the
 /// reference bar. These are CJK characters, not Nerd Font icons, so pango

@@ -9,8 +9,9 @@ test-control channel:
   - the dropdown has a card for it; its play/pause chip sends PlayPause (and
     the status the bar shows follows the player), prev/next send
     Previous/Next;
-  - when the player goes away, its card goes and the popup shrinks (or
-    closes, if it was the only player) instead of keeping its old size.
+  - when the player goes away, its card goes and the popup gets shorter
+    instead of keeping its old size; with no player left it stays open, as
+    wide as before (the player column keeps its `Media` header).
 """
 
 import subprocess
@@ -102,16 +103,17 @@ def main():
                 fake.wait(timeout=5)
                 # It stays open even when that was the only player: the EQ card
                 # is still there (docs/modules/media.md).
-                # The players are a column beside the EQ card's: the last one
-                # going takes the column away (narrower); otherwise the column
-                # gets shorter, unless the EQ column is the taller one anyway.
+                # The players are a column beside the EQ card's, under their
+                # own header: the column gets shorter, unless the EQ column is
+                # the taller one anyway. Its width never changes, even with
+                # no player left (the header stays).
                 after = bar.wait_menu(True, timeout=4.0, media_cards=players - 1)
                 before_wh = (opened["width"], opened["height"])
                 after_wh = (after["width"], after["height"])
                 if after_wh[0] > before_wh[0] or after_wh[1] > before_wh[1]:
                     failures.append(f"popup grew: {before_wh} -> {after_wh}")
-                if players == 1 and after_wh[0] >= before_wh[0]:
-                    failures.append(f"popup didn't drop its player column: {before_wh} -> {after_wh}")
+                if after_wh[0] != before_wh[0]:
+                    failures.append(f"popup width changed: {before_wh} -> {after_wh}")
                 gone = (f"popup {before_wh[0]}x{before_wh[1]} -> {after_wh[0]}x{after_wh[1]}px, "
                         f"{players - 1} cards left")
                 bar.must("catcher-click")

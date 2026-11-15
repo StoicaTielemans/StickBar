@@ -44,6 +44,7 @@ use crate::{
     hyprland::dispatch::Dispatcher,
     mpris::{MediaCommand, MediaEvent},
     pipewire::{Category, PipewireEvent, PrivacyState},
+    proxmox::PollResult,
     render::Renderer,
     updates::CheckResult,
 };
@@ -187,9 +188,11 @@ impl App {
             .cpu
             .tick(&mut renderer.sysmon, &mut renderer.text);
         // Players don't push their position: while the media dropdown shows
-        // it, it's read once a second (the answer repaints).
+        // it, it's read once a second (the answer repaints). The smart plugs
+        // ride the same tick, polled every other one.
         if self.popups.media.is_open() {
             self.dbus.send(Command::Media(MediaCommand::PollPositions));
+            self.renderer.media.shelly.tick();
         }
     }
 
@@ -483,6 +486,21 @@ impl App {
         self.popups.media.paint(&renderer.media, &mut renderer.text);
     }
 
+    /// The smart plugs answered (a poll, or a switch): repaint the media
+    /// dropdown's plug card, if open. Its size depends only on the plug
+    /// count, so a repaint is enough.
+    pub(crate) fn shelly_result(&mut self, batch: crate::shelly::Batch) {
+        self.renderer.media.shelly.finish(batch);
+        self.repaint_media_popup();
+    }
+
+    /// Repaints the media dropdown, if open, for a change that doesn't
+    /// change its size.
+    pub(crate) fn repaint_media_popup(&mut self) {
+        let renderer = &mut self.renderer;
+        self.popups.media.paint(&renderer.media, &mut renderer.text);
+    }
+
     /// Time for an updates check (the timer, or the tests' `refresh updates`).
     /// It runs in the background; `updates_result` gets what it found.
     pub(crate) fn check_updates(&mut self) {
@@ -519,6 +537,76 @@ impl App {
         popups
             .updates
             .refresh(&env, &renderer.updates, &mut renderer.text);
+    }
+
+    /// The Proxmox timer's tick (every 3 s): polls if one is due (every tick
+    /// while the dropdown is open), and redraws if "waking" just timed out.
+    pub(crate) fn proxmox_tick(&mut self) {
+        let fast = self.popups.proxmox.host().is_some();
+        // An armed Shut down chip not clicked again in time disarms.
+        let disarmed = self.popups.proxmox.expire_arm();
+        if self.renderer.proxmox.tick(fast) || disarmed {
+            self.proxmox_changed();
+        }
+    }
+
+    /// A Proxmox poll finished: the box's text may change, and an open
+    /// dropdown re-lays out.
+    pub(crate) fn proxmox_result(&mut self, result: PollResult) {
+        self.renderer.proxmox.finish(result);
+        self.proxmox_changed();
+    }
+
+    /// The Wake chip was pressed: send the magic packet, then show "waking"
+    /// (or the error line).
+    pub(crate) fn proxmox_wake(&mut self) {
+        if let Err(err) = self.renderer.proxmox.wake() {
+            eprintln!("stickBar: proxmox: Wake-on-LAN failed: {err}");
+        }
+        self.proxmox_changed();
+    }
+
+    /// The armed Shut down chip was clicked again: send the shutdown in the
+    /// background (`proxmox_shutdown_result` gets the answer), or show why
+    /// it couldn't be sent.
+    pub(crate) fn proxmox_shutdown(&mut self) {
+        if let Err(err) = self.renderer.proxmox.shutdown() {
+            eprintln!("stickBar: proxmox: shutdown not sent: {err}");
+        }
+        self.proxmox_changed();
+    }
+
+    /// The shutdown request finished: "shutting down" starts, or the error
+    /// line says why not.
+    pub(crate) fn proxmox_shutdown_result(&mut self, result: Result<(), String>) {
+        self.renderer.proxmox.shutdown_finished(result);
+        self.proxmox_changed();
+    }
+
+    /// What the Proxmox box shows changed: redraw the bars and re-lay out an
+    /// open dropdown.
+    fn proxmox_changed(&mut self) {
+        self.mark_all_dirty();
+        let Self {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter,
+            test_mode,
+            popups,
+            renderer,
+            ..
+        } = self;
+        let env = PopupEnv {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter: viewporter.as_ref(),
+            test_mode: *test_mode,
+        };
+        popups
+            .proxmox
+            .refresh(&env, &renderer.proxmox, &mut renderer.text);
     }
 
     /// The package database changed: whether to schedule the delayed re-check

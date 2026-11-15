@@ -17,8 +17,11 @@
 //!                        -> a click on that monitor's bar, bar-local px
 //! menu                   -> {"ok":true,"open":bool,"width","height","catchers",
 //!                            "power_last_action","device_cards","mixer_rows","eq_cards",
-//!                            "media_cards","update_rows","tray_entries"/"privacy_entries" (only while
-//!                            that dropdown is open)}
+//!                            "media_cards","update_rows","proxmox_rows","shelly_rows",
+//!                            "tray_entries"/
+//!                            "privacy_entries" (only while that dropdown is open),
+//!                            "proxmox_chip":{x,y,kind,armed} (only while the
+//!                            Proxmox dropdown shows its Wake/Shut down chip)}
 //! menu-click <x> <y> [button] / menu-motion <x> <y>
 //!                        -> a click / move on the open menu, menu-local px
 //! menu-press <x> <y> [button] / menu-release / menu-scroll <x> <y> <+1|-1>
@@ -32,14 +35,16 @@
 //! target eq <profile[:edge]|pill>  (the media dropdown's EQ card)
 //! target traymenu <label...> / target trayicon <output> <title...>
 //! target media <prev|next|play|timeline:FRACTION> <app name...>
+//! target shelly <plug name...|all-on|all-off>  (the media dropdown's plug card)
 //!                        -> {"ok":true,"x","y"}: a point on the power menu, a
 //!                           device or mixer card, or an EQ profile card
-//! refresh <mem|cpu|cpu-reset|gpu|poll|updates>
+//! refresh <mem|cpu|cpu-reset|gpu|poll|updates|proxmox|shelly>
 //!                        -> run a dropdown's details refresh (cpu-reset: start
 //!                           a fresh process window first), a full 5 s poll, or
-//!                           an updates check (in the background: poll `dump
-//!                           updates` until `checking` is false)
-//! dump <mem|cpu|gpu|net|audio|eq|media|updates|visualizer>
+//!                           an updates check / Proxmox poll (in the background:
+//!                           poll `dump updates|proxmox|shelly` until `checking` /
+//!                           `polling` is false)
+//! dump <mem|cpu|gpu|net|audio|eq|media|updates|proxmox|shelly|visualizer>
 //! vis-tone <slot> <channel> <hz>
 //!                        -> synthetic audio for a visualizer slot (synth mode)
 //!                        -> every figure the bar holds (test_sysmon_data,
@@ -76,9 +81,12 @@ use crate::{
     modules::{
         media::{Media, graphs, popup::graph_panel as media_graph_panel},
         privacy::popup::title,
+        proxmox::popup::ChipKind,
     },
     network::Network,
+    proxmox::{Phase, Proxmox},
     render::{Action, ClickTarget},
+    shelly::{PlugState, Shelly},
     sysmon::Sysmon,
     updates::{Pkg, Updates},
     visualizer::{MAX_SOURCES, spectrum::BANDS},
@@ -271,24 +279,53 @@ fn menu(app: &App) -> Value {
         .updates
         .row_count()
         .map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX));
+    let proxmox_rows = app
+        .popups()
+        .proxmox
+        .guest_rows()
+        .map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX));
     let eq_cards = app
         .popups()
         .media
         .eq_chip_count()
+        .map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX));
+    // -1 with the media dropdown closed, 0 open without a `shelly.conf`.
+    let shelly_rows = app
+        .popups()
+        .media
+        .shelly_row_count()
         .map_or(-1, |n| i64::try_from(n).unwrap_or(i64::MAX));
     let mut reply = match app.popups().latest_menu().and_then(PopupSurface::menu_size) {
         Some((width, height)) => json!({
             "ok": true, "open": true, "width": width, "height": height,
             "catchers": catchers, "power_last_action": last, "device_cards": device_cards,
             "mixer_rows": mixer_rows, "eq_cards": eq_cards, "media_cards": media_cards,
-            "update_rows": update_rows,
+            "update_rows": update_rows, "proxmox_rows": proxmox_rows,
+            "shelly_rows": shelly_rows,
         }),
         None => json!({
             "ok": true, "open": false, "catchers": catchers, "power_last_action": last,
             "device_cards": device_cards, "mixer_rows": mixer_rows, "eq_cards": eq_cards,
             "media_cards": media_cards, "update_rows": update_rows,
+            "proxmox_rows": proxmox_rows, "shelly_rows": shelly_rows,
         }),
     };
+    // While the Proxmox dropdown shows a chip: its middle, in menu
+    // coordinates (for `menu-click`), which one, and whether it's armed.
+    let chip = app.popups().proxmox.chip();
+    if let (Some((rect, kind)), Some(object)) = (chip, reply.as_object_mut()) {
+        let kind = match kind {
+            ChipKind::Wake => "wake",
+            ChipKind::Shutdown => "shutdown",
+        };
+        let _previous = object.insert(
+            "proxmox_chip".to_owned(),
+            json!({
+                "x": rect.x + rect.w / 2.0, "y": rect.y + rect.h / 2.0, "kind": kind,
+                "armed": app.popups().proxmox.armed(),
+            }),
+        );
+    }
     // Only present while a tray menu is open, as in C.
     if let (Some(entries), Some(object)) = (tray_entries, reply.as_object_mut()) {
         let _previous = object.insert("tray_entries".to_owned(), Value::from(entries));
@@ -310,6 +347,14 @@ fn menu(app: &App) -> Value {
 fn refresh(app: &mut App, what: &str) -> Value {
     if what == "updates" {
         app.check_updates();
+        return json!({ "ok": true });
+    }
+    if what == "proxmox" {
+        app.renderer_mut().proxmox.poll();
+        return json!({ "ok": true });
+    }
+    if what == "shelly" {
+        app.renderer_mut().media.shelly.poll();
         return json!({ "ok": true });
     }
     let sysmon = &mut app.renderer_mut().sysmon;
@@ -345,6 +390,8 @@ fn dump(app: &mut App, section: &str) -> Value {
         "eq" => dump_eq(&renderer.media.eq),
         "media" => dump_media(&renderer.media),
         "updates" => dump_updates(&renderer.updates),
+        "proxmox" => dump_proxmox(&renderer.proxmox),
+        "shelly" => dump_shelly(&renderer.media.shelly),
         _ => error("unknown dump section"),
     }
 }
@@ -364,6 +411,66 @@ fn dump_updates(updates: &Updates) -> Value {
         "aur": lines(&updates.aur),
         "checking": updates.checking,
         "last_error": updates.last_error.as_deref().unwrap_or_default(),
+    })
+}
+
+/// `dump shelly` (read by `test_shelly`): one entry per plug, and whether a
+/// poll is running.
+fn dump_shelly(shelly: &Shelly) -> Value {
+    let plugs: Vec<Value> = shelly
+        .plugs
+        .iter()
+        .map(|p| {
+            let (state, error) = match &p.state {
+                PlugState::Unknown => ("unknown", ""),
+                PlugState::On => ("on", ""),
+                PlugState::Off => ("off", ""),
+                PlugState::Offline => ("offline", ""),
+                PlugState::Error(why) => ("error", why.as_str()),
+            };
+            json!({
+                "name": p.name, "state": state, "watts": p.watts,
+                "pending": p.pending, "error": error,
+            })
+        })
+        .collect();
+    json!({
+        "ok": true,
+        "enabled": shelly.enabled(),
+        "polling": shelly.polling,
+        "plugs": plugs,
+    })
+}
+
+/// `dump proxmox` (read by `test_proxmox`): the phase, the box's text, the
+/// guests as `vmid name state` lines, and the poll's state.
+fn dump_proxmox(proxmox: &Proxmox) -> Value {
+    let phase = match proxmox.phase() {
+        Phase::Unknown => "unknown",
+        Phase::Up => "up",
+        Phase::Off => "off",
+        Phase::Waking => "waking",
+        Phase::ShuttingDown => "shutting_down",
+        Phase::Error => "error",
+    };
+    let cluster = proxmox.cluster.as_ref();
+    let guests = cluster.map_or_else(Vec::new, |c| {
+        c.guests
+            .iter()
+            .map(|g| format!("{} {} {:?}", g.vmid, g.name, g.state).to_lowercase())
+            .collect()
+    });
+    json!({
+        "ok": true,
+        "enabled": proxmox.enabled(),
+        "phase": phase,
+        "label": crate::modules::proxmox::label(proxmox).0,
+        "nodes": cluster.map_or(0, |c| c.nodes.len()),
+        "storages": cluster.map_or(0, |c| c.storages.len()),
+        "guests": guests,
+        "polling": proxmox.polling,
+        "last_error": proxmox.last_error.as_deref().unwrap_or_default(),
+        "action_error": proxmox.action_error.as_deref().unwrap_or_default(),
     })
 }
 
@@ -603,6 +710,10 @@ fn target(app: &mut App, args: &str) -> Value {
     let found = match args.split_once(' ') {
         Some(("power", part)) => app.popups().power.target(part.trim()),
         Some(("eq", what)) => app.popups().media.eq_target(what.trim()),
+        Some(("shelly", what)) => app
+            .popups()
+            .media
+            .shelly_target(what.trim(), &app.renderer().media),
         Some(("traymenu", label)) => app.popups().tray.target(label.trim()),
         Some(("media", rest)) => rest.trim().split_once(' ').and_then(|(what, name)| {
             app.popups()

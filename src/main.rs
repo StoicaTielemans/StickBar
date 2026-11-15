@@ -19,7 +19,9 @@ mod modules;
 mod mpris;
 mod network;
 mod pipewire;
+mod proxmox;
 mod render;
+mod shelly;
 mod sysmon;
 mod testing;
 mod updates;
@@ -212,6 +214,18 @@ fn start_sources(handle: &calloop::LoopHandle<'static, App>, app: &mut App) -> R
     // Pending Arch updates: checked 60 s from now, every 30 min and after the
     // package database changes (never automatically in test mode).
     updates::start(handle, &mut app.renderer_mut().updates, testing::enabled());
+
+    // The Proxmox server: only with a settings file; polled 2 s from now,
+    // then every 30 s (every 3 s while its dropdown is open or it's waking).
+    proxmox::start(handle, &mut app.renderer_mut().proxmox, testing::enabled());
+
+    // The smart plugs: only with a settings file; asked only while the media
+    // dropdown (which holds their card) is open.
+    shelly::start(
+        handle,
+        &mut app.renderer_mut().media.shelly,
+        testing::enabled(),
+    );
 
     // The test-control channel on stdin, only with STICKBAR_TEST_CONTROL=1.
     testing::start(handle);

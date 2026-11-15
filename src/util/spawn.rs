@@ -1,5 +1,5 @@
-//! Starting a child process the safe way (shared by the EQ's profile script
-//! and the updates check).
+//! Starting a child process the safe way (shared by the EQ's profile script,
+//! the updates check and the Proxmox poll).
 //!
 //! **Why `posix_spawn` and not `std::process::Command`:** the bar blocks
 //! SIGINT, SIGTERM and SIGUSR1 in every thread for its signal source, and a
@@ -12,13 +12,16 @@
 //! Every child gets: an empty signal mask, SIGPIPE back to its default action
 //! (Rust's runtime ignores it in the bar), the bar's environment, and stdin
 //! and stderr on `/dev/null`. **stdin too**: in test mode the bar's stdin is
-//! the test-control channel, which a child must never read from. stdout is
-//! either `/dev/null` or a pipe the caller reads ([`Stdout`]).
+//! the test-control channel, which a child must never read from. The one
+//! exception is [`run_capture_with_stdin`], whose stdin is a pipe holding only
+//! the bytes the caller gave (a secret that mustn't show in the child's argv,
+//! which every user can read in `/proc/PID/cmdline`), never the bar's own
+//! stdin. stdout is either `/dev/null` or a pipe the caller reads ([`Stdout`]).
 
 use std::{
     ffi::CString,
     fs::File,
-    io::Read,
+    io::{Read, Write},
     os::{
         fd::{AsRawFd, OwnedFd},
         unix::ffi::{OsStrExt, OsStringExt},
@@ -44,6 +47,12 @@ pub(crate) enum Stdout {
     Pipe,
 }
 
+/// The most bytes [`run_capture_with_stdin`] feeds a child. They're written
+/// into the pipe *before* the child starts, with nobody reading yet, so they
+/// must fit the pipe's buffer (64 KiB on Linux); a small cap keeps that
+/// obviously true.
+const MAX_STDIN_BYTES: usize = 4096;
+
 /// Starts `path` (absolute: `posix_spawn` doesn't search the PATH) with
 /// `args` (`args[0]` is the program's own name, as with `execv`). Returns its
 /// pid and, for [`Stdout::Pipe`], the read end of its stdout.
@@ -51,6 +60,18 @@ pub(crate) fn spawn(
     path: &str,
     args: &[&[u8]],
     stdout: Stdout,
+) -> Result<(Pid, Option<OwnedFd>), String> {
+    spawn_with_stdin(path, args, stdout, None)
+}
+
+/// [`spawn`], with the child's stdin a pipe pre-filled with `stdin` and then
+/// closed (so the child reads exactly those bytes, then EOF), or `/dev/null`
+/// for `None`.
+fn spawn_with_stdin(
+    path: &str,
+    args: &[&[u8]],
+    stdout: Stdout,
+    stdin: Option<&[u8]>,
 ) -> Result<(Pid, Option<OwnedFd>), String> {
     let args = args
         .iter()
@@ -81,15 +102,36 @@ pub(crate) fn spawn(
         Stdout::Null => None,
         Stdout::Pipe => Some(pipe_with(PipeFlags::CLOEXEC).map_err(|e| format!("pipe: {e}"))?),
     };
+    // The stdin pipe: filled now, before the child exists. Nobody reads it
+    // yet, which is fine because the payload fits the pipe's buffer
+    // (MAX_STDIN_BYTES). Our write end must close before the child can see
+    // EOF: it's dropped with `stdin_pipe` at the end of this function, and the
+    // child's own copy is only its fd 0 (both ends are close-on-exec).
+    let stdin_pipe = match stdin {
+        None => None,
+        Some(bytes) => {
+            if bytes.len() > MAX_STDIN_BYTES {
+                return Err(format!(
+                    "stdin payload too big ({} > {MAX_STDIN_BYTES} bytes)",
+                    bytes.len()
+                ));
+            }
+            let (read, write) = pipe_with(PipeFlags::CLOEXEC).map_err(|e| format!("pipe: {e}"))?;
+            let mut write = File::from(write);
+            write
+                .write_all(bytes)
+                .map_err(|e| format!("filling the stdin pipe: {e}"))?;
+            Some((read, write))
+        }
+    };
+    let in_fd = stdin_pipe
+        .as_ref()
+        .map_or_else(|| devnull.as_raw_fd(), |(read, _write)| read.as_raw_fd());
     let mut actions = PosixSpawnFileActions::init().map_err(|e| e.to_string())?;
     let out_fd = pipe_ends
         .as_ref()
         .map_or_else(|| devnull.as_raw_fd(), |(_read, write)| write.as_raw_fd());
-    for (fd, from) in [
-        (0, devnull.as_raw_fd()),
-        (1, out_fd),
-        (2, devnull.as_raw_fd()),
-    ] {
+    for (fd, from) in [(0, in_fd), (1, out_fd), (2, devnull.as_raw_fd())] {
         actions.add_dup2(from, fd).map_err(|e| e.to_string())?;
     }
 
@@ -106,6 +148,8 @@ pub(crate) fn spawn(
     .map_err(|e| e.to_string())?;
 
     let pid = posix_spawn(path, &actions, &attr, &args, &env).map_err(|e| e.to_string())?;
+    // Both ends of the stdin pipe close here: the child has its own fd 0.
+    drop(stdin_pipe);
     // Our copy of the write end closes here (dropped with the tuple), so the
     // reader sees EOF when the child exits.
     Ok((pid, pipe_ends.map(|(read, _write)| read)))
@@ -115,7 +159,18 @@ pub(crate) fn spawn(
 /// returns (exit code, stdout). Blocks: call it from a worker thread. A child
 /// killed by a signal reports exit code -1.
 pub(crate) fn run_capture(path: &str, args: &[&[u8]]) -> Result<(i32, String), String> {
-    let (pid, read_end) = spawn(path, args, Stdout::Pipe)?;
+    run_capture_with_stdin(path, args, None)
+}
+
+/// [`run_capture`], feeding the child `stdin` (at most 4 KiB) on its stdin
+/// instead of `/dev/null`. For secrets: an argument is readable by every user
+/// in `/proc/PID/cmdline`, a pipe isn't.
+pub(crate) fn run_capture_with_stdin(
+    path: &str,
+    args: &[&[u8]],
+    stdin: Option<&[u8]>,
+) -> Result<(i32, String), String> {
+    let (pid, read_end) = spawn_with_stdin(path, args, Stdout::Pipe, stdin)?;
     let mut out = Vec::new();
     if let Some(read_end) = read_end {
         // Read before waiting: a child writing more than the pipe holds

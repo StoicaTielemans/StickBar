@@ -52,12 +52,25 @@ def require_session():
 # counts and timings depend on that (test_redraw.py, test_clock_alignment.py).
 NO_VISUALIZER = {"STICKBAR_TEST_NO_VISUALIZER": "1"}
 
+# Test bars never read the user's real ~/.config/stickBar/proxmox.conf: a bar
+# outside test mode would otherwise poll their server with curl every 30 s
+# (test_no_subprocess catches the child) and grow a box that shifts the
+# others. A path that can't exist means "no settings, no module";
+# test_proxmox.py overrides it with its own file.
+NO_PROXMOX = {"STICKBAR_TEST_PROXMOX_CONF": "/nonexistent/stickbar-test/proxmox.conf"}
+
+# Likewise ~/.config/stickBar/shelly.conf: a test bar must never switch the
+# user's real smart plugs (or poll them when a test opens the media dropdown),
+# and the plug card would change the dropdown's size other tests measure.
+# test_shelly.py overrides it with a file listing its fakes.
+NO_SHELLY = {"STICKBAR_TEST_SHELLY_CONF": "/nonexistent/stickbar-test/shelly.conf"}
+
 
 def start_bar(binary, stderr_path=None, env_extra=None, wayland_debug=False):
     """Starts a bar instance directly (not via `timeout`/a shell, so the Popen's
     pid really is the bar's own pid -- watching a wrapper's pid instead was a
     real mistake made while writing these)."""
-    env = dict(os.environ, **NO_VISUALIZER)
+    env = dict(os.environ, **NO_VISUALIZER, **NO_PROXMOX, **NO_SHELLY)
     if wayland_debug:
         env["WAYLAND_DEBUG"] = "1"
     if env_extra:
@@ -169,7 +182,8 @@ class ControlledBar:
 
     def __init__(self, binary, output=None, wayland_debug=False, stderr_path=None, env_extra=None):
         self.output = output or pick_test_output()
-        env = dict(os.environ, STICKBAR_TEST_CONTROL="1", STICKBAR_TEST_OUTPUT=self.output, **NO_VISUALIZER)
+        env = dict(os.environ, STICKBAR_TEST_CONTROL="1", STICKBAR_TEST_OUTPUT=self.output,
+                   **NO_VISUALIZER, **NO_PROXMOX, **NO_SHELLY)
         if env_extra:
             env.update(env_extra)
         if wayland_debug:

@@ -41,12 +41,16 @@ def main():
     if not commits:
         common.fail("no wl_surface.commit lines in the WAYLAND_DEBUG log")
     start = commits[0] + WARMUP_S
-    # Earliest commit within each whole second after warmup.
+    # Earliest commit within each whole second after warmup. Only seconds
+    # whose boundary is past `start`: in the partial second `start` falls in,
+    # the tick was cut off with the warmup, so its first remaining commit is
+    # some other redraw (e.g. the Proxmox poll's, which starts 2 s in), not a
+    # late tick.
     first_in_second = {}
     for t in commits:
-        if t < start:
-            continue
         sec = int(t)
+        if sec < start:
+            continue
         first_in_second[sec] = min(first_in_second.get(sec, t), t)
     # Drop the last (possibly partial) second.
     secs = sorted(first_in_second)[:-1]

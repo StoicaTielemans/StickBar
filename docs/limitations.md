@@ -32,7 +32,8 @@ Limitations explained in a module's own section aren't repeated here.
   glibc's resolver honors), PipeWire nodes and links (`MAX_PW_NODES`/`MAX_PW_LINKS`; none in
   the Rust port,
   256 each; clients `MAX_PW_CLIENTS`, 128), privacy entries (`MAX_PRIVACY_ENTRIES`,
-  32), media-dropdown spectrum graphs (`VISUALIZER_MAX_SOURCES`, 4: later cards get
+  32), smart plugs (`config::MAX_PLUGS`, 12: more is a settings-file error, not a
+  silent drop), media-dropdown spectrum graphs (`VISUALIZER_MAX_SOURCES`, 4: later cards get
   no graph; an app with several playback streams shows the running one). CPU cores
   (`MAX_CPU_CORES`, 128): past it, excess cores are dropped from the dropdown's
   per-core grid, but `/proc/stat`'s aggregate `cpu` line still sets the overall

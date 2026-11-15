@@ -90,8 +90,10 @@ userdata pointer, `in_use`-gated iteration, `_count()`/`_get(index)` accessors).
   It replaces the reference's hover-triggered `MediaPopup`, and closes when the last
   player goes.
 - **Dropdown contents** (fixed width, so a track change never resizes it):
-  - **Header**: `Media · N players` and a pill for the liveliest state
-    across players (`playing` green > `paused` yellow > `stopped`).
+  - **Header**: `Dashboard` across the whole width (Rust port: the dropdown
+    holds the EQ and the smart plugs too). Above the player column only,
+    `Media · N players` and a pill for the liveliest state across players
+    (`playing` green > `paused` yellow > `stopped`).
   - **One `base` card per player**; the active player (the one the bar box
     shows, `mpris_active_player()`) gets a 2px accent border, like the
     calendar's current month. Top to bottom: app name in caps + coloured
@@ -179,9 +181,13 @@ userdata pointer, `in_use`-gated iteration, `_count()`/`_get(index)` accessors).
 - **No fixed caps:** players and cards are `Vec`s (C: 16).
 - **The DAC EQ is part of this module** (`src/modules/media/eq_section.rs`, details in
   [eq.md](eq.md)), in the dropdown only: an EQ card in a column **left of** the player
-  cards (user request), both under one full-width header (754 px wide with players). The
-  height is the taller column's. The dropdown no longer closes when the last player goes:
-  it drops the player column, leaving the header and the EQ card (384 px wide).
+  cards (user request), both under one full-width `Dashboard` header (754 px wide). The
+  player column has its own `Media · N players` header, so it no longer sits over the EQ
+  (user request). The height is the taller column's. The dropdown no longer closes when
+  the last player goes, and keeps its width: the player column stays, with just its
+  header (`no players`).
+- **The smart-plug card** sits under the EQ card in the left column, with a
+  `shelly.conf` (`src/modules/media/shelly_section.rs`, details in [shelly.md](shelly.md)).
 - **The box never goes away** (user request): with no player it shows `▶  No media
   playing` until something has played since the bar started, then `▶  <artist - title>`
   of the last thing the box showed (`Media::idle_text`, kept in memory only, so a restart

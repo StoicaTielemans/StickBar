@@ -47,6 +47,7 @@ use crate::{
     modules::{
         media::popup::MediaPress,
         powermenu::{PowerAction, PowerClick},
+        proxmox::popup::ChipPress,
     },
     mpris::MediaCommand,
     render::{Action, BoxRect},
@@ -214,6 +215,10 @@ impl App {
             // A right click on the updates box lists the packages. Left does
             // nothing, at the user's request.
             ("updates", BTN_RIGHT) => self.open_updates_popup(position, rect),
+            // A right click on the Proxmox box opens its dropdown. Left does
+            // nothing: waking the server is only the dropdown's Wake chip, so
+            // a stray click never boots it (the user's choice).
+            ("proxmox", BTN_RIGHT) => self.open_proxmox_popup(position, rect),
             // Right-click on the clock toggles the year calendar. Left does
             // nothing: the clock has no obvious primary action (docs/popups.md).
             ("clock", BTN_RIGHT) => self.toggle_calendar(position, rect),
@@ -282,8 +287,9 @@ impl App {
 
     /// A press at (x, y) on the media dropdown: a player chip or a seekable
     /// timeline sends its command (any button, as in C); an EQ chip applies
-    /// its profile, unless a switch is already under way. The dropdown stays
-    /// open either way.
+    /// its profile, unless a switch is already under way; a plug row or the
+    /// All on / All off chip switches plugs. The dropdown stays open either
+    /// way.
     fn media_press(&mut self, x: f64, y: f64) {
         let command = match self.popups.media.press((x, y), &self.renderer.media) {
             None => return,
@@ -292,6 +298,17 @@ impl App {
                 // The chip and pill turn to "applying" now, and the bar's
                 // sparkline yellow; the new curve comes with the state write.
                 self.eq_state_changed();
+                return;
+            }
+            Some(MediaPress::Plug { index, on }) => {
+                self.renderer.media.shelly.set(Some(index), on);
+                // The row shows `…` until the plug answers (shelly_result).
+                self.repaint_media_popup();
+                return;
+            }
+            Some(MediaPress::AllPlugs(on)) => {
+                self.renderer.media.shelly.set(None, on);
+                self.repaint_media_popup();
                 return;
             }
             Some(MediaPress::Player(command)) => command,
@@ -316,6 +333,31 @@ impl App {
     fn dropdown_button(&mut self, surface: &WlSurface, x: f64, y: f64, button: u32) -> bool {
         if self.read_only_dropdown_button(surface) {
             return true;
+        }
+
+        // The Proxmox dropdown: its chip (any button, like the media chips)
+        // wakes the server, or arms then sends the shutdown; anything else
+        // on it is absorbed; its catcher closes it.
+        if let Some(host) = self.popups.proxmox.host() {
+            if host.is_menu(surface) {
+                match self.popups.proxmox.press(x, y) {
+                    Some(ChipPress::Wake) => self.proxmox_wake(),
+                    Some(ChipPress::Armed) => {
+                        // The chip turns red: "Click again to shut down".
+                        let renderer = &mut self.renderer;
+                        self.popups
+                            .proxmox
+                            .paint(&renderer.proxmox, &mut renderer.text);
+                    }
+                    Some(ChipPress::Shutdown) => self.proxmox_shutdown(),
+                    None => {}
+                }
+                return true;
+            }
+            if host.is_catcher(surface) {
+                self.popups.proxmox.close();
+                return true;
+            }
         }
 
         // The calendar's own menu absorbs the click; its catcher closes it.
@@ -651,6 +693,19 @@ impl App {
                 Shape::Default
             };
         }
+        // The Proxmox dropdown's chip (Wake or Shut down) reacts to a click.
+        if self
+            .popups
+            .proxmox
+            .host()
+            .is_some_and(|h| h.is_menu(surface))
+        {
+            return if self.popups.proxmox.over_chip(x, y) {
+                Shape::Pointer
+            } else {
+                Shape::Default
+            };
+        }
         // An enabled tray menu entry reacts to a click.
         if self.popups.tray.host().is_some_and(|h| h.is_menu(surface)) {
             return if self.popups.tray.over_clickable((x, y)) {
@@ -932,6 +987,47 @@ impl App {
         );
     }
 
+    /// Opens the Proxmox dropdown under the box `trigger` on the monitor at
+    /// `position` in `outputs`, and polls now: while it's open the figures
+    /// refresh every 3 s, starting with fresh ones.
+    fn open_proxmox_popup(&mut self, position: usize, trigger: BoxRect) {
+        let Self {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter,
+            test_mode,
+            outputs,
+            popups,
+            renderer,
+            ..
+        } = self;
+        let Some(output) = outputs.get(position) else {
+            return;
+        };
+        let env = PopupEnv {
+            qh,
+            compositor,
+            layer_shell,
+            viewporter: viewporter.as_ref(),
+            test_mode: *test_mode,
+        };
+        // An old Wake/Shut down failure isn't news any more.
+        renderer.proxmox.action_error = None;
+        popups.proxmox.open(
+            &env,
+            output.wl_output(),
+            trigger,
+            outputs.iter().map(Output::wl_output),
+            &renderer.proxmox,
+            &mut renderer.text,
+        );
+        // Not in test mode: there only `refresh proxmox` polls.
+        if !*test_mode {
+            renderer.proxmox.poll();
+        }
+    }
+
     /// Opens the privacy dropdown under the box `trigger` on the monitor at
     /// `position` in `outputs`, with the streams as they are now.
     fn open_privacy_popup(&mut self, position: usize, trigger: BoxRect) {
@@ -1006,6 +1102,8 @@ impl App {
             &mut renderer.text,
         );
         if self.popups.media.is_open() {
+            // The plug card's first figures (its badges show `--` until then).
+            self.renderer.media.shelly.poll();
             self.dbus
                 .send(dbus::Command::Media(MediaCommand::PollPositions));
         }

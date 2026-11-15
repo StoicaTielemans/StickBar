@@ -87,6 +87,8 @@ Modules:
 | [`docs/modules/network.md`](docs/modules/network.md) | Network status, rates, its graph | `network/`, `modules/network/`, `render/braille_graph.c` |
 | [`docs/modules/privacy.md`](docs/modules/privacy.md) | Mic/webcam/screen-share indicator, PipeWire | `pipewire/`, `modules/privacy/` |
 | [`docs/modules/updates.md`](docs/modules/updates.md) | Pending Arch updates (checkupdates, yay), child processes | `updates/`, `modules/updates/`, `util/spawn.rs` |
+| [`docs/modules/proxmox.md`](docs/modules/proxmox.md) | The Proxmox server box, its API token/settings file, Wake-on-LAN | `proxmox/`, `modules/proxmox/` |
+| [`docs/modules/shelly.md`](docs/modules/shelly.md) | The Shelly smart-plug card in the media dropdown, its settings file, the plugs' HTTP API | `shelly/`, `modules/media/shelly_section.rs` |
 | [`docs/modules/power-menu.md`](docs/modules/power-menu.md) | Power menu, Arch logo, SIGUSR1 | `modules/powermenu/` |
 | [`docs/modules/eq.md`](docs/modules/eq.md) | DAC EQ, state file, profile switching (shown inside the media module) | `eq/`, `modules/media/eq_section.rs` |
 

@@ -23,13 +23,14 @@ use crate::{
         media::{self, Media},
         mem, mic, network,
         powermenu::arch_logo,
-        privacy,
+        privacy, proxmox,
         tray::{self, Tray},
         updates, volume,
         workspaces::Workspaces,
     },
     network::Network,
     pipewire::PrivacyState,
+    proxmox::Proxmox,
     sysmon::Sysmon,
     updates::Updates,
 };
@@ -135,6 +136,8 @@ pub(crate) struct Renderer {
     pub(crate) privacy: PrivacyState,
     /// Pending Arch updates (from the `updates-check` thread).
     pub(crate) updates: Updates,
+    /// The Proxmox server (from the `proxmox-poll` thread).
+    pub(crate) proxmox: Proxmox,
 }
 
 impl Renderer {
@@ -160,6 +163,7 @@ impl Renderer {
             media: Media::new(),
             privacy: PrivacyState::default(),
             updates: Updates::default(),
+            proxmox: Proxmox::default(),
         })
     }
 
@@ -235,6 +239,20 @@ impl Renderer {
             clickable: true,
         });
         let mut left_end = mem.x + mem.w + BAR.item_spacing;
+
+        // The Proxmox server: only with its settings file; otherwise it
+        // takes no space.
+        if let Some(rect) =
+            proxmox::render(cr, &mut self.text, &self.proxmox, left_end, (0.0, height))?
+        {
+            layout.boxes.push(ModuleBox {
+                name: "proxmox",
+                rect,
+                // Right click opens its dropdown (with the Wake chip).
+                clickable: true,
+            });
+            left_end = rect.x + rect.w + BAR.item_spacing;
+        }
 
         // Only while something records; otherwise it takes no space.
         let privacy_box =
@@ -349,15 +367,11 @@ impl Renderer {
             clickable: true,
         });
         // Only while something needs updating; otherwise it takes no space.
-        let updates_box = updates::render(
-            cr,
-            &mut self.text,
-            &self.updates,
-            mic_box.x - BAR.item_spacing,
-            (0.0, height),
-        )?;
+        let next_right = mic_box.x - BAR.item_spacing;
+        let updates_box =
+            updates::render(cr, &mut self.text, &self.updates, next_right, (0.0, height))?;
         let Some(updates_box) = updates_box else {
-            return Ok(mic_box.x - BAR.item_spacing);
+            return Ok(next_right);
         };
         layout.boxes.push(ModuleBox {
             name: "updates",

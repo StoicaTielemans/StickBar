@@ -59,6 +59,16 @@ The C version is kept on the `c-legacy` branch.
 - **Arch updates** — appears only while updates are pending: how many (official
   repos via `checkupdates`, AUR via `yay -Qua`), checked every 30 min and right
   after you update; right-click for the package list. Needs `pacman-contrib`.
+- **Proxmox** — only with `~/.config/stickBar/proxmox.conf`: how many of your
+  Proxmox server's VMs/containers run (`3/5`), or `off`; right-click for node
+  CPU/RAM/disk, every guest and storage, a **Wake** button (Wake-on-LAN)
+  while it's off, and a two-click **Shut down** button while it's up. Needs `curl` and a read-only API token; setup in
+  [`docs/modules/proxmox.md`](docs/modules/proxmox.md).
+- **Smart plugs** — only with `~/.config/stickBar/shelly.conf` (`name = IP` per
+  line): a card in the media dropdown (headed **Dashboard**) with each Shelly Gen2+
+  plug's state and live watts; click a row to switch it, or **All on** / **All off**.
+  The plugs are only asked while the dropdown is open. Setup in
+  [`docs/modules/shelly.md`](docs/modules/shelly.md).
 - **Power menu** — right-click the Arch logo (the bar's own leftmost item) for a
   full-screen Logout/Restart/Shutdown overlay, or trigger it from a Hyprland
   keybind (see "Power menu keybind" below).
@@ -129,6 +139,21 @@ exec-once = /path/to/StickBar/target/release/stickBar
 It's safe to run alongside another bar (like the Quickshell one it's modeled
 on) while you're trying it out — it opens its own independent Wayland
 connection and doesn't share any socket or lock file with anything else.
+
+## Settings files
+
+Two modules only appear with a settings file in `~/.config/stickBar/`. Templates
+with every option explained are in [`examples/`](examples/):
+
+```sh
+mkdir -p ~/.config/stickBar
+cp examples/proxmox.conf ~/.config/stickBar/ && chmod 600 ~/.config/stickBar/proxmox.conf
+cp examples/shelly.conf  ~/.config/stickBar/
+```
+
+Then put your own values in and restart the bar (they're read once at start).
+Setup details: [`docs/modules/proxmox.md`](docs/modules/proxmox.md),
+[`docs/modules/shelly.md`](docs/modules/shelly.md).
 
 ## Power menu keybind
 

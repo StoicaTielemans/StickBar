@@ -10,12 +10,15 @@
 //! one right-click away when nothing plays.
 //! A left click is `PlayPause` on the shown player (nothing without one); a
 //! right click opens the dropdown
-//! of every player, plus the DAC EQ's card (`popup.rs`, `eq_section.rs`). The
-//! EQ has nothing in the bar itself, at the user's request.
+//! of every player, plus the DAC EQ's card (`popup.rs`, `eq_section.rs`) and,
+//! with a `shelly.conf`, the smart-plug card (`shelly_section.rs`). Neither
+//! has anything in the bar itself, at the user's request.
+//! The dropdown is headed `Dashboard`, as it's more than media now.
 
 pub(crate) mod eq_section;
 pub(crate) mod graphs;
 pub(crate) mod popup;
+pub(crate) mod shelly_section;
 
 use std::collections::HashMap;
 
@@ -31,6 +34,7 @@ use crate::{
         module_box::{self, Anchor},
         text::TextCache,
     },
+    shelly::Shelly,
     visualizer::Visualizer,
 };
 
@@ -51,6 +55,8 @@ pub(crate) struct Media {
     pub(crate) visualizer: Visualizer,
     /// The DAC EQ's state file, and the profile switch in progress.
     pub(crate) eq: EqState,
+    /// The smart plugs (the dropdown's plug card), asked only while it's open.
+    pub(crate) shelly: Shelly,
     /// `artist - title` of the last player the box showed, for the idle box
     /// once every player has gone. `None` until something has played.
     last_track: Option<String>,

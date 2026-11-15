@@ -34,7 +34,8 @@ def main():
     pipe_id = os.readlink(f"/proc/self/fd/{read_end}")
     with tempfile.TemporaryDirectory():
         proc = subprocess.Popen([str(binary)], stdin=read_end, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL)
+                                stderr=subprocess.DEVNULL,
+                                env=dict(os.environ, **common.NO_PROXMOX))
         os.close(read_end)
         try:
             time.sleep(SETTLE_S)

@@ -14,8 +14,8 @@ use crate::{
     modules::{
         clock::calendar::CalendarPopup, cpu::popup::CpuPopup, gpu::popup::GpuPopup,
         media::popup::MediaPopup, mem::popup::MemPopup, network::popup::NetworkPopup,
-        powermenu::PowerMenu, privacy::popup::PrivacyPopup, tray::menu::TrayMenu,
-        updates::popup::UpdatesPopup,
+        powermenu::PowerMenu, privacy::popup::PrivacyPopup, proxmox::popup::ProxmoxPopup,
+        tray::menu::TrayMenu, updates::popup::UpdatesPopup,
     },
     render::Renderer,
 };
@@ -47,13 +47,16 @@ pub(crate) struct Popups {
     pub(crate) privacy: PrivacyPopup,
     /// The pending-updates dropdown.
     pub(crate) updates: UpdatesPopup,
+    /// The Proxmox dropdown.
+    pub(crate) proxmox: ProxmoxPopup,
 }
 
 impl Popups {
     /// The open hosts of the dropdowns that have one (everything but the
     /// power menu, whose overlays are their own catchers).
-    fn hosts(&self) -> [Option<&PopupHost>; 11] {
+    fn hosts(&self) -> [Option<&PopupHost>; 12] {
         [
+            self.proxmox.host(),
             self.updates.host(),
             self.privacy.host(),
             self.media.host(),
@@ -161,6 +164,12 @@ impl Popups {
             }
             return true;
         }
+        if let Some(popup) = self.proxmox.host_mut().and_then(|h| h.surface_mut(surface)) {
+            if popup.configure(shm, width, height) {
+                self.proxmox.paint(&renderer.proxmox, text);
+            }
+            return true;
+        }
         if let Some(popup) = self.tray.host_mut().and_then(|h| h.surface_mut(surface)) {
             if popup.configure(shm, width, height) {
                 self.tray.paint(&renderer.tray, text);
@@ -194,6 +203,7 @@ impl Popups {
             self.media.host_mut(),
             self.privacy.host_mut(),
             self.updates.host_mut(),
+            self.proxmox.host_mut(),
         ];
         let popup = self.power.surface_mut(surface).or_else(|| {
             hosts
@@ -221,6 +231,7 @@ impl Popups {
             .or_else(|| self.media.menu())
             .or_else(|| self.privacy.menu())
             .or_else(|| self.updates.menu())
+            .or_else(|| self.proxmox.menu())
             .or_else(|| self.device.menu())
             .or_else(|| self.mixer.menu())
             .or_else(|| self.calendar.menu())
@@ -253,6 +264,8 @@ impl Popups {
             self.network.snapshot(path, &renderer.network, text)
         } else if self.updates.host().is_some() {
             self.updates.snapshot(path, &renderer.updates, text)
+        } else if self.proxmox.host().is_some() {
+            self.proxmox.snapshot(path, &renderer.proxmox, text)
         } else if self.privacy.host().is_some() {
             self.privacy.snapshot(path, text)
         } else if self.media.host().is_some() {

@@ -2,21 +2,25 @@
 //! `docs/modules/media.md` describes each part): every player, not just the
 //! one the bar shows.
 //!
-//! - **Header:** `Media · N players` and a pill for the liveliest state
-//!   (`playing` green, then `paused` yellow, then `stopped`).
+//! - **Header:** `Dashboard`, across the whole width (the dropdown holds
+//!   more than media now).
+//! - **The player column** (right): its own header, `Media · N players` and
+//!   a pill for the liveliest state (`playing` green, then `paused` yellow,
+//!   then `stopped`), over the player cards only.
 //! - **One card per player**, the bar's player with the accent border: the
 //!   app name in caps and its status word, the title, `artist · album` (left
 //!   out when both are empty), a timeline (`pos / length`; a click seeks
 //!   there if the player can seek), and prev / play-pause / next chips.
 //!
-//! - **The DAC EQ card** to the left of the player cards, side by side under
-//!   the header (`eq_section.rs`): its header and pill, the curve, and one
-//!   chip per profile.
+//! - **The left column:** the DAC EQ card (`eq_section.rs`: its header and
+//!   pill, the curve, and one chip per profile), then, with a `shelly.conf`,
+//!   the smart-plug card under it (`shelly_section.rs`: a row per plug that
+//!   toggles it, its watts, and All on / All off).
 //!
 //! The columns' widths are fixed, so a longer title never resizes it; the
 //! player count and the artist lines change the height (the taller column
-//! wins), which recreates the surface. With no player it's just the header
-//! and the EQ column, one column wide.
+//! wins), which recreates the surface. With no player the player column
+//! stays, with just its header (`no players`), so the width never changes.
 
 use std::fs::File;
 
@@ -29,6 +33,7 @@ use super::{
     Media, display_title,
     eq_section::{self, EqSection},
     graphs::{self, Graphs, VIS_ROW_GAP},
+    shelly_section::{self, ShellyHit, ShellySection},
 };
 use crate::{
     bar::{
@@ -38,7 +43,9 @@ use crate::{
     },
     config::{
         COLORS, Color, FONT,
-        glyphs::{ICON_MEDIA_NEXT, ICON_MEDIA_PAUSE, ICON_MEDIA_PLAY, ICON_MEDIA_PREV},
+        glyphs::{
+            ICON_DASHBOARD, ICON_MEDIA_NEXT, ICON_MEDIA_PAUSE, ICON_MEDIA_PLAY, ICON_MEDIA_PREV,
+        },
     },
     mpris::{MediaCommand, PlayerInfo},
     render::{
@@ -148,6 +155,15 @@ pub(crate) enum MediaPress {
     Player(MediaCommand),
     /// An EQ chip: apply this profile.
     EqProfile(&'static str),
+    /// A smart-plug row: switch plug `index` on (`true`) or off.
+    Plug {
+        /// Which plug, as an index into `Shelly::plugs`.
+        index: usize,
+        /// What to switch it to.
+        on: bool,
+    },
+    /// The `All on` (`true`) or `All off` chip.
+    AllPlugs(bool),
 }
 
 /// A graph panel's (x, width) in the popup (the tests' `dump visualizer`).
@@ -197,6 +213,10 @@ struct Content {
     eq: EqSection,
     /// The EQ chip under the pointer.
     hovered_chip: Option<usize>,
+    /// The smart-plug card, under the EQ card; `None` without a `shelly.conf`.
+    shelly: Option<ShellySection>,
+    /// The plug row or chip under the pointer.
+    hovered_shelly: Option<ShellyHit>,
 }
 
 /// An open dropdown.
@@ -230,7 +250,11 @@ impl MediaPopup {
     ) {
         self.open = None;
         let mut eq = EqSection::new(text, (OUTER_MARGIN, EQ_COL_W));
-        let (cards, size) = layout(media, &mut eq);
+        let mut shelly = media
+            .shelly
+            .enabled()
+            .then(|| ShellySection::new(text, (OUTER_MARGIN, EQ_COL_W), media.shelly.plugs.len()));
+        let (cards, size) = layout(media, (&mut eq, shelly.as_mut()));
         let host = PopupHost::open_centered(
             env,
             output,
@@ -249,6 +273,8 @@ impl MediaPopup {
                 meter_w: timeline_meter_w(text),
                 eq,
                 hovered_chip: None,
+                shelly,
+                hovered_shelly: None,
             },
         });
         self.update_graphs(strips, media);
@@ -269,7 +295,7 @@ impl MediaPopup {
             return;
         };
         let content = &mut open.content;
-        let (cards, size) = layout(media, &mut content.eq);
+        let (cards, size) = layout(media, (&mut content.eq, content.shelly.as_mut()));
         if content.hovered.is_some_and(|(card, _)| card >= cards.len()) {
             content.hovered = None;
         }
@@ -280,7 +306,7 @@ impl MediaPopup {
             content.hovered_timeline = None;
         }
         content.cards = cards;
-        // Height for players and artist lines; width for none <-> some.
+        // Height for players and artist lines (the width is fixed).
         let px = |(w, h): (f64, f64)| (whole_px(w), whole_px(h));
         if px(size) != px(content.size) {
             open.host.resize(env, (whole_px(size.0), whole_px(size.1)));
@@ -424,26 +450,40 @@ impl MediaPopup {
         let hovered = button_at(content, x, y);
         let hovered_timeline = timeline_at(content, media, x, y).map(|(card, _)| card);
         let hovered_chip = content.eq.chip_at(x, y);
-        let now = (hovered, hovered_timeline, hovered_chip);
+        let hovered_shelly = content.shelly.as_ref().and_then(|s| s.hit(x, y));
+        let now = (hovered, hovered_timeline, hovered_chip, hovered_shelly);
         if now
             != (
                 content.hovered,
                 content.hovered_timeline,
                 content.hovered_chip,
+                content.hovered_shelly,
             )
         {
             content.hovered = hovered;
             content.hovered_timeline = hovered_timeline;
             content.hovered_chip = hovered_chip;
+            content.hovered_shelly = hovered_shelly;
             self.paint(media, text);
         }
     }
 
     /// A press at (x, y) on the dropdown (any button, as in C): what it asks
-    /// for, if it hit a seekable timeline, a player chip, or an EQ chip while
-    /// no profile switch is under way. The dropdown stays open.
+    /// for, if it hit a seekable timeline, a player chip, an EQ chip while
+    /// no profile switch is under way, a plug row whose state is known and
+    /// not already switching, or an All on / All off chip. The dropdown
+    /// stays open.
     pub(crate) fn press(&self, (x, y): (f64, f64), media: &Media) -> Option<MediaPress> {
         let content = &self.open.as_ref()?.content;
+        if let Some(hit) = content.shelly.as_ref().and_then(|s| s.hit(x, y)) {
+            return match hit {
+                ShellyHit::Row(index) => {
+                    let on = shelly_section::toggle_target(media.shelly.plugs.get(index)?)?;
+                    Some(MediaPress::Plug { index, on })
+                }
+                ShellyHit::Chip(i) => shelly_section::chip_switches_on(i).map(MediaPress::AllPlugs),
+            };
+        }
         if let Some(chip) = content.eq.chip_at(x, y) {
             if media.eq.busy() {
                 return None;
@@ -468,8 +508,8 @@ impl MediaPopup {
     }
 
     /// Whether a click at (x, y) would do something (the hand cursor): an
-    /// enabled chip, a seekable timeline, or an EQ chip while no profile
-    /// switch is under way.
+    /// enabled chip, a seekable timeline, an EQ chip while no profile switch
+    /// is under way, or what [`Self::press`] takes on the plug card.
     pub(crate) fn over_clickable(&self, (x, y): (f64, f64), media: &Media) -> bool {
         let Some(open) = self.open.as_ref() else {
             return false;
@@ -483,7 +523,39 @@ impl MediaPopup {
                 .is_some_and(|p| button.enabled(p))
         });
         let on_eq_chip = !media.eq.busy() && content.eq.chip_at(x, y).is_some();
-        on_chip || on_eq_chip || timeline_at(content, media, x, y).is_some()
+        let on_plug = content
+            .shelly
+            .as_ref()
+            .and_then(|s| s.hit(x, y))
+            .is_some_and(|hit| match hit {
+                ShellyHit::Row(i) => media
+                    .shelly
+                    .plugs
+                    .get(i)
+                    .and_then(shelly_section::toggle_target)
+                    .is_some(),
+                ShellyHit::Chip(_) => true,
+            });
+        on_chip || on_eq_chip || on_plug || timeline_at(content, media, x, y).is_some()
+    }
+
+    /// Where the tests' `target shelly <what>` points, popup-local
+    /// ([`ShellySection::target`]); `None` without the card.
+    pub(crate) fn shelly_target(&self, what: &str, media: &Media) -> Option<(f64, f64)> {
+        self.open
+            .as_ref()?
+            .content
+            .shelly
+            .as_ref()?
+            .target(what, &media.shelly)
+    }
+
+    /// How many plug rows are shown (the tests' `menu`): `None` when closed,
+    /// 0 without the card.
+    pub(crate) fn shelly_row_count(&self) -> Option<usize> {
+        self.open
+            .as_ref()
+            .map(|o| o.content.shelly.as_ref().map_or(0, ShellySection::rows))
     }
 
     /// Where the tests' `target eq <what>` points, popup-local
@@ -585,12 +657,17 @@ fn status_word(player: &PlayerInfo) -> (&'static str, Color) {
     }
 }
 
-/// The cards for `media`'s players (right column), the EQ card placed left
-/// of them, and the popup's size: two columns wide with players, just the EQ
-/// column without, and as tall as the taller column.
-fn layout(media: &Media, eq: &mut EqSection) -> (Vec<Card>, (f64, f64)) {
+/// The cards for `media`'s players (right column, under its own header), the
+/// EQ card and the plug card placed left of them, one above the other, and the
+/// popup's size: always two columns wide (the player column keeps its header
+/// with no player), as tall as the taller column.
+fn layout(
+    media: &Media,
+    (eq, shelly): (&mut EqSection, Option<&mut ShellySection>),
+) -> (Vec<Card>, (f64, f64)) {
     let top = OUTER_MARGIN + HEADER_H + SECTION_GAP;
-    let mut y = top;
+    // The player column's header, then its cards.
+    let mut y = top + HEADER_H + SECTION_GAP;
     let count = media.players.len();
     let mut cards = Vec::with_capacity(count);
     for (i, player) in media.players.iter().enumerate() {
@@ -621,14 +698,20 @@ fn layout(media: &Media, eq: &mut EqSection) -> (Vec<Card>, (f64, f64)) {
         });
         y += h + if i + 1 < count { CARD_GAP } else { 0.0 };
     }
+    if count == 0 {
+        y = top + HEADER_H; // just the header
+    }
     eq.place(top);
-    let bottom = y.max(top + eq.height());
-    let width = if count == 0 {
-        EQ_COL_W + OUTER_MARGIN * 2.0
-    } else {
-        CARDS_X + CONTENT_W + OUTER_MARGIN
-    };
-    (cards, (width, bottom + OUTER_MARGIN))
+    let mut left_bottom = top + eq.height();
+    if let Some(shelly) = shelly {
+        shelly.place(left_bottom + CARD_GAP);
+        left_bottom += CARD_GAP + shelly.height();
+    }
+    let bottom = y.max(left_bottom);
+    (
+        cards,
+        (CARDS_X + CONTENT_W + OUTER_MARGIN, bottom + OUTER_MARGIN),
+    )
 }
 
 /// The timeline meter's width: the row minus the widest time text.
@@ -674,11 +757,29 @@ fn draw(
     (content, graphs): (&Content, &Graphs),
 ) -> Result<(), cairo::Error> {
     popup_chrome::draw_frame(cr, content.size.0, content.size.1, ACCENT)?;
-    draw_header(
+    let dashboard = Header {
+        icon: Some(ICON_DASHBOARD),
+        icon_color: ACCENT,
+        title: "Dashboard",
+        summary: "",
+        pill: None,
+        pill_fill: ACCENT,
+    };
+    popup_chrome::draw_header(
+        cr,
+        text,
+        (
+            OUTER_MARGIN,
+            OUTER_MARGIN,
+            content.size.0 - OUTER_MARGIN * 2.0,
+        ),
+        &dashboard,
+    )?;
+    draw_media_header(
         cr,
         text,
         media,
-        (content.cards.len(), content.size.0 - OUTER_MARGIN * 2.0),
+        (content.cards.len(), OUTER_MARGIN + HEADER_H + SECTION_GAP),
     )?;
     let active = media.active().map(|p| p.id);
     for (i, card) in content.cards.iter().enumerate() {
@@ -697,15 +798,20 @@ fn draw(
             graphs.paint_under(cr, i, vis_y, media)?;
         }
     }
-    content.eq.draw(cr, text, &media.eq, content.hovered_chip)
+    content.eq.draw(cr, text, &media.eq, content.hovered_chip)?;
+    if let Some(shelly) = &content.shelly {
+        shelly.draw(cr, text, &media.shelly, content.hovered_shelly)?;
+    }
+    Ok(())
 }
 
-/// The header row: the pill is the liveliest state across players.
-fn draw_header(
+/// The player column's header, at `y` over that column only: the pill is the
+/// liveliest state across players.
+fn draw_media_header(
     cr: &cairo::Context,
     text: &mut TextCache,
     media: &Media,
-    (count, width): (usize, f64),
+    (count, y): (usize, f64),
 ) -> Result<(), cairo::Error> {
     let any = |status: &str| media.players.iter().any(|p| p.status == status);
     let (pill, pill_fill) = if any("Playing") {
@@ -728,7 +834,7 @@ fn draw_header(
         pill: Some(pill),
         pill_fill,
     };
-    popup_chrome::draw_header(cr, text, (OUTER_MARGIN, OUTER_MARGIN, width), &header)
+    popup_chrome::draw_header(cr, text, (CARDS_X, y, CONTENT_W), &header)
 }
 
 /// One player's card; `active` (the bar's player) gets the accent border.

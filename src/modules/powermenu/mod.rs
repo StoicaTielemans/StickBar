@@ -183,7 +183,7 @@ pub(crate) struct PowerMenu {
 
 impl PowerMenu {
     /// Whether the menu is showing.
-    pub(crate) fn is_open(&self) -> bool {
+    pub(crate) const fn is_open(&self) -> bool {
         !self.overlays.is_empty()
     }
 

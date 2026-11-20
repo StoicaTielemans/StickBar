@@ -130,7 +130,7 @@ impl Button {
     }
 
     /// Whether it does anything for `player`.
-    fn enabled(self, player: &PlayerInfo) -> bool {
+    const fn enabled(self, player: &PlayerInfo) -> bool {
         match self {
             Self::Prev => player.can_prev,
             Self::PlayPause => true,

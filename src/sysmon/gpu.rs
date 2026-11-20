@@ -184,7 +184,7 @@ fn warn(why: &str) {
 }
 
 /// A performance state as its number (P0 = 0 ... P15 = 15).
-fn pstate_number(state: PerformanceState) -> Option<u8> {
+const fn pstate_number(state: PerformanceState) -> Option<u8> {
     use PerformanceState as P;
     match state {
         P::Zero => Some(0),

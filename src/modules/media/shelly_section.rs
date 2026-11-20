@@ -223,7 +223,7 @@ pub(crate) fn chip_switches_on(i: usize) -> Option<bool> {
 /// shows. `None` (not clickable) while its state is unknown or a switch is
 /// under way. A `Set`, not a `Toggle`, so two quick clicks can't flip it
 /// twice behind a stale view.
-pub(crate) fn toggle_target(plug: &Plug) -> Option<bool> {
+pub(crate) const fn toggle_target(plug: &Plug) -> Option<bool> {
     if plug.pending {
         return None;
     }

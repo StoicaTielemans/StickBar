@@ -125,7 +125,7 @@ pub(crate) struct Shelly {
 
 impl Shelly {
     /// Whether there's a card (a settings file listed plugs).
-    pub(crate) fn enabled(&self) -> bool {
+    pub(crate) const fn enabled(&self) -> bool {
         !self.plugs.is_empty()
     }
 

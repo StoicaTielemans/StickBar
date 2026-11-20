@@ -212,7 +212,7 @@ fn chip_rows(widths: &[f64], x: f64, w: f64) -> Vec<BoxRect> {
 
 /// The pill: whether the EQ is doing anything right now. Applying comes
 /// first, since that's what the user just asked for.
-fn pill(eq: &EqState) -> (&'static str, Color) {
+const fn pill(eq: &EqState) -> (&'static str, Color) {
     if eq.pending.is_some() {
         ("applying", COLORS.yellow)
     } else if !eq.snap.available {

@@ -102,7 +102,7 @@ pub(crate) struct Updates {
 
 impl Updates {
     /// How many updates are pending.
-    pub(crate) fn total(&self) -> usize {
+    pub(crate) const fn total(&self) -> usize {
         self.repo.len() + self.aur.len()
     }
 

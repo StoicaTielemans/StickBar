@@ -87,6 +87,12 @@ wayland-backend = { version = "0.3", features = ["client_system"] }
 [profile.dev.package."*"]
 opt-level = 2
 
+# Debug info: line tables only (file:line in panic backtraces), without the type and
+# variable info only an interactive debugger uses. Measured: the debug binary went
+# from 184 MB to 64 MB and a full rebuild of this crate from 8.2 s to 5.2 s.
+[profile.dev]
+debug = "line-tables-only"
+
 # Not used: `target-cpu=native`. Nearly all CPU time goes to Arch's prebuilt
 # cairo/pango, so the gain can't be measured, and the binary would stop being portable.
 [profile.release]
@@ -219,8 +225,24 @@ string_lit_as_bytes = "warn"
 trivial_regex = "warn"
 inefficient_to_string = "warn"
 naive_bytecount = "warn"
+# From nursery/restriction, picked one by one (the groups as a whole stay off, below).
+missing_const_for_fn = "warn"      # a const fn can be evaluated at compile time (in consts,
+                                   # statics, array lengths) instead of on every call
+needless_pass_by_ref_mut = "warn"  # `&mut` where `&` would do: blocks sharing, and tells
+                                   # the reader something changes when nothing does
+string_lit_chars_any = "warn"      # `"abc".chars().any(|c| c == x)` -> a `match`, no iterator
+verbose_file_reads = "warn"        # File::open + read_to_end -> fs::read (sizes the buffer once)
+large_include_file = "warn"        # a big include_bytes!/include_str! bloats the binary
+set_contains_or_insert = "warn"    # contains() then insert() hashes twice; use insert()'s bool
+iter_on_single_items = "warn"      # `[x].into_iter()` -> iter::once(x)
+iter_on_empty_collections = "warn" # `[].into_iter()` -> iter::empty()
+unnecessary_struct_initialization = "warn"  # `Foo { ..x }` that's just a copy of x
 
 # Considered and left out: arithmetic_side_effects (mostly noise on pixel math;
 # debug builds already panic on overflow, and the tests run the debug build),
 # the whole nursery/restriction groups (the Clippy book advises against both),
 # and clippy::cargo (it wants publishing metadata for a crate that's never published).
+# Also left out: suboptimal_flops (wants `a.mul_add(b, c)`; without a target-cpu that
+# has FMA, which this build deliberately doesn't set, mul_add is a software libm call
+# and *slower* than `a * b + c`), and redundant_pub_crate (fights unreachable_pub above:
+# one wants `pub(crate)` turned into `pub`, the other the reverse).

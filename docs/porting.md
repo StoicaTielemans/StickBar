@@ -361,3 +361,11 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   28.3 → 30.1 MB (Rust), flat after 1.5 h; RSS fell for both once the system started
   swapping, so swap has to be counted. CPU 0.040 % vs 0.050 %. `c-legacy` keeps the C bar;
   `rust-rewrite` merged into `main` (--no-ff); Hyprland runs `StickBar/target/release/stickBar`.
+- 2026-11-20 · Rust-only · More performance lints, picked one by one from nursery/restriction
+  (`missing_const_for_fn`, `needless_pass_by_ref_mut` and 7 more; the reasons for leaving out
+  `suboptimal_flops` and `redundant_pub_crate` are in `Cargo.toml`). 13 functions became
+  `const fn`, and 2 tray methods take `&self`. The release binary is the same size (4,572,616
+  bytes), and release vs release for 60 s is level within noise (own CPU 0.07 vs 0.05 %, RSS
+  59.3 vs 59.2 MB, commits and damage identical). The dev profile now keeps line tables only:
+  debug binary 184 MB → 64 MB, a full rebuild of this crate 8.2 s → 5.2 s. LLD is already
+  the linker (rustc's default since 1.90), so there's nothing to gain there. All 24 tests pass.

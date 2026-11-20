@@ -65,7 +65,7 @@ impl BoxRect {
     clippy::cast_possible_truncation,
     reason = "f64 -> i32 has no lossless conversion; `as` saturates and drops the fraction, which is the intent"
 )]
-pub(crate) fn whole_px(value: f64) -> i32 {
+pub(crate) const fn whole_px(value: f64) -> i32 {
     value as i32
 }
 

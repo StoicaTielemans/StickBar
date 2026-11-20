@@ -375,7 +375,7 @@ fn layout(audio: &AudioState) -> (Vec<Row>, (f64, f64)) {
 }
 
 /// A size in whole px, for Wayland.
-fn px((w, h): (f64, f64)) -> (i32, i32) {
+const fn px((w, h): (f64, f64)) -> (i32, i32) {
     (whole_px(w), whole_px(h))
 }
 

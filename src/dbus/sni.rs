@@ -163,7 +163,7 @@ impl Registry {
     }
 
     /// An item's `NewIcon`: re-reads just its `IconPixmap`.
-    pub(crate) async fn new_icon(&mut self, msg: &Message) {
+    pub(crate) async fn new_icon(&self, msg: &Message) {
         let header = msg.header();
         let (Some(sender), Some(signal_path)) = (header.sender(), header.path()) else {
             return;
@@ -203,7 +203,7 @@ impl Registry {
     }
 
     /// Runs a command from the main thread.
-    pub(crate) async fn command(&mut self, command: TrayCommand) {
+    pub(crate) async fn command(&self, command: TrayCommand) {
         match command {
             TrayCommand::FetchMenu { request, item } => {
                 let entries = match self.items.iter().find(|i| i.id == item) {

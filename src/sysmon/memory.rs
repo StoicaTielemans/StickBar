@@ -124,7 +124,7 @@ impl Memory {
 }
 
 /// Rounds half away from zero (like C's `lround`) and converts to `i32`.
-fn round_i32(value: f64) -> i32 {
+const fn round_i32(value: f64) -> i32 {
     crate::render::whole_px(value.round())
 }
 

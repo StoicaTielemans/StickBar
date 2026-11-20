@@ -22,7 +22,7 @@ use crate::{
 
 /// The status icon, as in the reference's `icon()`: no default route at
 /// all, then down/up each split on Wi-Fi vs Ethernet.
-pub(crate) fn status_glyph(network: &Network) -> char {
+pub(crate) const fn status_glyph(network: &Network) -> char {
     match (network.iface.is_empty(), network.connected, network.wifi) {
         (true, _, _) => ICON_NETWORK_UNKNOWN,
         (false, false, true) => ICON_WIFI_OFF,

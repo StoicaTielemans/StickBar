@@ -559,7 +559,7 @@ impl View {
 }
 
 /// The first day of `month` (1-12) in `year`.
-fn first_of_month(year: i32, month: u32) -> Option<NaiveDate> {
+const fn first_of_month(year: i32, month: u32) -> Option<NaiveDate> {
     NaiveDate::from_ymd_opt(year, month, 1)
 }
 

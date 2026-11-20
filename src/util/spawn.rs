@@ -1,5 +1,5 @@
 //! Starting a child process the safe way (shared by the EQ's profile script,
-//! the updates check and the Proxmox poll).
+//! the updates check, the Proxmox poll and the power menu's `systemctl`).
 //!
 //! **Why `posix_spawn` and not `std::process::Command`:** the bar blocks
 //! SIGINT, SIGTERM and SIGUSR1 in every thread for its signal source, and a
@@ -17,6 +17,12 @@
 //! the bytes the caller gave (a secret that mustn't show in the child's argv,
 //! which every user can read in `/proc/PID/cmdline`), never the bar's own
 //! stdin. stdout is either `/dev/null` or a pipe the caller reads ([`Stdout`]).
+//!
+//! Programs are named by absolute path ([`spawn`], `posix_spawn`), except
+//! where the PATH search is the point: [`spawn_from_path`] (`posix_spawnp`)
+//! is for `systemctl`, because `test_power_menu` guards against a test ever
+//! rebooting the machine by putting a fake `systemctl` first on the test
+//! bar's PATH. An absolute `/usr/bin/systemctl` would walk straight past it.
 
 use std::{
     ffi::CString,
@@ -29,7 +35,7 @@ use std::{
 };
 
 use nix::{
-    spawn::{PosixSpawnAttr, PosixSpawnFileActions, PosixSpawnFlags, posix_spawn},
+    spawn::{PosixSpawnAttr, PosixSpawnFileActions, PosixSpawnFlags, posix_spawn, posix_spawnp},
     sys::{
         signal::{SigSet, Signal},
         wait::{WaitStatus, waitpid},
@@ -47,6 +53,15 @@ pub(crate) enum Stdout {
     Pipe,
 }
 
+/// How the program to start is found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Lookup {
+    /// `path` is absolute and used as is (`posix_spawn`).
+    Absolute,
+    /// `path` is a bare name searched for in the bar's PATH (`posix_spawnp`).
+    Path,
+}
+
 /// The most bytes [`run_capture_with_stdin`] feeds a child. They're written
 /// into the pipe *before* the child starts, with nobody reading yet, so they
 /// must fit the pipe's buffer (64 KiB on Linux); a small cap keeps that
@@ -61,14 +76,26 @@ pub(crate) fn spawn(
     args: &[&[u8]],
     stdout: Stdout,
 ) -> Result<(Pid, Option<OwnedFd>), String> {
-    spawn_with_stdin(path, args, stdout, None)
+    spawn_with_stdin((path, Lookup::Absolute), args, stdout, None)
+}
+
+/// [`spawn`], but `name` is looked up in the bar's PATH, like a shell would.
+/// Only for programs a test must be able to swap for a fake through PATH
+/// (the module doc says why); everything else uses an absolute path.
+pub(crate) fn spawn_from_path(
+    name: &str,
+    args: &[&[u8]],
+    stdout: Stdout,
+) -> Result<(Pid, Option<OwnedFd>), String> {
+    spawn_with_stdin((name, Lookup::Path), args, stdout, None)
 }
 
 /// [`spawn`], with the child's stdin a pipe pre-filled with `stdin` and then
 /// closed (so the child reads exactly those bytes, then EOF), or `/dev/null`
-/// for `None`.
+/// for `None`. The first argument is the program's path or name, and how to
+/// find it.
 fn spawn_with_stdin(
-    path: &str,
+    (path, lookup): (&str, Lookup),
     args: &[&[u8]],
     stdout: Stdout,
     stdin: Option<&[u8]>,
@@ -147,7 +174,14 @@ fn spawn_with_stdin(
     )
     .map_err(|e| e.to_string())?;
 
-    let pid = posix_spawn(path, &actions, &attr, &args, &env).map_err(|e| e.to_string())?;
+    let pid = match lookup {
+        Lookup::Absolute => posix_spawn(path, &actions, &attr, &args, &env),
+        Lookup::Path => {
+            let name = CString::new(path).map_err(|_nul| "a NUL byte in the program name")?;
+            posix_spawnp(&name, &actions, &attr, &args, &env)
+        }
+    }
+    .map_err(|e| e.to_string())?;
     // Both ends of the stdin pipe close here: the child has its own fd 0.
     drop(stdin_pipe);
     // Our copy of the write end closes here (dropped with the tuple), so the
@@ -170,7 +204,7 @@ pub(crate) fn run_capture_with_stdin(
     args: &[&[u8]],
     stdin: Option<&[u8]>,
 ) -> Result<(i32, String), String> {
-    let (pid, read_end) = spawn_with_stdin(path, args, Stdout::Pipe, stdin)?;
+    let (pid, read_end) = spawn_with_stdin((path, Lookup::Absolute), args, Stdout::Pipe, stdin)?;
     let mut out = Vec::new();
     if let Some(read_end) = read_end {
         // Read before waiting: a child writing more than the pipe holds
@@ -191,4 +225,24 @@ pub(crate) fn run_capture_with_stdin(
         | WaitStatus::StillAlive => -1,
     };
     Ok((code, String::from_utf8_lossy(&out).into_owned()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `spawn_from_path` finds a bare name through PATH (`true` lives in
+    /// /usr/bin), and its child exits normally.
+    #[test]
+    fn spawn_from_path_searches_path() {
+        let (pid, pipe) = spawn_from_path("true", &[b"true"], Stdout::Null).unwrap();
+        assert!(pipe.is_none());
+        assert_eq!(waitpid(pid, None).unwrap(), WaitStatus::Exited(pid, 0));
+    }
+
+    /// A bare name given to the absolute-path `spawn` is not searched for.
+    #[test]
+    fn spawn_does_not_search_path() {
+        let _err = spawn("true", &[b"true"], Stdout::Null).unwrap_err();
+    }
 }

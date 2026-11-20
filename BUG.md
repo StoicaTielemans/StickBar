@@ -6,11 +6,7 @@ limitations, as opposed to bugs, are in `docs/limitations.md`.
 
 ## Open
 
-- **Power menu (Rust port): `systemctl` starts with SIGINT, SIGTERM and SIGUSR1 blocked.**
-  `spawn_systemctl()` in `src/wayland/pointer.rs` uses `std::process::Command`, which doesn't
-  reset the signal mask the bar blocks for its signal source (found while porting the EQ, see
-  below). Low impact, since `systemctl reboot`/`poweroff` is short-lived, but the same fix as
-  the EQ launcher (nix `posix_spawn` with an empty mask) applies.
+None.
 
 ## Fixed
 
@@ -177,6 +173,13 @@ limitations, as opposed to bugs, are in `docs/limitations.md`.
 - **Panel sat too low.** Centering by `Output.height` ignored that the surface stops at
   the bars' exclusive zones (1040 of 1080 px with two bars running). Unnoticed for a long
   time. Guard: `tests/test_power_menu.py`.
+- **`systemctl` started with the bar's signals blocked** (Rust port). `spawn_systemctl()`
+  used `std::process::Command`, which keeps the signal mask: SIGINT, SIGTERM and SIGUSR1
+  stayed blocked in `systemctl reboot`/`poweroff`. Found while porting the EQ, whose
+  script had the same problem. Low impact (systemctl is short-lived), fixed 2026-11-20 by
+  starting it through `util::spawn` like every other child. It uses the PATH-searching
+  variant (`spawn_from_path`), because an absolute `/usr/bin/systemctl` would bypass the
+  fake `systemctl` that `test_power_menu` puts first on PATH.
 
 ### Tests
 

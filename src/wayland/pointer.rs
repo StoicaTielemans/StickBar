@@ -38,6 +38,8 @@ use smithay_client_toolkit::{
     },
 };
 
+use nix::sys::wait::{WaitStatus, waitpid};
+
 use super::{App, Output};
 use crate::{
     audio::{Command, Kind, VOLUME_STEP},
@@ -51,6 +53,7 @@ use crate::{
     },
     mpris::MediaCommand,
     render::{Action, BoxRect},
+    util::spawn::{Stdout, spawn_from_path},
 };
 
 /// Linux input event codes for the mouse buttons (`linux/input-event-codes.h`).
@@ -1168,9 +1171,16 @@ impl App {
 /// waits for it, so a failure (e.g. polkit refusing) is logged and the process
 /// is reaped instead of lingering as a zombie. The thread starts long after the
 /// signal source, so it inherits the blocked SIGUSR1 like every other thread.
+///
+/// Started through `util::spawn`, not `std::process::Command`: `Command`
+/// would hand `systemctl` the bar's blocked SIGINT/SIGTERM/SIGUSR1
+/// (`docs/architecture.md`, "Child processes"). Found through PATH on
+/// purpose: `test_power_menu` puts a fake `systemctl` first on it, the second
+/// layer of the guard that keeps a test from rebooting the machine.
 fn spawn_systemctl(verb: &'static str) {
-    let mut child = match std::process::Command::new("systemctl").arg(verb).spawn() {
-        Ok(child) => child,
+    let args: [&[u8]; 2] = [b"systemctl", verb.as_bytes()];
+    let pid = match spawn_from_path("systemctl", &args, Stdout::Null) {
+        Ok((pid, _no_pipe)) => pid,
         Err(err) => {
             eprintln!("stickBar: failed to launch 'systemctl {verb}': {err}");
             return;
@@ -1178,11 +1188,9 @@ fn spawn_systemctl(verb: &'static str) {
     };
     let waiter = std::thread::Builder::new()
         .name("power-action".to_owned())
-        .spawn(move || match child.wait() {
-            Ok(status) if !status.success() => {
-                eprintln!("stickBar: 'systemctl {verb}' failed ({status})");
-            }
-            Ok(_) => {}
+        .spawn(move || match waitpid(pid, None) {
+            Ok(WaitStatus::Exited(_, 0)) => {}
+            Ok(status) => eprintln!("stickBar: 'systemctl {verb}' failed ({status:?})"),
             Err(err) => eprintln!("stickBar: waiting for 'systemctl {verb}' failed: {err}"),
         });
     if let Err(err) = waiter {

@@ -1,4 +1,4 @@
-//! The test-control channel (the C bar's `testing/test_control.c`).
+//! The test-control channel.
 //!
 //! With `STICKBAR_TEST_CONTROL=1`, stdin becomes a command channel for the
 //! Python tests (`tests/lib/common.py`'s `ControlledBar`): one command per line
@@ -6,8 +6,7 @@
 //! boxes are, inject clicks without moving the user's real cursor, and dump
 //! what data sources hold. Without the variable, stdin is never read.
 //!
-//! Command names, arguments and reply shapes match the C bar exactly, so the
-//! same tests run against both. Commands are added as their modules are ported:
+//! The commands (`docs/testing.md` explains the safety rules around them):
 //!
 //! ```text
 //! ping                   -> {"ok":true}
@@ -45,13 +44,13 @@
 //!                           poll `dump updates|proxmox|shelly` until `checking` /
 //!                           `polling` is false)
 //! dump <mem|cpu|gpu|net|audio|eq|media|updates|proxmox|shelly|visualizer>
-//! vis-tone <slot> <channel> <hz>
-//!                        -> synthetic audio for a visualizer slot (synth mode)
 //!                        -> every figure the bar holds (test_sysmon_data,
 //!                           test_network_data, test_audio, test_eq)
+//! vis-tone <slot> <channel> <hz>
+//!                        -> synthetic audio for a visualizer slot (synth mode)
 //! cursor <output> <x> <y> / menu-cursor <x> <y>
 //!                        -> {"ok":true,"shape":"pointer"|"default"}: the cursor
-//!                           the bar would show there (Rust only)
+//!                           the bar would show there
 //! anything else          -> {"ok":false,"error":"unknown command"}
 //! ```
 //!

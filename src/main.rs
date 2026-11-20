@@ -1,8 +1,8 @@
-//! stickBar: a Wayland status bar for Hyprland, being ported from C to Rust.
+//! stickBar: a Wayland status bar for Hyprland.
 //!
-//! This file is the C bar's `main.c`: it sets everything up in a deliberate
-//! order, runs the event loop, and turns how the loop ended into the exit
-//! status. Port progress is tracked in `docs/porting.md`.
+//! This file sets everything up in a deliberate order, runs the event loop,
+//! and turns how the loop ended into the exit status. How the pieces fit
+//! together: `docs/architecture.md`.
 
 // Belt and braces: Cargo.toml already forbids unsafe code crate-wide, but
 // stating it here too means the rule is visible to anyone reading the source,

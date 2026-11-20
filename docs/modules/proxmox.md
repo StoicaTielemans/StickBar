@@ -1,6 +1,6 @@
 # Proxmox
 
-A Rust-bar-only module (no reference or C-bar equivalent), added at the user's
+A module with no reference equivalent, added at the user's
 request: the state of their Proxmox VE server, a way to wake it with Wake-on-LAN, and
 a way to shut it down.
 
@@ -44,8 +44,8 @@ a way to shut it down.
       while running (`stopped`/`paused` otherwise). At most 20 rows, then `+N more`;
     - a `STORAGE` card: name, used / total and %, or `unavailable` in red;
     - at the very bottom, the **Shut down** chip (see below).
-  - It re-lays out after every poll, recreating the surface on a height change (the
-    updates dropdown's rule).
+  - It re-lays out after every poll; a height change resizes it
+    ([popups.md](../popups.md)).
 
 ## Setup
 

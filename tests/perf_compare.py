@@ -4,7 +4,7 @@ with another build -- and prints a table. Not pass/fail: a measuring tool.
 
     python3 tests/perf_compare.py                     # target/debug/stickBar alone, 60s
     python3 tests/perf_compare.py --against HEAD~1    # vs. a git ref, built in a temp worktree
-    python3 tests/perf_compare.py --against main      # Rust port vs. the C bar
+    python3 tests/perf_compare.py --against c-legacy  # vs. the C bar (debug builds)
     python3 tests/perf_compare.py --against /path/to/other/stickBar --seconds 90
 
 Both instances start fresh at the same time (RSS of a long-running bar drifts

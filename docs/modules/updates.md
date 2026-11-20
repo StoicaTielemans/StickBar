@@ -1,6 +1,6 @@
 # Arch updates
 
-A Rust-bar-only module (no reference or C-bar equivalent), added at the user's
+A module with no reference equivalent, added at the user's
 request: how many package updates are waiting, and which.
 
 ## What you see
@@ -16,8 +16,8 @@ request: how many package updates are waiting, and which.
   `AUR` card (an empty one left out), one row per package: name left, `old → new` right
   (a long name is shortened, the versions never are). At most 30 package rows in all
   (`MAX_ROWS`): the AUR card keeps up to 10 (`MAX_AUR_ROWS`), the repo card gets the rest,
-  and a card cut short ends with `+N more`. A finished check re-lays it out (recreating
-  the surface on a height change, the media dropdown's rule); with nothing left it closes.
+  and a card cut short ends with `+N more`. A finished check re-lays it out (a height
+  change resizes it, [popups.md](../popups.md)); with nothing left it closes.
 
 ## Where the numbers come from (`src/updates/mod.rs`)
 
@@ -33,10 +33,9 @@ request: how many package updates are waiting, and which.
   network and can take seconds), one check at a time. The result comes back on a
   calloop channel to `App::updates_result`, which marks the bars dirty and refreshes an
   open dropdown. A source that fails keeps its last good list; the error is shown.
-- **Child processes** are started with `util::spawn` (`posix_spawn`, empty signal mask,
-  SIGPIPE default, stdin/stderr on `/dev/null`, stdout on a close-on-exec pipe), the
-  same helper the EQ's profile script uses. Rule (from the EQ): a child of the bar must
-  never inherit its blocked SIGINT/SIGTERM/SIGUSR1. `test_updates` checks `SigBlk` is 0.
+- **Child processes** are started with `util::spawn` (stdout on a close-on-exec pipe;
+  the rules are in [architecture.md](../architecture.md), "Child processes").
+  `test_updates` checks their `SigBlk` is 0.
 
 ## When it checks
 

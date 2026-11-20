@@ -1,132 +1,110 @@
-# Popups (`bar/popup_surface.c` and every dropdown)
+# Popups (every dropdown, and what each mouse button does)
 
-Shared by all of them; a module's own section only records what differs.
+Shared by all of them; a module's own doc only records what differs.
 
 | Box | Left | Right | Middle | Scroll | Dropdown anchor |
 |---|---|---|---|---|---|
+| workspaces | focus that workspace | | | | |
+| CPU / GPU / memory | | dropdown | | | TOP+LEFT |
+| Proxmox | | dropdown (Wake chip inside) | | | TOP+LEFT |
+| privacy | | dropdown | | | TOP+LEFT |
+| media | play/pause (nothing when idle) | dropdown: players, EQ, smart plugs | next track (nothing when idle) | | TOP, centred on the monitor |
+| tray | see the has-menu rule in [modules/tray.md](modules/tray.md) | same | | | TOP+RIGHT |
+| clock | | calendar (toggle) | | | TOP+RIGHT |
+| network | | dropdown | | | TOP+RIGHT |
 | volume | mute | device dropdown | mixer | ±5% | TOP+RIGHT |
 | mic | mute | device dropdown | | ±5% | TOP+RIGHT |
-| CPU / GPU / memory | | dropdown | | | TOP+LEFT |
-| privacy | | dropdown | | | TOP+LEFT |
 | updates | | dropdown (package list) | | | TOP+RIGHT |
-| media | play/pause (nothing when idle) | dropdown: players + EQ | next track (nothing when idle) | | TOP, centred on the monitor |
-| network | | dropdown | | | TOP+RIGHT |
-| clock | | calendar (toggle) | | | TOP+RIGHT |
-| tray | see the has-menu rule in [modules/tray.md](modules/tray.md) | same | | | TOP+RIGHT |
 | Arch logo | | power menu | | | full-screen overlay |
 
-Inside the media dropdown, a left click on a card's chips plays/pauses or skips,
-a left click on its timeline seeks to that spot
-([modules/media.md](modules/media.md)), and a click on an EQ profile chip applies
-that profile ([modules/eq.md](modules/eq.md)). The EQ has no box of its own any
-more: it lives only in the media dropdown.
+Inside the media dropdown, a card's chips play/pause or skip, a click on its timeline seeks
+([modules/media.md](modules/media.md)), an EQ profile chip applies that profile
+([modules/eq.md](modules/eq.md)), and a plug's chip switches it
+([modules/shelly.md](modules/shelly.md)). The EQ and the plugs have no box of their own.
 
-- **Right-click, because there's no hover**: the reference opens most of these on
-  hover (with a debounce timer, or its tooltip). `wayland/pointer.c` only tracks
-  which single surface the pointer is over, with no hover-duration or per-module
-  enter/leave callbacks, and building that wasn't judged worth it when right-click
-  was free and is a conventional way to expose a secondary action. Status-only
-  widgets (CPU/GPU/memory, network, privacy) have no obvious "primary action", so
+## Behaviour
+
+- **Right-click, because there's no hover-open.** The reference opens most of these on hover
+  (with a debounce timer, or its tooltip). The bar does track the pointer (for hover colours
+  and the cursor), but opening on hover would need hover-duration timers per box; right-click
+  was free and is a conventional way to show a secondary action. Status-only boxes
+  (CPU/GPU/memory, network, privacy, updates, Proxmox) have no obvious primary action, so
   left-click does nothing; `SystemMonitorWidget.qml` has no `onClicked` at all.
-- **Hand cursor (Rust port only):** the C bar never sets a cursor. The Rust port shows a
-  hand over every bar box and dropdown target that reacts to a click (any button, so
-  right-click-only boxes count) and the arrow elsewhere, catchers included. Each module
-  marks its boxes `clickable`, and each dropdown answers "is (x, y) a target". See
-  `docs/porting.md` "Rust-only additions".
-- **Look**: a `mantle` surface with the module's accent as a
-  `BAR.module_border_width` border, square corners; a header (glyph, bold title,
-  dim summary, and a filled status pill on the right); `base` cards with a 1px
-  `surface1` border, a 2px accent border marking the current item (active player,
-  default device, current month, active profile), hover lightening to `surface0`.
-  This came from a restyling pass over every popup, per explicit user request, in
-  this order: calendar, network, GPU, CPU, memory, media, audio/mixer, tray, then
-  EQ, power menu and privacy.
-- **Shared code, not copies**: the look lives in `render/popup_chrome.c`
-  (`popup_draw_frame`, `popup_draw_header` -- which ellipsizes text that would run
-  into the pill -- `popup_draw_card`) with the tokens in `render/popup_style.h`; the
-  surface, its placement under the box, the catchers and open/close/resize in
-  `bar/popup_host.c` (`PopupHost`); the stat dropdowns' graph card, axis, rows and
-  top-apps list in `render/stat_card.c`. `wayland/pointer.c` routes clicks and hover
-  through one table of popup kinds. Each of these used to be repeated in every
-  dropdown (11 copies of the catcher code, 10 of the header and pill); a popup that
-  really differs keeps a local `#define` with a comment saying why.
-- **First paint**: `popup_surface.c` caches the last draw callback and self-triggers
-  from its own `configure` handler (mirroring how `bar_surface.c`'s `configure`
-  handler calls `bar_surface_mark_dirty()`), because the first
-  `popup_surface_render_now()` runs before the first `configure` has been processed.
-- **`top_margin` subtracts `BAR.height` from the trigger's bottom edge**, not just
-  `box_y + box_h`. The layer-shell spec text describes `set_margin`'s distance as
-  measured from the raw output edge, but the first popup (the tray's) rendered one
-  full bar-height too low without the subtraction. The working theory (reasoned from
-  the spec text plus the suspiciously round size of the gap, not confirmed against
-  Hyprland's source) is that Hyprland measures a layer surface's margin from the
-  edge of its *already-reserved exclusive-zone region* when the margin is set by the
-  same client that owns that reservation, so the bar's own 20px zone was being added
-  a second time.
-- **Anchor by which side of the bar the trigger is on**: right-region popups grow
-  leftward from the trigger's right edge, left-region ones rightward from its left
-  edge (`left_margin = box_x`). Media sits in the center, so its dropdown is
-  centred on the monitor (`PopupHost::open_centered`: anchored TOP only, which
-  layer-shell centres horizontally, so a width change stays centred too; it was
-  TOP+LEFT, which pushed the two-column dropdown off to the right). Audio dropdowns anchor right
-  where the reference left-aligns under the widget, to reuse already-correct math.
-- **Dismissal: one full-screen, fully transparent, `LAYER_TOP` click-catcher per
-  currently-known output**, not just the output the menu is on. The reference's
-  `HyprlandFocusGrab` captures compositor-wide; this machine has 2 monitors, so a
-  single-output catcher would leave a menu stuck open after a click on the other
-  one. The menu itself is on `LAYER_OVERLAY` (strictly above the catchers) so it
-  reliably receives its own clicks first, without depending on same-layer
-  creation-order stacking. A click on the menu's own surface is absorbed.
-- **Catchers are backed by a 1x1 buffer stretched with `wp_viewporter`**
-  (`popup_surface_create_catcher()`), not a full-output buffer: the surface size comes
-  from `wp_viewport_set_destination()` (set from each `configure`), and the input region
-  still covers the whole output. Falls back to a full-size buffer if the compositor has
-  no `wp_viewporter` (bound optionally in `registry.c`).
-- **Changing height while open means recreating the menu surface, not `set_size()`**:
-  Hyprland unmaps a popup whose `zwlr_layer_surface_v1_set_size()` shrinks it.
-  Destroy-and-recreate (`popup_host_resize()`) is the same path every popup open
-  already uses. The mixer, device and media popups do this when their rows change;
-  the rest are a fixed size while open.
-- **Animation goes on a subsurface, not into the popup**: the media dropdown's
-  spectrum is a `bar/strip_surface.c` child of the popup surface, so the popup
-  itself still only repaints on discrete changes. When a popup surface is
-  recreated (height change), its strip must be destroyed first and recreated on
-  the new one.
-- **Live vs. snapshot**: audio and media re-read their always-current local cache on
-  every update while open (`*_refresh_if_open()`, a no-op when closed), with fixed
-  content widths (340px audio, 360px media) so only the height can change. The tray
-  (a one-shot D-Bus fetch), calendar (today's date) and privacy (which only changes
-  on a real PipeWire graph change, and re-snapshots on each right-click) snapshot at
-  open, since they're short-lived. CPU/GPU/memory/network repaint on the 5s poll; EQ on
-  its state write.
-- **Popups mostly don't coordinate.** Each kind is an independent singleton (at most
-  one of a kind open), and opening one doesn't close another kind: e.g. right-click
-  a tray icon, then the volume box, and both stay open. A rare, undefended v1 edge
-  case. The exceptions hang off the same spot and close each other: CPU/GPU/memory,
-  and the mixer with the sink dropdown. It matters most for the power menu, whose
-  full-screen surface covers whatever else was left open without closing it.
-- **Graph width (network, CPU, GPU, memory)**: `stat_graph_cells()` fits as many
-  cells as the card holds (`braille_graph_cells_for_width()`), the histories hold 120
-  samples (10 min at one per 5s poll) so a wide card can fill, peaks are taken over the
-  visible samples only, and the axis label comes from the real span
-  (`braille_graph_span_label()`: e.g. `8 min ago`). 30 cells stays as each card's
-  minimum width.
+- **Hand cursor** over every bar box and dropdown target that reacts to a click (any
+  button, so right-click-only boxes count), arrow elsewhere, catchers included
+  (`wp_cursor_shape_v1`). Each module marks its boxes `clickable`, and each dropdown answers
+  "is (x, y) a target" through `App::cursor_shape_at`. Guarded by `test_cursor_shape`.
+- **Popups mostly don't coordinate.** Each kind is a singleton (at most one of a kind
+  open), and opening one doesn't close another kind: right-click a tray icon, then the volume
+  box, and both stay open. The exceptions hang off the same spot and close each other:
+  CPU/GPU/memory, and the mixer with the sink dropdown. It matters most for the power menu,
+  whose full-screen surface covers whatever else was left open without closing it.
 
-## In the Rust port
+## Look
 
-- **Files:** `src/bar/popup_surface.rs` (`PopupSurface`: a menu or a catcher),
-  `src/bar/popup_host.rs` (`PopupHost`: a menu and its catchers, placed under the box),
-  `src/bar/popups.rs` (`Popups`: one field per dropdown kind, which replaces the C
-  `POPUP_ROUTES` table), `src/render/popup_chrome.rs` (frame and card), and
-  `src/wayland/pointer.rs` (seat, pointer and routing). A dropdown holds
+A `mantle` surface with the module's accent as a `BAR.module_border_width` border, square
+corners; a header (glyph, bold title, dim summary, and a filled status pill on the right,
+with text that would run into the pill ellipsized); `base` cards with a 1px `surface1`
+border, a 2px accent border marking the current item (active player, default device,
+current month, active profile), hover lightening to `surface0`.
+
+## Code
+
+- `src/bar/popup_surface.rs`: `PopupSurface`, a menu or a catcher.
+- `src/bar/popup_host.rs`: `PopupHost`, a menu and its catchers, placed under the box
+  (`open_left`, `open_right`, `open_centered`) and resized (`resize`). A dropdown holds
   `Option<PopupHost>`; dropping it closes the menu and every catcher.
+- `src/bar/popups.rs`: `Popups`, one field per dropdown kind.
+- `src/render/popup_chrome.rs` (frame, header, card) with the tokens in
+  `src/render/popup_style.rs`; `src/render/stat_card.rs` for the stat dropdowns' graph card,
+  axis, rows and top-apps list. A popup that really differs keeps a local constant with a
+  comment saying why.
+- `src/wayland/pointer.rs`: seat, pointer, and routing clicks and hover.
+
+## Rules
+
 - **First paint:** a paint before the first configure only sets `needs_paint`, and
   `PopupSurface::configure` returns it so the owner paints again. Nothing keeps the drawn
   frame: the drawing goes into a temporary image that's freed after the copy into shm, so an
-  open dropdown costs only its shm buffer (keeping a copy would add its full size again).
-  `snapshot` redraws into a fresh image, the same as C. Because of that, `test_calendar`
-  checks the first paint in the `WAYLAND_DEBUG` log rather than in a snapshot.
-- **Catchers** with a viewporter: 1×1 buffer, `set_destination` on every configure. Without
-  one: a full-size transparent buffer. SCTK has no viewporter helper:
-  `src/wayland/viewporter.rs` binds it and implements SCTK's `Dispatch2` for it (it has no
-  events).
+  open dropdown costs only its shm buffer. `snapshot` redraws into a fresh image, which is
+  why `test_calendar` checks the first paint in the `WAYLAND_DEBUG` log, not a snapshot.
+- **The top margin subtracts `BAR.height` from the trigger's bottom edge**, not just
+  `box_y + box_h`. The layer-shell spec measures `set_margin` from the output edge, but the
+  first popup rendered one bar-height too low without it. Working theory (from the spec
+  text and the round size of the gap, not confirmed in Hyprland's source): Hyprland
+  measures a layer surface's margin from the edge of the exclusive zone reserved by the same
+  client, so the bar's own zone was being added twice.
+- **Anchor by which side of the bar the trigger is on**: right-region popups grow leftward
+  from the trigger's right edge, left-region ones rightward from its left edge. Media sits in
+  the centre, so its dropdown is anchored TOP only, which layer-shell centres horizontally,
+  so a width change stays centred too. Audio dropdowns anchor right where the reference
+  left-aligns under the widget.
+- **Dismissal: one full-screen, transparent, `LAYER_TOP` click-catcher per output**, not
+  just the output the menu is on. The reference's `HyprlandFocusGrab` captures
+  compositor-wide; with 2 monitors, a single-output catcher would leave a menu stuck open
+  after a click on the other one. The menu itself is on `LAYER_OVERLAY`, strictly above the
+  catchers, so it gets its own clicks first. A click on the menu's own surface is absorbed.
+- **Catchers are a 1x1 buffer stretched with `wp_viewporter`**: `set_destination` on every
+  configure, and the input region still covers the whole output. Without a viewporter, a
+  full-size transparent buffer. SCTK has no viewporter helper: `src/wayland/viewporter.rs`
+  binds it and implements SCTK's `Dispatch2` for it (it has no events).
+- **Changing size while open means recreating the menu surface, not `set_size()`**:
+  Hyprland unmaps a popup whose `set_size()` shrinks it. `PopupHost::resize` replaces the
+  menu surface (the catchers stay), the same path as an open. The mixer, device, media,
+  updates and Proxmox dropdowns do this when their rows change; the rest are a fixed size
+  while open.
+- **Animation goes on a subsurface, not into the popup**: the media dropdown's spectrum is a
+  `bar/strip_surface.rs` child of the popup surface, so the popup itself only repaints on
+  discrete changes. When a popup surface is recreated, its strips must be destroyed first
+  and recreated on the new one.
+- **Live vs. snapshot**: audio and media re-read their always-current cache on every update
+  while open, with fixed content widths (340 px audio, 360 px media per column) so only the
+  height changes. The tray (a one-shot D-Bus fetch), calendar and privacy (re-snapshotted on
+  each right-click) snapshot at open. CPU/GPU/memory/network repaint on the 5 s poll
+  (`refresh_if_open`); updates, Proxmox and the media dropdown's cards when their data
+  arrives (`refresh`).
+- **Graph width (network, CPU, GPU, memory)**: as many cells as the card holds
+  (`braille_graph::cells_for_width`); histories hold 120 samples (`util::history::HISTORY_LEN`,
+  10 min at one per 5 s poll) so a wide card can fill; peaks are taken over the visible
+  samples only, and the axis label comes from the real span (`braille_graph::span_label`,
+  e.g. `8 min ago`). 30 cells is each card's minimum width.

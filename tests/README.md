@@ -9,7 +9,8 @@ they check the exact binary you run. They use only the Python standard library
 without it).
 
 The dropdown tests drive the bar through its **test-control channel**
-(`src/testing/test_control.c`, enabled only by `STICKBAR_TEST_CONTROL=1`):
+(`src/testing/mod.rs`, whose header lists every command; enabled only by
+`STICKBAR_TEST_CONTROL=1`):
 commands on stdin, one JSON reply per line on stdout. They inject clicks,
 drags and scrolls into the bar's own pointer routing, read what its data
 sources hold (`dump`), and render the open dropdown to a PNG (`snapshot`)
@@ -36,54 +37,42 @@ python3 tests/run_all.py --bin PATH      # test a different binary
 Extra bars flash at the top of the screen while the tests run. Exit status: 0 is
 pass, 1 is fail, 77 is skipped (for example, no NVIDIA driver).
 
+Two tests depend on the machine more than the code: `test_sysmon_data` fails while other
+apps hold more memory than its 400 MB child, and `test_nvml_vs_smi` failed while the
+driver's `nvidia-smi` printed a fractional temperature (driver 620).
+
+Unit tests (`cargo test`, part of `./build.sh`) cover what can be tested without a
+compositor: parsers, layout and date maths.
+
 | Test | Checks | Guards against |
 |---|---|---|
-| `test_workspaces.py` | Against `lib/fake_hyprland.py` (never the real Hyprland): pills appear for occupied workspaces in the monitor's range; `openwindow>>` re-queries and adds a pill, `activewindow>>` doesn't re-query. A left click on a pill sends exactly `dispatch hl.dsp.focus({ workspace = N })` (no quotes), and a right click sends nothing. After a Lua rejection it falls back to `dispatch workspace N` and stays on that form. A dropped event socket is reconnected and still works. | Re-querying on every event (fails with the filter broken), quoted dispatches, lost classic fallback or caching, no reconnect. Passes against the C bar too. |
-| `test_calendar.py` | A right-click on the clock opens the calendar with 1 catcher, a mauve border and a mantle background. The menu surface has a buffer attached and committed before any other input. The chevrons and the year text navigate (next ≠ home, back = home, prev differs from both), hover highlights and clears, a left-click does nothing, and a catcher click closes it with 0 catchers left. Opening adds under 4 MB RSS, and a `wp_viewport.set_destination` appears. | A lost first paint (fails when the fix is removed), broken year navigation or hover, leaked or full-size catchers. Passes against the C bar too. |
-| `test_cursor_shape.py` | **Rust-only addition.** Through the `cursor`/`menu-cursor` commands, the clock box and the calendar's chevrons and year text get a hand cursor, while the empty bar and a month card get the arrow. Skips against the C bar. | A clickable box or dropdown target that doesn't show the hand (fails with the clock's `clickable` off). |
+| `test_workspaces.py` | Against `lib/fake_hyprland.py` (never the real Hyprland): pills appear for occupied workspaces in the monitor's range; `openwindow>>` re-queries and adds a pill, `activewindow>>` doesn't re-query. A left click on a pill sends exactly `dispatch hl.dsp.focus({ workspace = N })` (no quotes), and a right click sends nothing. After a Lua rejection it falls back to `dispatch workspace N` and stays on that form. A dropped event socket is reconnected and still works. | Re-querying on every event (fails with the filter broken), quoted dispatches, lost classic fallback or caching, no reconnect. |
+| `test_calendar.py` | A right-click on the clock opens the calendar with 1 catcher, a mauve border and a mantle background. The menu surface has a buffer attached and committed before any other input. The chevrons and the year text navigate (next ≠ home, back = home, prev differs from both), hover highlights and clears, a left-click does nothing, and a catcher click closes it with 0 catchers left. Opening adds under 4 MB RSS, and a `wp_viewport.set_destination` appears. | A lost first paint (fails when the fix is removed), broken year navigation or hover, leaked or full-size catchers. |
+| `test_cursor_shape.py` | Through the `cursor`/`menu-cursor` commands, the clock box and the calendar's chevrons and year text get a hand cursor, while the empty bar and a month card get the arrow. | A clickable box or dropdown target that doesn't show the hand (fails with the clock's `clickable` off). |
 | `test_control_channel.py` | On a test-control instance: `ping`, `outputs` (only the test monitor, with a bar and hyprctl's width), `rects` by name and index, an unknown command answered with an error. The bar surface gets an empty input region before its first commit. After stdin closes, the bar keeps running and stays idle. | A channel that stops answering, a test bar that eats the user's real clicks, a loop spinning on a closed stdin (200 ticks/2 s when put back). |
 | `test_wayland_disconnect.py` | Runs the bar through `lib/wlproxy.py`, kills the proxy, and expects the bar to exit with status 1 within 3s. | Spinning at 100% CPU after a compositor crash or restart. |
 | `test_clock_alignment.py` | With `STICKBAR_TEST_CLOCK_SECONDS` (seconds shown), the first commit of every second lands within 50ms of the second boundary (measured: under 1ms). | Clock seconds lagging real time by up to 1s. |
 | `test_no_subprocess.py` | The bar spawns no child processes over 12s. It samples `/proc` every 3ms, which covers two 5s polls. | Running `nvidia-smi` every 5s again. |
 | `test_redraw.py` | With `STICKBAR_TEST_CLOCK_SECONDS` (a clock tick every second): at least a quarter of commits (and at least 3) damage less than 2000px. 40 PulseAudio events that set the volume and mute to their current values cause no extra commits. | Full-bar redraws on every clock tick, and commits for frames that didn't change. |
-| `test_stdin_intact.py` | After startup, fd 0 is still the stdin pipe the bar was given. | `shm_buffer.c` closing fd 0 for every surface: a zeroed `ShmBuffers` has `fd == 0`, and the old `fd >= 0` check closed it (stdin, or another surface's memfd). |
+| `test_stdin_intact.py` | After startup, fd 0 is still the stdin pipe the bar was given. | A surface closing fd 0 (stdin): the C bar's zeroed `ShmBuffers` had `fd == 0` and closed it ([BUG.md](../BUG.md)). |
 | `test_popups.py` | Each dropdown (CPU, GPU, memory, network, calendar, volume, mixer, mic, media with its EQ card) opens from an injected click with exactly one catcher, draws the module's accent border on a mantle background, and closes from a catcher click. The CPU/GPU/memory dropdowns replace each other; catchers use `wp_viewport`; an open dropdown adds under 4 MB RSS. | Leaked catchers, a dropdown that doesn't open or close, full-size catcher buffers (~8 MB per output). |
 | `test_popup_graphs.py` | In a PNG of the open memory/CPU/GPU dropdown, the newest graph dots sit within 14 px of the card's right border. | The fixed 5-minute graph centred in a wider card (dots ended 47-77 px short). |
 | `test_sysmon_data.py` | Memory (apps/free/available/shared/swap, PSI, zram) and CPU (model, threads, cores, max clock, P/E split, uptime) match `/proc` and sysfs. A 400 MB child shows up in the top apps at ≥ 95 % of that, and 2 busy loops show as `sh` at ~2/threads of the CPU. | Wrong meminfo fields, RSS-instead-of-private memory, a broken process-percent formula. |
-| `test_network_data.py` | Interface, gateway, IP, MAC, MTU and DNS match `ip`/`/sys`/`resolv.conf`; rx/tx totals fall between the kernel counters read before and after; history grows one sample per poll. | Parsing regressions in `network_client.c`. |
+| `test_network_data.py` | Interface, gateway, IP, MAC, MTU and DNS match `ip`/`/sys`/`resolv.conf`; rx/tx totals fall between the kernel counters read before and after; history grows one sample per poll. | Parsing regressions in `src/network/`. |
 | `test_audio.py` | On a throwaway null sink: a meter press sets ~75 %, a drag ends at ~25 %, scroll steps +5 %, the mute chip toggles. The mic dropdown lists only non-monitor sources. The mixer grows when a `paplay` stream starts, its slider and mute chip work, and it shrinks when the stream ends. Never touches a real device's volume or the default device. | Broken device-volume controls, monitors back in the mic list, a mixer that doesn't resize. |
 | `test_media.py` | Against `lib/fake_mpris.py`: metadata (incl. album) and status are read right; the play/next/prev chips send PlayPause/Next/Previous; a click a quarter of the way along the timeline sends `SetPosition` with the track id and ~50 s of the 200 s track, and the dropdown stays open; the popup shrinks when the player quits (shorter, or narrower when its player column goes) and never grows, and stays open (the EQ card) even if it was the only one; then (only when no other player is around, e.g. under `dbus-run-session`) the box stays, showing the fake's track as `idle_text`. | Broken controls or seeking, a popup stuck at its open-time size. |
 | `test_visualizer.py` | **No real audio**: the bar's visualizer runs in synthetic mode (no PipeWire, no capture streams; tones set with `vis-tone`). Two silent `lib/fake_mpris.py` players, A with 1 kHz in the left channel only, B with 3 kHz in the right only. Dropdown closed, even while both play: every slot's levels stay zero. Open: each card's graph peaks at its own band in its own half only; a PNG shows A's tone column lit near the top of the left half, unlit under the centre line and at a quiet column; pausing A commits its falling graph as frames of its own subsurface and it settles to zero. Closed again: all zero. | Any visualizer work with the dropdown closed; the channels or cards mixed up; the graph missing, wrongly drawn or not animating on its subsurface; a paused graph frozen mid-pose. |
 | `test_eq.py` | With a scratch `XDG_CACHE_HOME` and `lib/fake_eq_script.py` as `BLACKPEARL_EQ_SCRIPT` (the real script and the DAC are never touched): on its own session bus (`dbus-run-session`, so real players can't resize the dropdown), in the media dropdown's EQ card (opened with a fake player) the active profile's chip has the accent border and hovering lightens a chip; a click runs `profile NAME`, the pill goes yellow, and the state write moves the border and turns the pill green at the same popup size; EQ off and no state file both give a grey pill. | A broken profile click path, a pill or border that doesn't follow the state. |
 | `test_tray.py` | Against `lib/fake_tray.py`: the fake's icon appears; its menu shows every entry with access-key underscores stripped, checkmark/radio state and the submenu marker; 3 separators make 4 cards on a grey border; a disabled entry is inert; a click sends that entry's `clicked` event and closes the menu. | Raw `_` labels, lost toggle state, a broken click path. |
-| `test_power_menu.py` | Every thread of the bar has SIGUSR1 in `SigBlk`; SIGUSR1 (the Hyprland keybind's signal, sent to the test instance's pid only) opens and closes the overlay, and a burst of them leaves the bar running; an Arch-logo right click opens it (a left click doesn't), a background click closes it. The panel is centered on its surface; a hovered card takes its action's colour; a header click is absorbed; each card picks its own action. A test-control instance only records the action, and also has a fake `systemctl` and a dead Hyprland socket, so nothing can really run; the real calls aren't covered. | SIGUSR1 blocked only after NVML started its threads, so the keybind killed the bar (exit by signal 10). A panel centered by output height, not surface height. |
+| `test_power_menu.py` | Every thread of the bar has SIGUSR1 in `SigBlk`; SIGUSR1 (the Hyprland keybind's signal, sent to the test instance's pid only) opens and closes the overlay, and a burst of them leaves the bar running; an Arch-logo right click opens it (a left click doesn't), a background click closes it. The panel is centered on its surface; a hovered card takes its action's colour; a header click is absorbed; each card picks its own action. A test-control instance only records the action, and also has a fake `systemctl` and a dead Hyprland socket, so nothing can really run; the real calls have no automated test (checked by hand). | SIGUSR1 blocked only after NVML started its threads, so the keybind killed the bar (exit by signal 10). A panel centered by output height, not surface height. |
 | `test_privacy.py` | A `parecord` on a throwaway null sink's monitor (no real mic): the box appears, the dropdown lists it under MICROPHONE with the maroon border and pill, a catcher click closes it, and the box collapses when the stream ends. Your own bar shows the indicator for those seconds too. | A dropdown missing its stream, a box that never collapses. |
 | `test_updates.py` | Against `lib/fake_updates.py` as both `checkupdates` and `yay -Qua` (never pacman, the AUR or the network): no box before a check; after `refresh updates` with 40+2 updates the box appears, `dump updates` lists exactly the fake's lines and the dropdown shows the 30-row cap; a failed repo check keeps the list and adds an error line; nothing to update hides the box and closes the dropdown; every run had `SigBlk` 0. | A broken parser or exit-code handling, a box that doesn't follow the check, an uncapped list, a child started with the bar's blocked signals (fails with the mask reset removed: `SigBlk 0x4202`). |
 | `test_proxmox.py` | Against `lib/fake_proxmox.py` as curl, a settings file in a temp dir and a UDP socket on localhost (never a real server, the LAN or a broadcast): a bar without `STICKBAR_TEST_PROXMOX_CONF` has no module; `--` before a poll; "up" gives `2/3` (template left out), the guest list and 3 dropdown rows with no Wake chip; "off" re-lays the open dropdown out with a Wake chip under a hand cursor; clicking it delivers exactly the 102-byte magic packet for the MAC and shows waking, which an "off" poll keeps and "up" ends; Shut down arms on a first click without sending, re-arms after the 5 s window, and POSTs `command=shutdown` to `/nodes/pve/status` on a quick second click; a 403 shows the permission error, a 200 shows the guest count in peach until an "off" poll; a 401 keeps the guests and shows `!`; every curl run had the token only on stdin, `--insecure` + the pin, and `SigBlk` 0. | A token leaked into `/proc/PID/cmdline`, a wrong magic packet, a shutdown sent on one click, off/error states mixed up, waking or shutting down ended too early, a dropdown that doesn't re-lay out, a child with the bar's blocked signals. |
 | `test_shelly.py` | Against `lib/fake_shelly.py` (fake Gen3 plugs on localhost ports, never a real plug): a bar without `STICKBAR_TEST_SHELLY_CONF` has no plug card; nothing is requested while the media dropdown is closed; opening it reads on + watts, off, offline (a dead port) and `password set` (401); it polls again within 3.5 s while open; the hand cursor shows only on switchable rows and the chips; a row click sends `Switch.Set` to the opposite state and the watts follow; an offline row does nothing; All off / All on switch every plug; the size never changes; nothing is requested after it closes. | Real plugs touched by a test, polling while closed, a Toggle instead of a Set, offline/error mixed up, a stale view, a resize on a state change. |
-| `test_nvml_vs_smi.py` | Makes the same NVML calls as `sysmon_client.c` and compares the results with `nvidia-smi`: usage, temperature, memory, fan, power and P-state, plus the GPU dropdown's name, driver, power limit, max clock and per-process VRAM list. | Wrong units, memory read through the v1 call (which counts reserved memory), or a wrong process-info struct layout. |
+| `test_nvml_vs_smi.py` | Makes the same NVML calls as `src/sysmon/gpu.rs` and compares the results with `nvidia-smi`: usage, temperature, memory, fan, power and P-state, plus the GPU dropdown's name, driver, power limit, max clock and per-process VRAM list. | Wrong units, or memory read through the v1 call (which counts reserved memory). |
 
-The tests were checked in both directions. Against the build from before these
-fixes (commit `1814d4e`), every original test except the NVML one **fails**,
-each for the bug it guards against. They all pass on the current build. The
-NVML test checks the library calls themselves, not the bar, so it passes on
-both builds.
-
-The dropdown tests were checked the same way, by putting each bug back into
-the current source, rebuilding and running the test, which then failed:
-- the old `fd >= 0` close: `test_stdin_intact` (fd 0 became a shm memfd);
-- a fixed 30-cell graph: `test_popup_graphs` (dots 47/77/23 px short);
-- catchers without viewporter: `test_popups` (+8.2 MB);
-- no monitor filter: `test_audio` (6 mic cards instead of 2);
-- no media recreate: `test_media` (popup stuck at 300 px);
-- no mixer recreate: `test_audio` (mixer stuck at 116 px);
-- no accent border on the active profile chip: `test_eq` (border stayed
-  `surface1`);
-- raw DBusMenu labels: `test_tray` ("Show Notifications" not found);
-- the power panel centered by output height: `test_power_menu` (456 px above,
-  416 below);
-- SIGUSR1 blocked late, as before the fix: `test_power_menu` (the bar died
-  of signal 10; an NVML thread, `cuda00001c00008`, didn't block it).
+Each test was checked in both directions: it fails with the bug it guards put back (or on
+the build from before the fix), and passes now. The "Guards against" column says which bug.
 
 `test_audio`'s mixer check waits for its own stream by name and compares
 the popup's drawn card count with its row count, instead of expecting the
@@ -102,6 +91,11 @@ python3 tests/perf_compare.py                         # target/debug/stickBar al
 python3 tests/perf_compare.py --against HEAD~1        # compare with a git ref (built in a temp worktree)
 python3 tests/perf_compare.py --against ../other/stickBar --seconds 90
 ```
+
+A git ref is built as a debug build. Compare release with release where it matters:
+`--bin target/release/stickBar --against <another release binary>` (for the C bar, a
+release build of the `c-legacy` branch). Unoptimized builds mostly measure the missing
+optimizations.
 
 It reports:
 - **CPU**, including spawned child processes.
@@ -122,6 +116,10 @@ starts with fresh starts.
 - `common.py` also has `ControlledBar` (start a test-control instance, send
   commands, wait for the popup state), `pick_test_output()`, and a stdlib PNG
   reader (`png_pixels()`) with the Catppuccin colours to compare against.
+- `fake_hyprland.py`: Hyprland's two sockets, for `test_workspaces` (never the real one).
+- `fake_eq_script.py`, `fake_updates.py`, `fake_proxmox.py`, `fake_shelly.py`: stand-ins for
+  the DAC script, `checkupdates`/`yay`, curl against Proxmox, and Shelly plugs, so no test
+  touches real hardware, pacman or the network.
 - `fake_mpris.py`: an MPRIS player that only logs the calls it gets, so
   media tests never pause or skip a real one.
 - `fake_tray.py`: a StatusNotifierItem with a DBusMenu that only logs

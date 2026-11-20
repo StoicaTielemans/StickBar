@@ -6,7 +6,7 @@ A from-scratch status bar for [Hyprland](https://hyprland.org/), written in Rust
 cairo/pango — no GTK, no other UI toolkit.
 
 It started as a C bar and was ported to Rust module by module, with the same
-look, behaviour and tests (the port's record is [`docs/porting.md`](./docs/porting.md)).
+look, behaviour and tests (the record is [`docs/porting.md`](./docs/porting.md)).
 The C version is kept on the `c-legacy` branch.
 
 > [!IMPORTANT]
@@ -46,7 +46,8 @@ The C version is kept on the `c-legacy` branch.
   NVIDIA-only (read in-process through NVML, the library behind
   `nvidia-smi`) — the module just shows `--` without one.
 - **Media player** — shows whatever's currently playing over MPRIS (Spotify,
-  browsers, VLC, mpv, etc.), click to play/pause, right-click for a dropdown
+  browsers, VLC, mpv, etc.), click to play/pause, middle-click for the next
+  track, right-click for a dropdown
   with a card per open player: title, artist, a live stereo spectrum of that
   player's own audio (braille dots like the network graph, left channel up,
   right channel down), a playback timeline and prev/play-pause/next buttons.
@@ -109,10 +110,11 @@ Quickshell bar — see [`docs/`](./docs), indexed from [`CLAUDE.md`](./CLAUDE.md
 ```sh
 sudo pacman -S --needed base-devel rust clang wayland cairo pango \
   libpulse libpipewire ttf-jetbrains-mono-nerd
+# optional: pacman-contrib (updates box), yay (AUR updates), curl (Proxmox box)
 ```
 
 On other distros, install the equivalent `-dev`/`-devel` packages for the
-libraries above (e.g. `libwayland-dev`, `libcairo2-dev`, `libpango1.0-dev`,
+libraries above (e.g. `pkg-config`, `libwayland-dev`, `libcairo2-dev`, `libpango1.0-dev`,
 `libpulse-dev`, `libpipewire-0.3-dev`, `libclang-dev` on Debian/Ubuntu), a Rust
 toolchain, plus a Nerd Font of your choice from
 [nerdfonts.com](https://www.nerdfonts.com/font-downloads).
@@ -172,18 +174,7 @@ some unrelated process.
 
 ## Known rough edges
 
-This is a first pass, not a finished product — a non-exhaustive list of
-what's missing or unpolished:
-
-- No network manager beyond the pure `/proc`/`/sys` reads (no way to change
-  Wi-Fi networks, forget a connection, etc. from the bar itself).
-- No HiDPI/fractional-scale handling.
-- No keyboard handling anywhere, including in the power menu — Escape doesn't
-  close it; click the dimmed background instead.
-- Several popups don't coordinate with each other (opening two at once, from
-  different modules, can leave both open).
-- Wi-Fi-specific code paths were written against the spec/reference logic but
-  not verified against real Wi-Fi hardware (the development machine only has
-  Ethernet).
-
-See [`docs/limitations.md`](./docs/limitations.md) for the full list.
+The main ones: no HiDPI/fractional scaling, no keyboard handling (Escape doesn't
+close the power menu; click the dimmed background), no way to manage networks from
+the bar, and Wi-Fi support not checked on real Wi-Fi hardware. The full list is in
+[`docs/limitations.md`](./docs/limitations.md).

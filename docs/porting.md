@@ -1,33 +1,17 @@
-# Porting the bar to Rust
+# The Rust port
 
-## Purpose and how to use it
-- This is the order the bar is ported in, and the record of how far it got. Tick a milestone
-  when its definition of done holds. Update the doc in the same commit as the work.
-- The C bar on `main` (folder `../StickBar`) is the reference. Read the C files listed for a
-  milestone, plus that module's `docs/modules/*.md` and its `BUG.md` section, **before**
-  writing the Rust version. Each milestone ports behaviour, bug-fix lessons included,
-  not line-by-line C.
-- One milestone ≈ one or a few sessions. Never leave the branch failing `./build.sh`.
+The bar was ported from C to Rust one module at a time, milestones M0-M15, between
+2026-11-11 and switch day, 2026-11-13. The C bar is kept on the `c-legacy` branch. This file
+keeps why each crate was chosen, the things the Rust bar has that the C bar never did, and the
+log of every milestone and change with its measurements.
 
-## Definition of done (every milestone)
-1. `./build.sh` passes: fmt, clippy with the full lint policy, debug **and** release.
-2. The milestone's Python tests pass against `target/debug/stickBar`. The tests are
-   unchanged, except for C-specific wording in failure messages.
-3. Any test-control commands the tests need (`rects`, `click`, `menu`, `dump …`,
-   `target …`, `snapshot`) work, and their JSON replies match the C bar's.
-4. `python3 tests/perf_compare.py --against main` shows no regression in CPU, RSS or commits
-   versus the C bar, and the table is pasted into the commit message (performance rule).
-5. The module's `docs/` file is updated to describe the Rust code (file paths, types), and
-   the `BUG.md` lessons it relies on are kept as rules.
-6. The bar was run by hand for a minute on the real desktop with stderr watched.
-
-## Architecture decisions (made once, here)
+## Crate choices
 | Concern | C bar | Rust | Why |
 |---|---|---|---|
 | Event loop | hand-rolled epoll in `main.c` | **calloop**: one loop, every fd a source | It's what smithay-client-toolkit is built on, and it's safe |
 | Wayland | raw libwayland + vendored XML | **smithay-client-toolkit** (layer-shell, shm, seat, output) + `wayland-protocols` (viewporter, subsurface), on the **system libwayland** (`wayland-backend` `client_system`) | Safe and maintained. Pin one SCTK version, since its API changes between releases. The system backend keeps `WAYLAND_DEBUG` in libwayland's wall-clock format, which the tests parse; the pure-Rust transport prints a different one |
 | Drawing | cairo + pangocairo | **cairo-rs** (`png` feature), **pango**, **pangocairo** crates | The same C libraries behind safe wrappers |
-| Draw → shm | cairo draws straight into the memfd | cairo draws into its own `ImageSurface`, then the bytes are copied into SCTK's `SlotPool` buffer | Drawing straight into the shm buffer needs `unsafe`. A copy is about 200 KB per bar frame. Measure it in M1 |
+| Draw → shm | cairo draws straight into the memfd | cairo draws into its own `ImageSurface`, then the bytes are copied into SCTK's `SlotPool` buffer | Drawing straight into the shm buffer needs `unsafe`. A copy is about 200 KB per bar frame, measured as negligible |
 | Threads → main loop | eventfd (`util/notify_fd.c`) | **calloop `channel`**: worker threads send messages, the main loop wakes | Same pattern without raw fds |
 | JSON | cJSON | **serde_json** | Hyprland IPC and the test-control replies |
 | Hyprland IPC | own socket code | own code over `std::os::unix::net::UnixStream` | Small, and it keeps the classic→Lua dispatch quirk under our control. No async crate |
@@ -35,198 +19,39 @@
 | D-Bus (tray, MPRIS) | sd-bus | **zbus 5** (async, on its own `dbus` thread → channels) | Pure Rust, no unsafe. zbus 6 dropped the blocking API; one async loop on one thread is simpler than several blocking iterators anyway |
 | PulseAudio | libpulse threaded mainloop | **libpulse-binding** on its own thread → channel | Same threading model as the C bar |
 | PipeWire | pw_thread_loop | **pipewire** crate (pipewire-rs) on its own thread → channel | Same |
-| NVML | dlopen'd libnvidia-ml | **nvml-wrapper** | Loads the library at runtime, like now. Use the v2 memory call (BUG.md lesson) |
+| NVML | dlopen'd libnvidia-ml | **nvml-wrapper** | Loads the library at runtime, like the C bar's `dlopen`. Uses the `_v2` memory call ([modules/sysmon.md](modules/sysmon.md)) |
 | Timers / clock | timerfd + localtime | calloop `Timer` + **chrono** (`Local`) | |
 | inotify (EQ) | raw inotify | **rustix** `fs::inotify` as a calloop `Generic` source | rustix is already a dependency; its inotify API is safe, so no extra crate |
 | getifaddrs (network) | libc | **nix** (`net` feature) | Safe wrapper |
 | FFT (visualizer) | own `spectrum.c` | **realfft** (rustfft's real-input wrapper) | Does the half-size complex FFT + untangle C hand-wrote; byte-identical graphs |
-| Child processes | fork/execv + mask reset | **nix `posix_spawn`** with an empty signal mask (the EQ script) | `std::process::Command` does **not** reset the mask (only SIGPIPE's handler), so its child keeps SIGINT/SIGTERM/SIGUSR1 blocked; `pre_exec` would need `unsafe`. `spawn_systemctl` still uses `Command` (BUG.md, Open) |
+| Child processes | fork/execv + mask reset | **nix `posix_spawn`** with an empty signal mask (`util::spawn`: the EQ script, updates, Proxmox, systemctl) | `std::process::Command` does **not** reset the mask, so its child keeps SIGINT/SIGTERM/SIGUSR1 blocked; `pre_exec` would need `unsafe` ([architecture.md](architecture.md), "Child processes") |
 
-Add each crate only in the milestone that first needs it.
-
-## Milestones
-Each lists: the C files to read on `main` (rough line count), what to build, and which tests
-must pass.
-
-- [x] **M0: Skeleton.** Cargo project, lint policy, `build.sh`, tests pointed at `target/`.
-- [x] **M1: An empty bar on every monitor** (`main.c`, `wayland/{registry,output,event_loop,shm_buffer}.c`,
-  `bar/bar_surface.c`, `config/config.c`, `render/render.c`). Signals first, connect,
-  one 20 px top layer surface per output with an exclusive zone, two shm buffers,
-  frame-callback-throttled redraw with a dirty flag, draw → diff → commit only the changed
-  rectangle, the Catppuccin palette, and exit 1 when the compositor goes away. The cairo toy
-  text API is in `clippy.toml`'s `disallowed-methods`. Tests: `test_wayland_disconnect`,
-  `test_stdin_intact`.
-  *Moved out of M1:* `dead_code` is an error, so code can't be ported before something uses
-  it. The pango text helpers + layout cache (`render/module_box.c`), glyphs, fonts and the
-  rest of `BAR` move to M3. The output `index` moves to M5. `util/*` comes piece by piece with
-  its users.
-- [x] **M2: Test-control channel** (`testing/test_control.c`, the test bits of
-  `wayland/output.c` and `bar/bar_surface.c`). The `STICKBAR_TEST_CONTROL` stdin channel
-  (`ping`, `outputs`, `rects`; one `match` arm per command, added as modules land),
-  `STICKBAR_TEST_OUTPUT`, empty input regions in test mode, per-monitor `Output` records
-  with their `index` (moved here from M5, since `outputs` reports it), and the setup round trip
-  so monitors are known before the first command. New guard test:
-  `test_control_channel`, which passes against both bars.
-  *Moved out of M2 (unused code fails the build):* box-rect recording goes to M3, the first
-  box drawn. The pointer (`wl_seat`), click routing and `click`/`menu-*`/`catcher-click` go
-  to M4, where the clock's right-click opening the calendar is the first thing that reacts
-  to a click.
-- [x] **M3: Clock** (`modules/clock/clock.c`, the text and box parts of `render/module_box.c`,
-  `config/glyphs.c`, the clock bits of `render/render.c`, `bar/bar_surface.c` and `main.c`).
-  The clock box, a wall-clock-aligned `timerfd` (rustix) with `ECANCELED` re-arm, the clock-only
-  redraw shortcut, the pango layout cache, glyph consts verified with fontTools, box rects per
-  bar (so `rects` reports the clock), and `STICKBAR_TEST_CLOCK_SECONDS`. Tests:
-  `test_clock_alignment`, `test_redraw` (both parts: no pulse events reach the bar yet, so the
-  no-op check passes trivially until M9). The clock box is **pixel-identical** to the C bar's
-  (grim of both, byte-equal PNGs). *Deferred:* `BAR.item_spacing` (no gap with a single box)
-  and the other font sizes arrive with their first users.
-- [x] **M4: Pointer, popup infrastructure + year calendar** (`wayland/pointer.c`,
-  `bar/popup_surface.c`, `bar/popup_host.c`, `render/popup_chrome.c`,
-  `modules/clock/clock_calendar_popup.c`, the click/menu parts of `testing/test_control.c`).
-  The `wl_seat` pointer, with presses and motion routed through one path (`App::pointer_button`
-  / `pointer_motion`) that the channel's `click`/`menu-click`/`menu-motion`/`catcher-click` also
-  use. Popup surfaces (overlay menu, top-layer catchers with a 1×1 buffer stretched by
-  `wp_viewporter`), `PopupHost`, the `Popups` routing table, the frame/card chrome, `menu` and
-  `snapshot`, and the calendar: chrono date maths, year navigation, hover. The shm buffer pair is
-  now shared by bars and popups (`wayland/shm_buffers.rs`). The calendar is pixel-identical to
-  the C bar's (opened, next year, hovered).
-  `test_popups` waits for the cpu/mem/volume boxes (M7, M9), so the new **`test_calendar`** guard
-  covers the clock's part plus navigation and hover. It passes against both bars, and fails
-  with the first-paint fix removed. *Moved on:* left-anchored opening → M7 (the first left-region
-  dropdown); host resize, button release and scroll → M9 (sliders, the mixer).
-- [x] **M5: Hyprland + workspaces** (`hyprland/*`, `modules/workspaces/`, the kanji in
-  `config/glyphs.c`, the left region of `render/render.c`, the reconnect policy in `main.c`).
-  The request socket (blocking, 1 s timeout, `shutdown(Write)` before reading), the event socket
-  (calloop source, line framing, the 12-event filter, a re-query only on a relevant read), the
-  dispatcher (unquoted Lua form first, classic fallback, cached, nothing cached without a reply),
-  one reconnect then give up, and kanji pills per 5-wide range. Also a generic **`ClickTarget`**:
-  clickable spots inside a box (the pills now, tray icons in M11), which also get the hand
-  cursor. New guard test **`test_workspaces`** runs the bar against a fake Hyprland
-  (`tests/lib/fake_hyprland.py`), so a click never switches the real workspace. It passes against
-  both bars. Both bars give DP-2 index 0, and the pills are pixel-identical to C's on the real
-  desktop.
-- [x] **M6: Arch logo + power menu + SIGUSR1** (`modules/powermenu/*`, the header/pill
-  parts of `render/popup_chrome.c`, `popup_style.h`, ink width and truncation from
-  `module_box.c`). The Arch logo (sized from the glyph's ink), the power menu as a full-screen
-  overlay per monitor (a new `PopupSurface::overlay` kind, centered on the configured size),
-  the header and pill chrome, Logout through `Dispatcher::exit`, and Restart/Shutdown through
-  `systemctl`, spawned and reaped by a named thread (never blocking). SIGUSR1 toggles it. The
-  test guard is kept: in test mode a card only records its action. **The C bar's own
-  `test_power_menu` passes unchanged** (SIGUSR1 blocked in every thread, keybind open/close,
-  centering, hover colours, the record-only guard). The Arch logo and the overlay (plain and
-  hovered) are pixel-identical to C.
-- [x] **M7: CPU / memory / GPU**, split into three steps (about 3,200 C lines in total):
-  - [x] **M7a: Memory + the shared stat machinery** (`modules/mem/*`, the memory half of
-    `sysmon/sysmon_client.c`, `util/history.h`, `render/{braille_graph,meter_bar,stat_card}.c`,
-    `render/color.h`). The 5 s poll (calloop `Timer`), the 120-sample history ring, braille
-    graphs, segmented meters, stat-card rows, left-anchored dropdowns (`PopupHost::open_left`),
-    the memory box and its dropdown (PSI pill, used/swap graphs, apps/cache/free bar, RAM/SWAP
-    meters, ZRAM/AVAIL/PRESS rows, top apps by private memory), and `dump mem` / `refresh mem|poll`.
-    The memory half of C's `test_sysmon_data` (`check_memory`, `check_memory_apps`) passes
-    against it, as do `test_popups`' `check_popup` for `mem` and `test_popup_graphs`'
-    `graph_gap`. The dropdown is the same size and layout as C's (411×458 here).
-  - [x] **M7b: CPU** (`modules/cpu/*`, the CPU half of `sysmon_client.c`). `/proc/stat` jiffies
-    deltas (overall and per thread), package temperature, static facts (model, cores, max clock,
-    P/E cpulists), the dropdown (load pill, usage/temp graphs, P-CORES/E-CORES grid, LOAD/CLOCK/
-    UPTIME, top processes summed by name from a per-PID tick table), the 1 s "first figures"
-    tick, and `dump cpu` / `refresh cpu|cpu-reset`. The CPU and memory dropdowns replace each
-    other. **C's `test_sysmon_data` passes unchanged** (2 busy loops → `sh` 12.4 % of an expected
-    12.5 %). The dropdown matches C's size and layout (416×553 here), and also passes
-    `check_popup` and `graph_gap`.
-  - [x] **M7c: GPU** (`modules/gpu/*`, NVML via `nvml-wrapper` 0.13, checked in its source to use
-    the `_v2` memory call and the `_v3` process queries, loaded at runtime). The box (`--` without
-    a driver), the dropdown (P-state pill, usage/temp graphs, VRAM/POWER/FAN meters, CLOCK/VIDEO,
-    top VRAM apps), the unavailable state, and `dump gpu` / `refresh gpu`. The three sysmon dropdowns
-    replace each other. C's `test_power_menu` (SIGUSR1 blocked in all 3 threads),
-    `test_popup_graphs` and `test_no_subprocess` pass unchanged.
-    **Verified only without a working driver:** during this step the NVIDIA kernel module (615.78)
-    and userspace library (620.70) didn't match, which needs a reboot, so `nvidia-smi` itself
-    failed. The unavailable state is identical to C's (same dropdown, 280×63). **Still to verify
-    after a reboot:** `test_nvml_vs_smi`, the bar's `dump gpu` against `nvidia-smi`, and the
-    GPU graph in `test_popup_graphs`.
-- [x] **M8: Network** (`network/`, `modules/network/` ~760). Default route, rates, and the
-  info dropdown with graph. Tests: `test_network_data`, `test_popups` (network). IPv4 via
-  `nix`'s `getifaddrs`; one shared 5 s timer (`App::poll_5s`).
-- [x] **M9: Volume + mic** (`audio/*`, `modules/{volume,mic}/` ~1.8k). The pulse thread,
-  sink/source cache, scroll steps, device dropdown, mixer, and `target device|mixer`. No
-  commits for no-op events. Tests: `test_audio`, `test_redraw` (pulse part), `test_popups`
-  (volume/mixer/mic).
-- [x] **M10: EQ** (`eq/*`, `modules/eq/*` ~800). state.json (serde_json), inotify (rustix) on
-  the directory, the script launcher, the curve, the box and the dropdown, `dump eq` /
-  `target eq` / `eq_cards`. **Never point a test at the real DAC script.** Both open EQ bugs
-  fixed by following the script process instead of a timer: "applying" ends on the state write
-  or the script's exit, and profile clicks are ignored while it runs. The script is started
-  with `posix_spawn` and an empty signal mask (`Command` keeps the bar's blocked signals).
-  **C's `test_eq` passes unchanged**, as does `test_popups` (EQ). The box and the dropdown are
-  pixel-identical to C's in every state.
-- [x] **M11: Tray** (`dbus/*`, `modules/tray/*` ~1.7k). The `dbus` thread (zbus 5, one async loop),
-  the Watcher served by hand or Host registration, the item registry, IconPixmap → cairo
-  (typed read, symbolic recolour), the PNG fallback, and the DBusMenu dropdown, opened when its
-  entries arrive. `target trayicon|traymenu`, `tray_entries`. **C's `test_tray` passes unchanged**
-  in Host mode and, under `dbus-run-session`, in Watcher mode. Icons and menus are
-  pixel-identical to C's, real apps included.
-- [x] **M12: Media** (`mpris/`, `modules/media/*` ~1.7k). Players on the `dbus` thread (shared
-  connection, `PropertiesChanged` matched by owner), controls, asynchronous position polls, the
-  duplicate hiding, the centred clamped box, and the dropdown with timeline seek and
-  recreate-on-resize (no graph rows: M14). `dump media`, `target media`, `media_cards`. **C's
-  `test_media` passes unchanged**, as does `test_popups` (media). Pixel-identical to C.
-- [x] **M13: Privacy** (`pipewire/`, `modules/privacy/*` ~920). The `pipewire` thread
-  (pipewire-rs 0.10), the node/link graph, mic/webcam/screen-share detection, the box and the
-  dropdown. **C's `test_privacy` passes unchanged**; pixel-identical to C's (one known order
-  difference inside a card). Playback-stream and Client tracking moves to M14, its only user.
-- [x] **M14: Visualizer** (M14a: analysis, the strips and the graphs, synthetic mode; M14b: the
-  capture streams on the `pipewire` thread, and the player-to-stream matching). C's
-  `test_visualizer` passes unchanged; graphs byte-identical to C's; real capture checked live. (`visualizer/*`, `bar/strip_surface.c` ~860). The desync
-  subsurface, up to 4 capture streams only while the dropdown is open, FFT bands, and
-  synth mode for tests. Tests: `test_visualizer`.
-- [x] **M15: Switch day.** Full `tests/run_all.py` green, `perf_compare --against main`
-  table recorded, the Rust release build run as the daily bar for about a week. Then:
-  `git branch c-legacy main`, merge `rust-rewrite` into `main` (a merge, not a squash),
-  push all three branches, and point Hyprland's exec line at `target/release/stickBar`.
-  - [x] **Part 1, 2026-11-13: the trial started.** Suite and perf recorded (log below), README
-    and CLAUDE.md describe the Rust bar, and Hyprland's `bar` setting
-    (`~/Dotfiles/hypr/.config/hypr/modules/settings.lua`) points at
-    `StickBar-rust/target/release/stickBar`, which replaced the running C bar.
-  - [x] **Part 2, 2026-11-13: switch day.** Done in this order:
-    1. `git branch c-legacy main`;
-    2. in the `main` checkout (`../StickBar`): `git merge --no-ff rust-rewrite`, then
-       `./build.sh` there;
-    3. point `settings.lua`'s `bar` at `StickBar/target/release/stickBar` and restart the bar;
-    4. the user pushes `main`, `c-legacy` and `rust-rewrite`;
-    5. remove the `StickBar-rust` worktree (`git worktree remove`).
-
-    The trial was cut to one day at the user's call, after a 2.9 h side-by-side run of
-    both release builds showed no growth: own memory (swap included) 29.2 MB C vs
-    30.1 MB Rust, CPU 0.040 % vs 0.050 % (log below).
+Add a crate only when the module that needs it is written, and keep `Cargo.lock` committed.
 
 ## Rust-only additions
 
-Things the C bar never had, added during the port. They're not part of "parity with
-the C bar", so the C bar's tests don't cover them; each has its own test, which skips
-against the C bar.
+Things the C bar never had, each with its own test or doc:
 
-- **Hand cursor over clickable things** (added after M4, at the user's request). Over
-  anything that reacts to a click (any button), the pointer shows a hand; elsewhere
-  the arrow. That covers bar boxes (the clock: its right-click opens the calendar) and
-  dropdown targets (the calendar's chevrons and year text). It uses the
-  `wp_cursor_shape_v1` protocol through SCTK's `CursorShapeManager`: the bar names the
-  shape and Hyprland draws it from the user's cursor theme, with no images loaded and no
-  `wayland-cursor`. The shape is sent on each pointer enter (tagged with its serial, which
-  the protocol requires) and after that only when it changes, never per mouse move. Each
-  module marks its boxes `clickable` in the `ModuleBox` it returns. Code:
-  `src/wayland/pointer.rs` (`cursor_shape_at`, `update_cursor`). Test:
-  `tests/test_cursor_shape.py`, which asks the bar for its decision through the
-  `cursor`/`menu-cursor` commands, because test bars take no real input.
-
-## Pieces to try writing yourself (optional, for learning Rust)
-Small, self-contained, and covered by tests. Ask Claude to explain compiler errors, not to
-write the code:
-- the Hyprland event-line parser (M5), the `split_once(">>")` function from the earlier comparison;
-- `/proc/meminfo` parsing for the memory module (M7);
-- the kanji numeral lookup for workspaces (M5).
+- **Hand cursor over clickable things** (after M4). Over anything that reacts to a click (any
+  button) the pointer shows a hand, elsewhere the arrow: bar boxes and dropdown targets. It
+  uses `wp_cursor_shape_v1` through SCTK's `CursorShapeManager`: the bar names the shape and
+  Hyprland draws it from the user's cursor theme, with no images loaded. The shape is sent on
+  each pointer enter (with its serial, which the protocol requires) and after that only when
+  it changes, never per mouse move. Each module marks its boxes `clickable`; code in
+  `src/wayland/pointer.rs` (`cursor_shape_at`, `update_cursor`). Test: `test_cursor_shape`,
+  which asks the bar through the `cursor`/`menu-cursor` commands, since test bars take no real
+  input.
+- **The media dropdown as a Dashboard**, centred on the monitor: the EQ moved out of its own
+  box into a card there, then the smart plugs joined it; the media box never disappears, so
+  it's always reachable ([modules/media.md](modules/media.md), [modules/eq.md](modules/eq.md)).
+- **A middle click on the media box skips to the next track.**
+- **The Arch logo opens the power menu on right-click**, like every other box's menu.
+- **Pending Arch updates** box and dropdown ([modules/updates.md](modules/updates.md)).
+- **The Proxmox server box**, with Wake-on-LAN and shutdown ([modules/proxmox.md](modules/proxmox.md)).
+- **Shelly smart plugs** in the media dropdown ([modules/shelly.md](modules/shelly.md)).
 
 ## Progress log
-Each finished milestone gets a line here: date, commit, and a short perf_compare summary.
+One line per milestone and per later change worth measuring: date, what, and the measurements.
 - 2026-11-11 · M0 · Cargo skeleton and lint policy (2236e2e). Release binary 286 KB.
 - 2026-11-11 · M1 · Empty bar on every monitor. Both M1 tests pass; one commit per output,
   then none while idle. `perf_compare --against main` (60 s; the C bar runs every module,
@@ -369,3 +194,9 @@ Each finished milestone gets a line here: date, commit, and a short perf_compare
   59.3 vs 59.2 MB, commits and damage identical). The dev profile now keeps line tables only:
   debug binary 184 MB → 64 MB, a full rebuild of this crate 8.2 s → 5.2 s. LLD is already
   the linker (rustc's default since 1.90), so there's nothing to gain there. All 24 tests pass.
+- 2026-11-20 · Rust-only · Confirmed by hand on the real bar: NVIDIA GPU readings, clicking
+  workspace pills, Logout/Restart/Shutdown, and EQ profile switching on the real DAC (the
+  items the log above left unverified). `systemctl` now starts through `util::spawn`
+  (empty signal mask; found through PATH so `test_power_menu`'s fake still guards), which
+  closes the last open bug. The docs were rewritten to describe only the Rust bar.
+

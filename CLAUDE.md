@@ -4,19 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-**The Rust bar is the bar.** It was ported from C one module at a time (the record,
-milestones M0–M15 and every measurement, is [`docs/porting.md`](docs/porting.md)). The C
-bar is kept on the `c-legacy` branch. Since switch day (2026-11-13) the Rust bar is
-`main`, and Hyprland runs `target/release/stickBar` from this folder.
+A from-scratch Wayland status bar for Hyprland, written in Rust, built directly
+against `wl_compositor`/`wl_shm`/`zwlr_layer_shell_v1` (through smithay-client-toolkit)
+and drawn with cairo/pangocairo — no GTK, no other toolkit. Hyprland runs
+`target/release/stickBar` from this folder.
 
-`docs/` and `BUG.md` were written for the C implementation and stay as the spec and the
-history of hard-won lessons; each module doc ends with an **"In the Rust port"** section
-describing the Rust code. Where the two disagree, the Rust code and those sections are
-the truth.
+It was ported from C one module at a time and became `main` on switch day (2026-11-13);
+the C bar is kept on the `c-legacy` branch. `docs/` describes the Rust code; `BUG.md` and
+the log in [`docs/porting.md`](docs/porting.md) keep the history, C included.
 
-A from-scratch Wayland status bar for Hyprland (originally in C), built directly
-against `wl_compositor`/`wl_shm`/`zwlr_layer_shell_v1` and drawn with cairo/pangocairo
-— no GTK, no other toolkit. It's modeled visually and behaviorally on the user's
+ It's modeled visually and behaviorally on the user's
 existing Quickshell/QML bar at `~/Dotfiles/quickshell/.config/quickshell/` (colors,
 fonts, module conventions, and per-widget behavior there are the source of truth this
 project is echoing — consult that repo's own `CLAUDE.md` and source when adding a
@@ -28,8 +25,8 @@ Two builds, and **every build compiles both** (user's standing rule):
 `target/debug/stickBar` is the debug build (what the tests run against),
 `target/release/stickBar` is the production build (what the user runs day to day).
 `./build.sh` does everything in order and stops at the first failure: `cargo fmt
---check`, `cargo clippy --all-targets` (the lint policy below), the debug build,
-then the release build.
+--check`, `cargo clippy --all-targets` (the lint policy below), `cargo test` (the unit
+tests), the debug build, then the release build.
 
 ```sh
 ./build.sh
@@ -39,15 +36,12 @@ then the release build.
 ```sh
 ./build.sh && python3 tests/run_all.py                # ~2 min, extra bars flash briefly
 python3 tests/perf_compare.py --bin target/release/stickBar \
-    --against <C bar's build-release/stickBar>         # vs. the C bar (c-legacy), release builds
-python3 tests/perf_compare.py --against HEAD~1         # vs. any earlier ref (C or Rust)
+    --against <another release binary>                 # release vs. release
+python3 tests/perf_compare.py --against HEAD~1         # vs. any earlier ref (debug builds)
 ```
 
-Two tests depend on this machine, not the code: `test_sysmon_data` fails while other
-apps hold more memory than its 400 MB child, and `test_nvml_vs_smi` mis-parses driver
-620's fractional temperature. Both fail the same way against the C bar.
-
-Run the bar and watch stderr for Wayland protocol errors or Hyprland IPC failures.
+Two tests can fail because of the machine, not the code (details in
+[`tests/README.md`](tests/README.md)).
 
 **Test safety**, details in [`docs/testing.md`](docs/testing.md):
 
@@ -64,13 +58,13 @@ Read the file for what you're touching before changing it.
 
 | Read | When | Covers |
 |---|---|---|
-| [`docs/porting.md`](docs/porting.md) | Choosing a crate, or wondering why the Rust bar does something differently from C | The port's milestones, crate choices with reasons, every measurement |
-| [`docs/architecture.md`](docs/architecture.md) | Finding your way around, or changing how redraws work | File layout, `AppContext`/`Output`, redraw path, measured performance; `main.c`, `bar/bar_surface.c`, `render/` |
-| [`docs/testing.md`](docs/testing.md) | Testing or verifying anything | Test-control channel, cross-reference commands, screenshots, multi-monitor gotcha; `testing/`, `tests/` |
+| [`docs/porting.md`](docs/porting.md) | Choosing a crate, or wondering why the Rust bar does something differently from C | Crate choices with reasons, Rust-only additions, the log of every change with measurements |
+| [`docs/architecture.md`](docs/architecture.md) | Finding your way around, or changing how redraws work | File layout, how an event becomes pixels, outputs, threads, child processes; `main.rs`, `wayland/`, `bar/`, `render/` |
+| [`docs/testing.md`](docs/testing.md) | Testing or verifying anything | Unit vs. live tests, the test-control channel's safety rules, cross-reference commands, multi-monitor gotcha; `testing/` |
 | [`tests/README.md`](tests/README.md) | Adding a test, or finding what guards something | What each test checks and what bug it catches |
-| [`docs/popups.md`](docs/popups.md) | Adding or changing any dropdown, or what a mouse button does | Button table, popup look, margins, anchoring, catchers, resizing; `bar/popup_surface.c` |
-| [`docs/wayland.md`](docs/wayland.md) | Touching Wayland plumbing or build setup | Listener, linking, `memfd`, event-loop and buffer rules; `wayland/` |
-| [`docs/limitations.md`](docs/limitations.md) | Wondering if something is intentionally missing | Known limitations and fixed-array caps |
+| [`docs/popups.md`](docs/popups.md) | Adding or changing any dropdown, or what a mouse button does | Button table, popup look, margins, anchoring, catchers, resizing; `bar/popup_*.rs`, `bar/popups.rs` |
+| [`docs/wayland.md`](docs/wayland.md) | Touching Wayland plumbing | calloop's `WaylandSource`, the system libwayland, `SlotPool` buffers, configures; `wayland/` |
+| [`docs/limitations.md`](docs/limitations.md) | Wondering if something is intentionally missing | Known limitations and the few caps |
 | [`BUG.md`](BUG.md) | Fixing a bug, or after finding one | Open bugs, and how fixed ones happened |
 | [`README.md`](README.md) | User-facing setup and features | Install, dependencies, the power menu keybind |
 
@@ -79,14 +73,14 @@ Modules:
 | Read | When touching | Covers |
 |---|---|---|
 | [`docs/modules/hyprland.md`](docs/modules/hyprland.md) | Workspaces, Hyprland requests or events | `hyprland/`, `modules/workspaces/` |
-| [`docs/modules/tray.md`](docs/modules/tray.md) | The system tray, SNI, DBusMenu, sd-bus | `dbus/`, `modules/tray/` |
+| [`docs/modules/tray.md`](docs/modules/tray.md) | The system tray, SNI, DBusMenu, the `dbus` thread (zbus) | `dbus/`, `modules/tray/` |
 | [`docs/modules/audio.md`](docs/modules/audio.md) | Volume, mic, device dropdown, mixer, scrolling | `audio/`, `modules/volume/`, `modules/mic/` |
 | [`docs/modules/sysmon.md`](docs/modules/sysmon.md) | CPU, GPU, memory, NVML | `sysmon/`, `modules/cpu/`, `modules/gpu/`, `modules/mem/` |
-| [`docs/modules/clock.md`](docs/modules/clock.md) | The year calendar | `modules/clock/` |
-| [`docs/modules/media.md`](docs/modules/media.md) | MPRIS, the media widget, its spectrum visualizer | `mpris/`, `modules/media/`, `visualizer/` |
-| [`docs/modules/network.md`](docs/modules/network.md) | Network status, rates, its graph | `network/`, `modules/network/`, `render/braille_graph.c` |
+| [`docs/modules/clock.md`](docs/modules/clock.md) | The clock, its tick, the year calendar | `modules/clock/` |
+| [`docs/modules/media.md`](docs/modules/media.md) | MPRIS, the media box, the Dashboard dropdown, the spectrum visualizer | `mpris/`, `modules/media/`, `visualizer/` |
+| [`docs/modules/network.md`](docs/modules/network.md) | Network status, rates, its graph | `network/`, `modules/network/`, `render/braille_graph.rs` |
 | [`docs/modules/privacy.md`](docs/modules/privacy.md) | Mic/webcam/screen-share indicator, PipeWire | `pipewire/`, `modules/privacy/` |
-| [`docs/modules/updates.md`](docs/modules/updates.md) | Pending Arch updates (checkupdates, yay), child processes | `updates/`, `modules/updates/`, `util/spawn.rs` |
+| [`docs/modules/updates.md`](docs/modules/updates.md) | Pending Arch updates (checkupdates, yay) | `updates/`, `modules/updates/` |
 | [`docs/modules/proxmox.md`](docs/modules/proxmox.md) | The Proxmox server box, its API token/settings file, Wake-on-LAN | `proxmox/`, `modules/proxmox/` |
 | [`docs/modules/shelly.md`](docs/modules/shelly.md) | The Shelly smart-plug card in the media dropdown, its settings file, the plugs' HTTP API | `shelly/`, `modules/media/shelly_section.rs` |
 | [`docs/modules/power-menu.md`](docs/modules/power-menu.md) | Power menu, Arch logo, SIGUSR1 | `modules/powermenu/` |
@@ -130,30 +124,30 @@ silently drift.
   needed, say why in a comment.
 - Every module sets `clickable: true` on the `ModuleBox` of any box that reacts to a click
   (any button), and every dropdown reports its click targets to `App::cursor_shape_at`, so
-  the pointer shows a hand there (a Rust-only addition: `docs/porting.md`).
-- Worker threads (pulse, PipeWire, D-Bus) use `thread::Builder::new().name(..)`, start
-  only after the SIGUSR1 signal source exists, and talk to the main loop through a
-  calloop channel.
-- Add a crate only when the module that needs it is being ported, and keep
-  `Cargo.lock` committed.
+  the pointer shows a hand there ([`docs/popups.md`](docs/popups.md)).
+- Worker threads use `thread::Builder::new().name(..)`, start only after the SIGUSR1
+  signal source exists, and talk to the main loop through a calloop channel.
+- Child processes go through `util::spawn`, never `std::process::Command` (it keeps the
+  bar's blocked signals; [`docs/architecture.md`](docs/architecture.md), "Child processes").
+- Add a crate only when the module that needs it is written, and keep `Cargo.lock`
+  committed.
 
 ## Conventions
 
 - **Bugs go in `BUG.md`**: open ones, and the history of fixed ones. In the docs, keep
   only the rule a bug taught.
 - **Docs live in `docs/`, one topic per file, each fact in one place.** Keep this file an
-  index: new detail goes in the topic file, and a new file gets a row in the table below.
+  index: new detail goes in the topic file, and a new file gets a row in the tables above.
 - **This project is commented far more heavily than this assistant's usual
   default.** That's deliberate, per explicit user instruction: comment liberally
   wherever logic isn't self-explanatory from names alone (protocol quirks,
   non-obvious sequencing, buffer-lifecycle rules) — keep doing that for new code
   here, even though it's not how other repos get treated.
 - **One file/directory per concern, one directory per bar widget under
-  `modules/`**, even when (as now) there are only one or two widgets — also
-  explicit user preference, meant to keep the codebase easy to navigate as more
-  modules land. Don't collapse this back into fewer, larger files for convenience.
-- Styling constants flow through `src/config/`'s `COLORS` / `BAR` / `FONT` (the C
-  bar's `config/config.h`) —
+  `modules/`** — explicit user preference, meant to keep the codebase easy to
+  navigate as more modules land. Don't collapse this into fewer, larger files for
+  convenience.
+- Styling constants flow through `src/config/`'s `COLORS` / `BAR` / `FONT` —
   add new shared tokens there, but keep one-off widget-specific tuning (e.g. the
   workspace pill's own 4px border width and 14px/6px padding, which intentionally
   don't match `BAR.module_border_width`) local to that widget's own file, matching
@@ -161,16 +155,14 @@ silently drift.
 - Nerd Font / CJK glyphs are named `char` consts in `src/config/glyphs.rs`, written
   as `'\u{f0e7}'` escapes, never pasted as raw glyphs. Verify each codepoint against
   the installed font with fontTools (or `ord()` for the kanji) before writing it.
-  Rust strings are always valid UTF-8, so the C bar's runtime `glyph_utf8()` encoder
-  isn't needed.
-- Text is always rendered through the pango helpers in `src/render/` (the C bar's
-  `render/module_box.c`), never cairo's toy text API: the toy API doesn't reliably
+- Text is always rendered through the pango helpers in `src/render/` (`text.rs`,
+  `module_box.rs`), never cairo's toy text API: the toy API doesn't reliably
   shape PUA icon glyphs or CJK characters through the Nerd Font.
 
 ## Scope / roadmap
 
-Crate choices and the port's history: [`docs/porting.md`](docs/porting.md). Every module has
-the C bar's shape: a `src/modules/<name>/` directory and a render function taking the
+Crate choices and the history: [`docs/porting.md`](docs/porting.md). Every module has the
+same shape: a `src/modules/<name>/` directory and a render function taking the
 cairo context, x and the box's top and height, returning where its box landed. If it needs
 live data, it joins the single calloop event loop in `main.rs`: an fd source, a timer, or a
 channel from its worker thread.

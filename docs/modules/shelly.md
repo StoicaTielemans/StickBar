@@ -1,6 +1,6 @@
 # Shelly smart plugs
 
-A Rust-bar-only feature (no reference or C-bar equivalent), added at the user's request
+A feature with no reference equivalent, added at the user's request
 from their own `shelly.py`: switch their Shelly smart plugs, one or all at once, and see
 what each one draws. It's a card in the media dropdown, under the EQ card, with
 **nothing in the bar itself** (the user's choice).

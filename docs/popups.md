@@ -9,7 +9,7 @@ Shared by all of them; a module's own section only records what differs.
 | CPU / GPU / memory | | dropdown | | | TOP+LEFT |
 | privacy | | dropdown | | | TOP+LEFT |
 | updates | | dropdown (package list) | | | TOP+RIGHT |
-| media | play/pause (nothing when idle) | dropdown: players + EQ | | | TOP, centred on the monitor |
+| media | play/pause (nothing when idle) | dropdown: players + EQ | next track (nothing when idle) | | TOP, centred on the monitor |
 | network | | dropdown | | | TOP+RIGHT |
 | clock | | calendar (toggle) | | | TOP+RIGHT |
 | tray | see the has-menu rule in [modules/tray.md](modules/tray.md) | same | | | TOP+RIGHT |

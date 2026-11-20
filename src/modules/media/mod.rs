@@ -8,8 +8,8 @@
 //! something has played since the bar started, then `▶  <the last track>`
 //! (kept in memory only). That also keeps the dropdown, and so the EQ card,
 //! one right-click away when nothing plays.
-//! A left click is `PlayPause` on the shown player (nothing without one); a
-//! right click opens the dropdown
+//! A left click is `PlayPause` on the shown player and a middle click is
+//! `Next` (both nothing without one); a right click opens the dropdown
 //! of every player, plus the DAC EQ's card (`popup.rs`, `eq_section.rs`) and,
 //! with a `shelly.conf`, the smart-plug card (`shelly_section.rs`). Neither
 //! has anything in the bar itself, at the user's request.

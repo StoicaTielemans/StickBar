@@ -133,12 +133,20 @@ impl App {
             }
         }
         // The middle button is bound only on the volume box (the mixer, which
-        // replaces the device dropdown). Kept away from everything below:
-        // the power menu and the calendar treat any button as a click.
+        // replaces the device dropdown) and the media box (next track, on the
+        // player it shows; nothing when it's the idle box, and the mpris
+        // thread drops it if the player can't go next). Kept away from
+        // everything below: the power menu and the calendar treat any button
+        // as a click.
         if button == BTN_MIDDLE {
             if let Some((position, rect)) = self.bar_box(surface, x, y, "volume") {
                 self.popups.device.close();
                 self.open_mixer_popup(position, rect);
+            } else if self.bar_box(surface, x, y, "media").is_some()
+                && let Some(player) = self.renderer.media.active().map(|p| p.id)
+            {
+                self.dbus
+                    .send(dbus::Command::Media(MediaCommand::Next { player }));
             }
             return;
         }

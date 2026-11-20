@@ -125,20 +125,14 @@ impl Network {
             String::new()
         };
         self.duplex = sys("duplex");
-        self.dns = fs::read_to_string("/etc/resolv.conf")
-            .map(|t| nameservers(&t))
-            .unwrap_or_default();
-        self.ip = ipv4_address(&self.iface)
-            .map(|ip| ip.to_string())
-            .unwrap_or_default();
+        self.dns = fs::read_to_string("/etc/resolv.conf").map_or_default(|t| nameservers(&t));
+        self.ip = ipv4_address(&self.iface).map_or_default(|ip| ip.to_string());
     }
 }
 
 /// A small file's contents without surrounding whitespace ("" if unreadable).
 fn read_trimmed(path: &str) -> String {
-    fs::read_to_string(path)
-        .map(|t| t.trim().to_owned())
-        .unwrap_or_default()
+    fs::read_to_string(path).map_or_default(|t| t.trim().to_owned())
 }
 
 /// The default route from `/proc/net/route`: the row whose destination is

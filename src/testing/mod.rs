@@ -613,7 +613,7 @@ fn dump_gpu(sysmon: &Sysmon) -> Value {
         "mem_total_mb": g.mem_total_mb,
         "power_w": g.power_w,
         "power_limit_w": g.power_limit_w,
-        "pstate": g.pstate.map(|p| format!("P{p}")).unwrap_or_default(),
+        "pstate": g.pstate.map_or_default(|p| format!("P{p}")),
         "history_len": sysmon.gpu_history.len(),
         "procs": procs,
     })

@@ -285,7 +285,7 @@ fn draw_row(
     let (dot, detail, detail_color) = match &plug.state {
         PlugState::On => (
             ACCENT,
-            plug.watts.map(format_watts).unwrap_or_default(),
+            plug.watts.map_or_default(format_watts),
             COLORS.subtext0,
         ),
         PlugState::Off => (COLORS.overlay1, String::new(), COLORS.subtext0),

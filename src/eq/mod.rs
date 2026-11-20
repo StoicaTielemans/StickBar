@@ -101,9 +101,7 @@ impl EqState {
     /// creates the state directory so the watch can be armed before the script
     /// has ever run, and reads the current state, if any.
     pub(crate) fn new() -> Self {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default();
+        let home = std::env::var_os("HOME").map_or_default(PathBuf::from);
         let cache = std::env::var_os("XDG_CACHE_HOME")
             .filter(|v| !v.is_empty())
             .map_or_else(|| home.join(".cache"), PathBuf::from);
@@ -185,12 +183,11 @@ fn parse(text: &str) -> Option<Snapshot> {
         curve_obj
             .and_then(|c| c.get(key))
             .and_then(Value::as_array)
-            .map(|a| {
+            .map_or_default(|a| {
                 a.iter()
                     .map(|v| v.as_f64().unwrap_or(0.0))
                     .collect::<Vec<_>>()
             })
-            .unwrap_or_default()
     };
     // Only both arrays together make a curve (the shorter one's length).
     let curve = points("freqs")

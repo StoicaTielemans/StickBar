@@ -519,7 +519,7 @@ fn apply_metadata(player: &mut Player, metadata: &Value<'_>) {
             ("xesam:album", _) => player.info.album = text_of(value),
             // An array per spec (several credited artists): the first is kept.
             ("xesam:artist", Value::Array(artists)) => {
-                player.info.artist = artists.iter().next().map(text_of).unwrap_or_default();
+                player.info.artist = artists.iter().next().map_or_default(text_of);
             }
             // The spec says an object path; some players send a string. It
             // goes back out in SetPosition, so it must be a valid path.

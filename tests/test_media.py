@@ -8,7 +8,7 @@ test-control channel:
   - the bar's MPRIS client sees it with the right title/artist/album/status;
   - the dropdown has a card for it; its play/pause chip sends PlayPause (and
     the status the bar shows follows the player), prev/next send
-    Previous/Next;
+    Previous/Next, and a middle click on the bar box sends Next;
   - when the player goes away, its card goes and the popup gets shorter
     instead of keeping its old size; with no player left it stays open, as
     wide as before (the player column keeps its `Media` header).
@@ -86,6 +86,26 @@ def main():
                 if not wait_for(lambda: (p := fake_player(bar)) and p["status"] == "Playing"):
                     failures.append(f"status after PlayPause: {fake_player(bar)}")
 
+                # A middle click on the bar's box sends Next to the player the
+                # box shows (the first playing one). Only when the fake is the
+                # only one playing: otherwise the box shows a real player, and
+                # this would skip the user's track.
+                bar.must("catcher-click")
+                bar.wait_menu(False)
+                playing = [p["app"] for p in bar.must("dump media")["players"] if p["status"] == "Playing"]
+                if playing == [APP]:
+                    nexts = calls(log).count("Next")
+                    bar.click_module("media", "middle")
+                    if not wait_for(lambda: calls(log).count("Next") > nexts):
+                        failures.append(f"middle click on the box didn't send Next (got {calls(log)})")
+                    middle = "middle click on the box sent Next"
+                else:
+                    middle = f"middle click skipped ({playing} playing, not just the fake)"
+                if bar.must("menu")["open"]:
+                    failures.append("a middle click on the media box opened a dropdown")
+                bar.click_module("media")
+                bar.wait_menu(True)
+
                 # A quarter of the way along the 200s track's timeline is 50s:
                 # SetPosition with the track's id, within a pixel's worth.
                 t = bar.must(f"target media timeline:0.25 {APP}")
@@ -131,7 +151,7 @@ def main():
                 fake.kill()
     if failures:
         common.fail("; ".join(failures))
-    common.ok(f"fake player's metadata read right; play/next/prev chips sent PlayPause/Next/Previous; "
+    common.ok(f"fake player's metadata read right; play/next/prev chips sent PlayPause/Next/Previous; {middle}; "
               f"timeline click sent {seek}; "
               f"after it quit: {gone}")
 
